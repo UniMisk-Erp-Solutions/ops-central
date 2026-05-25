@@ -12,8 +12,11 @@
 // snippet injected at deploy) wins; otherwise these dev defaults apply. The
 // anon key is a PUBLIC client key (RLS governs access) — safe to ship. The
 // service-role key must NEVER appear here; it lives only server-side.
+// Public Supabase URL via the Cloudflare tunnel (so-po.unimisk.com → local
+// Kong :54331). Works from anywhere (Vercel + LAN). Override via window.OPC_ENV
+// if you ever need a different target.
 window.OPC_ENV = window.OPC_ENV || {
-  SUPABASE_URL: 'http://192.168.16.112:54331',
+  SUPABASE_URL: 'https://so-po.unimisk.com',
   SUPABASE_ANON_KEY: 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc3OTQ0ODA4MCwiZXhwIjo0OTM1MTIxNjgwLCJyb2xlIjoiYW5vbiJ9.VrYk5aEwhCXAyXuAtjqk0dfUVw5iOJMKSajL1DwM5xw',
 };
 
