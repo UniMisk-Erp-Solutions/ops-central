@@ -1,0 +1,14 @@
+{
+  "name": "op-central",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix frontend",
+    "start": "npm run start --prefix frontend",
+    "api": "npm run dev --prefix backend",
+    "api:start": "npm run start --prefix backend",
+    "sync:edge": "node scripts/sync-edge-function.mjs",
+    "deploy:edge": "node scripts/sync-edge-function.mjs && node scripts/deploy-edge-function.mjs",
+    "check:server": "node scripts/ssh-inspect-supabase.py"
+  }
+}
