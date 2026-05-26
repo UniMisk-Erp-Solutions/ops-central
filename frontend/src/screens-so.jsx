@@ -9,7 +9,7 @@ function SalesOrdersList() {
 
   const filtered = state.sales_orders.filter(s => {
     if (filter === 'open' && ['Closed','Fully Paid','Cancelled'].includes(s.status)) return false;
-    if (filter === 'hold' && s.status !== 'On Hold') return false;
+    if (filter === 'hold' && !s.on_hold) return false;
     if (filter === 'overdue' && !(s.days_overdue > 0)) return false;
     if (filter === 'closed' && !['Closed','Fully Paid'].includes(s.status)) return false;
     if (search) {
@@ -23,7 +23,7 @@ function SalesOrdersList() {
   const tabs = [
     { id: 'all', label: 'All', count: state.sales_orders.length },
     { id: 'open', label: 'Open', count: state.sales_orders.filter(s => !['Closed','Fully Paid','Cancelled'].includes(s.status)).length },
-    { id: 'hold', label: 'On Hold', count: state.sales_orders.filter(s => s.status === 'On Hold').length },
+    { id: 'hold', label: 'On Hold', count: state.sales_orders.filter(s => s.on_hold).length },
     { id: 'overdue', label: 'Overdue', count: state.sales_orders.filter(s => s.days_overdue > 0).length },
     { id: 'closed', label: 'Closed', count: state.sales_orders.filter(s => ['Closed','Fully Paid'].includes(s.status)).length },
   ];
@@ -95,7 +95,7 @@ function SalesOrdersList() {
                     </td>
                     <td><div style={{ display: 'flex', gap: 6, alignItems: 'center' }}><Avatar user={pm} size={20}/><span className="small">{pm ? pm.name.split(' ')[0] : '—'}</span></div></td>
                     <td><PriorityBadge priority={so.priority}/></td>
-                    <td><StatusBadge status={so.status}/></td>
+                    <td><StatusBadge status={so.status}/>{so.on_hold && <span className="badge dot status-hold" style={{ marginLeft: 4 }}>Hold</span>}</td>
                     <td className="num">{inr(soSubtotal(so))}</td>
                     <td className="mono small">{fmtDate(so.date)}</td>
                     <td className="mono small">{fmtDate(so.expected)}</td>
@@ -556,6 +556,8 @@ function SalesOrderDetail({ soId }) {
   const toast = useToast();
   const so = getSO(soId);
   const [tab, setTab] = React.useState('overview');
+  const [showHold, setShowHold] = React.useState(false);
+  const [showSource, setShowSource] = React.useState(false);
   const role = currentUser ? getUser(currentUser).role : '';
   const canApprove = canDo(role, 'approveSO') || role === 'Org Admin' || role === 'Managing Director';
   const canAdvance = canApprove || canDo(role, 'authDispatch');
@@ -627,6 +629,30 @@ function SalesOrderDetail({ soId }) {
     toast(`${so.so_no} → ${next}${notif ? ` · ${notif.role} notified` : ''}`, 'success');
   };
 
+  // ===== On-hold / resume (Op 6/7) — only Project Manager or Purchase (+ Admin) =====
+  const canHold = ['Project Manager', 'Purchase', 'Org Admin'].includes(role);
+  // Urgent/Critical SOs may source components from other (esp. on-hold) SOs.
+  const isUrgent = so.priority === 'Urgent' || so.priority === 'Critical';
+  const canSource = ['Project Manager', 'Org Admin'].includes(role);
+
+  const doHold = (reason, notes) => {
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, on_hold: true, hold_reason: reason, hold_notes: notes || null, on_hold_since: new Date().toISOString() } : x),
+      notifications: [{ id: 'n-hold-' + Date.now(), kind: 'so', text: `${so.so_no} put ON HOLD · ${reason}`, date: TODAY, read: false, role: 'Project Manager' }, ...s.notifications],
+    }), { action: 'hold', entity: 'SalesOrder', entity_id: so.id, reason });
+    setShowHold(false);
+    toast(`${so.so_no} put on hold · procurement paused`, '');
+  };
+  const doResume = () => {
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, on_hold: false, hold_reason: null, hold_notes: null, on_hold_since: null } : x),
+      notifications: [{ id: 'n-res-' + Date.now(), kind: 'so', text: `${so.so_no} resumed from hold`, date: TODAY, read: false, role: 'Project Manager' }, ...s.notifications],
+    }), { action: 'resume', entity: 'SalesOrder', entity_id: so.id });
+    toast(`${so.so_no} resumed`, 'success');
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -638,20 +664,40 @@ function SalesOrderDetail({ soId }) {
             <span className="mono">{so.so_no}</span>
             <span style={{ marginLeft: 10 }}><StatusBadge status={so.status}/></span>
             <span style={{ marginLeft: 6 }}><PriorityBadge priority={so.priority}/></span>
+            {so.on_hold && <span className="badge dot status-hold" style={{ marginLeft: 6 }}>On Hold</span>}
           </h1>
           <div className="page-sub">{cust.name} · PO Ref <span className="mono">{so.customer_po}</span> · PM {pm ? pm.name : 'Unassigned'}</div>
         </div>
         <div className="page-actions">
           <button className="btn" onClick={() => navigate(`godown/${so.id}`)}><Icon name="box" size={13}/>Virtual Godown</button>
-          <button className="btn"><Icon name="print" size={13}/>Print</button>
-          {canApprove && <button className="btn"><Icon name="edit" size={13}/>Edit</button>}
-          {canDoNext && (
+          {canSource && isUrgent && !['Closed','Cancelled','Fully Delivered'].includes(so.status) && (
+            <button className="btn" onClick={() => setShowSource(true)} title="Request components from another SO (e.g. an on-hold SO)">
+              <Icon name="arrowLeftRight" size={13}/>Source from SO
+            </button>
+          )}
+          {canHold && !so.on_hold && !['Closed','Cancelled'].includes(so.status) && (
+            <button className="btn" onClick={() => setShowHold(true)}><Icon name="alert" size={13}/>Put on hold</button>
+          )}
+          {canHold && so.on_hold && (
+            <button className="btn btn-primary" onClick={doResume}><Icon name="repeat" size={13}/>Resume</button>
+          )}
+          {canDoNext && !so.on_hold && (
             <button className="btn btn-primary" onClick={advanceStatus}>
               <Icon name={nextAction.icon} size={13}/> {nextAction.label}
             </button>
           )}
         </div>
       </div>
+
+      {so.on_hold && (
+        <div className="mb-2" style={{ padding: '10px 12px', background: 'var(--warning-bg)', border: '1px solid oklch(0.85 0.09 75)', borderRadius: 'var(--radius)', display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}>
+          <Icon name="alert" size={14} color="var(--warning)"/>
+          <span><strong>On hold</strong>{so.hold_reason ? ` · ${String(so.hold_reason).replace(/_/g, ' ').toLowerCase()}` : ''}{so.hold_notes ? ` — ${so.hold_notes}` : ''}. Advancement & dispatch are paused; this SO can still lend stock to urgent SOs.</span>
+        </div>
+      )}
+
+      {showHold && <HoldModal soNo={so.so_no} onClose={() => setShowHold(false)} onConfirm={doHold}/>}
+      {showSource && <NewTransferModal destSoId={so.id} onClose={() => setShowSource(false)}/>}
 
       <div className="card mb-2">
         <div className="card-body" style={{ padding: '10px 14px' }}>
@@ -708,7 +754,12 @@ function SalesOrderDetail({ soId }) {
                       ))}
                     </div>
                   </div>
-                  {canDoNext ? (
+                  {so.on_hold ? (
+                    <div style={{ textAlign: 'right' }}>
+                      <span className="badge dot status-hold">On hold</span>
+                      <div className="tiny muted mt-1">Resume to continue</div>
+                    </div>
+                  ) : canDoNext ? (
                     <button className="btn btn-primary" onClick={advanceStatus}>
                       <Icon name={nextAction.icon} size={13}/>{nextAction.label}
                     </button>
@@ -949,6 +1000,46 @@ function ProcurementTab({ so }) {
   );
 }
 
+// ===== Put-on-hold modal (PM / Purchase) =====
+const HOLD_REASONS = [
+  ['VENDOR_MATERIAL_DELAY', 'Vendor material delay'],
+  ['CUSTOMER_REQUESTED_DELAY', 'Customer requested delay'],
+  ['AWAITING_CUSTOMER_CLARIFICATION', 'Awaiting customer clarification / changes'],
+  ['CUSTOMER_CREDIT_ISSUE', 'Customer credit issue'],
+  ['INTERNAL_CAPACITY_ISSUE', 'Internal capacity issue'],
+  ['QUALITY_ISSUE_ON_RECEIVED_MATERIAL', 'Quality issue on received material'],
+  ['AWAITING_CUSTOMER_PAYMENT', 'Awaiting customer payment'],
+  ['OTHER', 'Other'],
+];
+
+function HoldModal({ soNo, onClose, onConfirm }) {
+  const [reason, setReason] = React.useState(HOLD_REASONS[0][0]);
+  const [notes, setNotes] = React.useState('');
+  return (
+    <Modal title={`Put ${soNo} on hold`} onClose={onClose} footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" onClick={() => onConfirm(reason, notes)}>Put on hold</button>
+      </>
+    }>
+      <div className="field">
+        <label className="field-label">Reason *</label>
+        <select className="select" value={reason} onChange={e => setReason(e.target.value)}>
+          {HOLD_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </div>
+      <div className="field mt-2">
+        <label className="field-label">Notes</label>
+        <textarea className="textarea" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Context for the team…"/>
+      </div>
+      <div className="tiny muted mt-2" style={{ padding: 10, background: 'var(--warning-bg)', borderRadius: 4 }}>
+        Holding pauses procurement & dispatch and blocks invoicing, but keeps the Virtual Godown locked — its stock can still be lent to urgent SOs via a cross-SO transfer. Only a Project Manager or Purchase can hold/resume.
+      </div>
+    </Modal>
+  );
+}
+
 window.SalesOrdersList = SalesOrdersList;
 window.SalesOrderNew = SalesOrderNew;
 window.SalesOrderDetail = SalesOrderDetail;
+window.HoldModal = HoldModal;

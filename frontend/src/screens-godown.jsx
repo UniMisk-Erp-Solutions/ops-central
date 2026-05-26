@@ -130,6 +130,12 @@ function VirtualGodownView({ soId, embedded }) {
 
   return (
     <Wrap>
+      {so.on_hold && (
+        <div className="mb-2" style={{ padding: '8px 12px', background: 'var(--warning-bg)', border: '1px solid oklch(0.85 0.09 75)', borderRadius: 'var(--radius)', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Icon name="alert" size={14} color="var(--warning)"/>
+          <span><strong>{so.so_no} is on hold</strong> — its stock stays locked here but can be lent to an urgent SO via a cross-SO transfer.</span>
+        </div>
+      )}
       <div className="split-2to1">
         <div className="card">
           <div className="card-header">
@@ -447,14 +453,40 @@ function CrossSOTransfers() {
   );
 }
 
-function NewTransferModal({ onClose }) {
+// Sum component quantities held in an SO's Virtual Godown (from its BOM lines).
+function soComponentMap(so) {
+  const m = {};
+  (so.lines || []).forEach(l => (l.components || []).forEach(c => { m[c.product_id] = (m[c.product_id] || 0) + (c.qty || 0); }));
+  return m;
+}
+
+function NewTransferModal({ onClose, destSoId }) {
   const { state, getSO, getProduct, mutate, currentUser } = useStore();
   const toast = useToast();
   const [fromSO, setFromSO] = React.useState('');
-  const [toSO, setToSO] = React.useState('');
+  const [toSO, setToSO] = React.useState(destSoId || '');
   const [productId, setProductId] = React.useState('');
   const [qty, setQty] = React.useState(1);
   const [reason, setReason] = React.useState('');
+
+  const destLocked = !!destSoId;
+  const dest = toSO ? getSO(toSO) : null;
+  const destNeeds = dest ? soComponentMap(dest) : null;
+  // Products to offer: what the destination SO needs (else any product).
+  const productOptions = destNeeds ? Object.keys(destNeeds) : state.products.map(p => p.id);
+
+  // Source candidates: other SOs (not the destination, not cancelled/closed) that
+  // actually hold the chosen component — on-hold SOs listed first (they lend best).
+  const sources = state.sales_orders
+    .filter(s => s.id !== toSO && !['Cancelled', 'Closed'].includes(s.status))
+    .map(s => ({ s, have: soComponentMap(s)[productId] || 0 }))
+    .filter(x => productId ? x.have > 0 : (x.s.on_hold || ['Approved', 'Procurement Started', 'Material Received'].includes(x.s.status)))
+    .sort((a, b) => (b.s.on_hold ? 1 : 0) - (a.s.on_hold ? 1 : 0));
+
+  // If the chosen source no longer holds the product, clear it.
+  React.useEffect(() => {
+    if (fromSO && productId && !(soComponentMap(getSO(fromSO) || {})[productId] > 0)) setFromSO('');
+  }, [productId]);
 
   const submit = () => {
     if (!fromSO || !toSO || !productId || !reason) return;
@@ -465,59 +497,76 @@ function NewTransferModal({ onClose }) {
         from_so: fromSO, to_so: toSO,
         items: [{ product_id: productId, qty }],
         status: 'Pending', requested_by: currentUser, requested_date: TODAY, reason,
-      }]
+      }],
+      notifications: [{ id: 'n-tr-' + Date.now(), kind: 'transfer', text: `Transfer requested: ${getSO(toSO)?.so_no} needs ${qty}× ${getProduct(productId)?.name} from ${getSO(fromSO)?.so_no}`, date: TODAY, read: false, role: 'Project Manager' }, ...s.notifications],
     }), { action: 'create', entity: 'TransferRequest' });
-    toast('Transfer request raised · notification sent', 'success');
+    toast('Transfer request raised · source PM notified', 'success');
     onClose();
   };
 
   return (
-    <Modal title="Request cross-SO transfer" onClose={onClose} size="lg" footer={
+    <Modal title="Request components from another SO" onClose={onClose} size="lg" footer={
       <>
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={!fromSO || !toSO || !productId || !reason} onClick={submit}>Send request</button>
+        <button className="btn btn-primary" disabled={!fromSO || !toSO || !productId || !reason} onClick={submit}>Send request to source PM</button>
       </>
     }>
       <div className="field-row">
         <div className="field">
-          <label className="field-label">Lend from (source SO)</label>
-          <select className="select" value={fromSO} onChange={e => setFromSO(e.target.value)}>
-            <option value="">Pick source SO…</option>
-            {state.sales_orders.filter(s => ['On Hold','Procurement Started','Material Received'].includes(s.status)).map(s =>
-              <option key={s.id} value={s.id}>{s.so_no} · {s.status}</option>
-            )}
-          </select>
-          <div className="field-hint">Usually on-hold SOs that won't dispatch soon</div>
+          <label className="field-label">Lend to (this urgent SO)</label>
+          {destLocked ? (
+            <input className="input mono" value={`${dest?.so_no} · ${dest?.priority}`} disabled/>
+          ) : (
+            <select className="select" value={toSO} onChange={e => { setToSO(e.target.value); setProductId(''); setFromSO(''); }}>
+              <option value="">Pick destination SO…</option>
+              {state.sales_orders.filter(s => s.priority === 'Urgent' || s.priority === 'Critical').map(s =>
+                <option key={s.id} value={s.id}>{s.so_no} · {s.priority}</option>
+              )}
+            </select>
+          )}
         </div>
         <div className="field">
-          <label className="field-label">Lend to (urgent SO)</label>
-          <select className="select" value={toSO} onChange={e => setToSO(e.target.value)}>
-            <option value="">Pick destination SO…</option>
-            {state.sales_orders.filter(s => s.priority === 'Urgent' || s.priority === 'Critical').map(s =>
-              <option key={s.id} value={s.id}>{s.so_no} · {s.priority}</option>
-            )}
+          <label className="field-label">Component needed</label>
+          <select className="select" value={productId} onChange={e => { setProductId(e.target.value); setFromSO(''); }}>
+            <option value="">Pick component…</option>
+            {productOptions.map(pid => {
+              const p = getProduct(pid);
+              return <option key={pid} value={pid}>{p ? p.name : pid}{destNeeds ? ` · needs ${destNeeds[pid]}` : ''}</option>;
+            })}
           </select>
+          {destNeeds && <div className="field-hint">Components this SO requires</div>}
         </div>
       </div>
+
       <div className="field-row mt-2">
         <div className="field">
-          <label className="field-label">Item</label>
-          <select className="select" value={productId} onChange={e => setProductId(e.target.value)}>
-            <option value="">Pick item…</option>
-            {state.products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <label className="field-label">Source SO (who has it)</label>
+          <select className="select" value={fromSO} onChange={e => setFromSO(e.target.value)} disabled={!productId}>
+            <option value="">{productId ? 'Pick a source SO…' : 'Pick a component first'}</option>
+            {sources.map(({ s, have }) =>
+              <option key={s.id} value={s.id}>{s.so_no} · {s.on_hold ? 'ON HOLD' : s.status}{have ? ` · has ${have}` : ''}</option>
+            )}
           </select>
+          <div className="field-hint">On-hold SOs are listed first — they can lend without affecting their dispatch.</div>
         </div>
         <div className="field">
           <label className="field-label">Quantity</label>
-          <input type="number" className="input mono" value={qty} onChange={e => setQty(parseInt(e.target.value) || 1)}/>
+          <input type="number" className="input mono" min="1" value={qty} onChange={e => setQty(parseInt(e.target.value) || 1)}/>
         </div>
       </div>
+
+      {productId && sources.length === 0 && (
+        <div className="mt-2 tiny" style={{ padding: 10, background: 'var(--warning-bg)', borderRadius: 4 }}>
+          No other SO currently holds this component. It will need fresh procurement.
+        </div>
+      )}
+
       <div className="field mt-2">
-        <label className="field-label">Reason</label>
+        <label className="field-label">Reason *</label>
         <textarea className="textarea" value={reason} onChange={e => setReason(e.target.value)} placeholder="Why this transfer is needed…"/>
       </div>
       <div className="mt-2 tiny muted" style={{ padding: 10, background: 'var(--info-bg)', borderRadius: 4 }}>
-        On approval: items digitally re-allocate · source SO's RFQ auto-re-triggers for replacement · customer-facing documents on either side reference only their own SO.
+        The source SO's PM must approve (PM-to-PM agreement). On approval, items re-allocate to this SO and the source SO's procurement re-triggers for replacements. Customer-facing documents on either side never reference the other SO.
       </div>
     </Modal>
   );
@@ -527,3 +576,4 @@ window.VirtualGodownList = VirtualGodownList;
 window.VirtualGodownView = VirtualGodownView;
 window.MasterPool = MasterPool;
 window.CrossSOTransfers = CrossSOTransfers;
+window.NewTransferModal = NewTransferModal;
