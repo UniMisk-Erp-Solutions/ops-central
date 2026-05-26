@@ -579,6 +579,12 @@ function SalesOrderDetail({ soId }) {
   const linkedPOs = state.vendor_pos.filter(p => p.so_id === so.id);
   const sameState = cust.state === state.org.state;
 
+  // Components received into this SO via approved cross-SO transfers (fulfilment,
+  // not billing — customer invoice stays as ordered).
+  const transferredIn = {};
+  (state.transfer_requests || []).filter(t => t.status === 'Approved' && t.to_so === so.id)
+    .forEach(t => (t.items || []).forEach(it => { transferredIn[it.product_id] = (transferredIn[it.product_id] || 0) + (it.qty || 0); }));
+
   // Status-aware notifications
   const NOTIF_ON_TRANSITION = {
     'Approved': { role: 'Purchase', text: `${so.so_no} approved · ready to procure` },
@@ -880,7 +886,7 @@ function SalesOrderDetail({ soId }) {
                         const p = getProduct(c.product_id);
                         return (
                           <tr key={c.product_id} className="subrow">
-                            <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}</td>
+                            <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}{transferredIn[c.product_id] ? <span className="badge info" style={{ marginLeft: 4 }} title="Received via cross-SO transfer">+{transferredIn[c.product_id]} transferred in</span> : null}</td>
                             <td className="num">{c.qty} {p.uom}</td>
                             <td className="num muted">@{inr(p.buy)}</td>
                             <td className="num muted">{inr(p.buy * c.qty)}</td>

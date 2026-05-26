@@ -82,7 +82,17 @@ function VirtualGodownView({ soId, embedded }) {
   if (!so) return <div className="empty">Godown not found</div>;
   const cust = getCustomer(so.customer_id);
 
-  // All components flattened
+  // Approved cross-SO transfers touching this SO — single source of truth,
+  // persisted in transfer_requests. In = received into this VG; Out = lent away.
+  const approved = (state.transfer_requests || []).filter(t => t.status === 'Approved');
+  const transferredIn = {};
+  const transferredOut = {};
+  approved.forEach(t => (t.items || []).forEach(it => {
+    if (t.to_so === so.id) transferredIn[it.product_id] = (transferredIn[it.product_id] || 0) + (it.qty || 0);
+    if (t.from_so === so.id) transferredOut[it.product_id] = (transferredOut[it.product_id] || 0) + (it.qty || 0);
+  }));
+
+  // All required components flattened
   const allComponents = [];
   so.lines.forEach(l => {
     l.components.forEach(c => {
@@ -91,23 +101,26 @@ function VirtualGodownView({ soId, embedded }) {
       else allComponents.push({ product_id: c.product_id, qty: c.qty });
     });
   });
+  // Include transferred-in products even if not part of the BOM (edge case)
+  Object.keys(transferredIn).forEach(pid => {
+    if (!allComponents.find(x => x.product_id === pid)) allComponents.push({ product_id: pid, qty: 0 });
+  });
 
-  // Pool check
+  // Pool check + transfer reflection
   const pool = state.pool;
   const enriched = allComponents.map(c => {
     const poolItem = pool.find(p => p.product_id === c.product_id);
     const poolQty = poolItem ? poolItem.qty : 0;
+    const tIn = transferredIn[c.product_id] || 0;
+    const tOut = transferredOut[c.product_id] || 0;
     const fromPool = Math.min(poolQty, c.qty);
-    const toProcure = c.qty - fromPool;
-    const product = getProduct(c.product_id);
-    // Mock fulfilment status
-    let received = 0;
-    if (so.id === 'so-001' && ['p-cpu-i5','p-mobo-h610','p-ram-16'].includes(c.product_id)) {
-      received = c.qty - (c.product_id === 'p-mobo-h610' ? 1 : 0); // 1 rejected
-    }
-    if (so.id === 'so-002') received = Math.floor(c.qty * 0.4);
-    return { ...c, product, poolQty, fromPool, toProcure, received };
+    const toProcure = Math.max(0, c.qty - fromPool - tIn);   // transfer-in reduces fresh procurement
+    const product = getProduct(c.product_id) || { name: c.product_id, code: c.product_id };
+    const available = Math.max(0, fromPool + tIn - tOut);    // what this VG actually holds now
+    return { ...c, product, poolQty, fromPool, toProcure, transferredIn: tIn, transferredOut: tOut, available };
   });
+  const totalIn = Object.values(transferredIn).reduce((a, b) => a + b, 0);
+  const totalOut = Object.values(transferredOut).reduce((a, b) => a + b, 0);
 
   const Wrap = embedded ? React.Fragment : ({ children }) => (
     <div className="page">
@@ -142,31 +155,31 @@ function VirtualGodownView({ soId, embedded }) {
             <h3 className="card-title">VG Contents · {so.so_no}</h3>
             <div style={{ display: 'flex', gap: 12, fontSize: 11.5 }}>
               <span><span className="badge accent" style={{ marginRight: 4 }}>Pool</span>auto-allocated</span>
-              <span><span className="badge" style={{ marginRight: 4 }}>Procured</span>via Vendor PO</span>
+              <span><span className="badge info" style={{ marginRight: 4 }}>Transfer</span>cross-SO</span>
             </div>
           </div>
           <div className="card-body flush">
             <table className="t zebra">
               <thead><tr>
                 <th>Component</th><th>Code</th>
-                <th className="num">Required</th><th className="num">From Pool</th><th className="num">Procured</th>
-                <th className="num">Received</th><th>Status</th>
+                <th className="num">Required</th><th className="num">From Pool</th><th className="num">Transferred</th><th className="num">To Procure</th>
+                <th className="num">Available</th><th>Status</th>
               </tr></thead>
               <tbody>
                 {enriched.map(c => {
-                  const balance = c.qty - c.fromPool - c.received;
+                  const net = c.transferredIn - c.transferredOut;
                   return (
                     <tr key={c.product_id}>
                       <td>{c.product.name}</td>
                       <td className="mono small muted">{c.product.code}</td>
                       <td className="num">{c.qty}</td>
                       <td className="num"><span className="badge accent" style={{ minWidth: 28, justifyContent: 'center' }}>{c.fromPool}</span></td>
+                      <td className="num">{net !== 0 ? <span className="badge info" style={{ minWidth: 28, justifyContent: 'center' }} title={`In ${c.transferredIn} · Out ${c.transferredOut}`}>{net > 0 ? '+' : ''}{net}</span> : <span className="muted">—</span>}</td>
                       <td className="num">{c.toProcure}</td>
-                      <td className="num">{c.received}</td>
+                      <td className="num"><strong>{c.available}</strong>{c.qty ? <span className="muted">/{c.qty}</span> : null}</td>
                       <td>
-                        {c.fromPool === c.qty ? <span className="badge success dot">Pool-fulfilled</span> :
-                         c.received === c.toProcure ? <span className="badge success dot">Received</span> :
-                         c.received > 0 ? <span className="badge warning dot">Partial</span> :
+                        {c.qty > 0 && c.available >= c.qty ? <span className="badge success dot">Fulfilled</span> :
+                         c.available > 0 ? <span className="badge warning dot">Partial</span> :
                          <span className="badge dot">Awaiting</span>}
                       </td>
                     </tr>
@@ -190,12 +203,12 @@ function VirtualGodownView({ soId, embedded }) {
                 <span className="badge accent">{enriched.reduce((s,c) => s + c.fromPool, 0)}</span>
               </div>
               <div className="queue-item">
-                <Icon name="package" size={14} color="var(--success)"/>
+                <Icon name="arrowRight" size={14} color="var(--info)"/>
                 <div className="grow">
-                  <div className="small"><strong>GRN received</strong></div>
-                  <div className="tiny muted">From vendor POs</div>
+                  <div className="small"><strong>Transferred in</strong></div>
+                  <div className="tiny muted">Received from other SOs</div>
                 </div>
-                <span className="badge success">{enriched.reduce((s,c) => s + c.received, 0)}</span>
+                <span className="badge info">{totalIn}</span>
               </div>
               <div className="queue-item">
                 <Icon name="cart" size={14} color="var(--text-3)"/>
@@ -203,16 +216,16 @@ function VirtualGodownView({ soId, embedded }) {
                   <div className="small"><strong>Awaiting procurement</strong></div>
                   <div className="tiny muted">RFQ or VPO</div>
                 </div>
-                <span className="badge">{enriched.reduce((s,c) => s + Math.max(0, c.toProcure - c.received), 0)}</span>
+                <span className="badge">{enriched.reduce((s,c) => s + c.toProcure, 0)}</span>
               </div>
               <div className="divider" style={{ margin: 0 }}/>
               <div className="queue-item">
                 <Icon name="arrowLeftRight" size={14} color="var(--info)"/>
                 <div className="grow">
-                  <div className="small"><strong>Cross-SO transfers</strong></div>
-                  <div className="tiny muted">Backend only</div>
+                  <div className="small"><strong>Lent to other SOs</strong></div>
+                  <div className="tiny muted">Backend only · invisible to customer</div>
                 </div>
-                <span className="badge info">0</span>
+                <span className="badge info">{totalOut}</span>
               </div>
               <div className="queue-item">
                 <Icon name="truck" size={14} color="var(--text-3)"/>
