@@ -11,15 +11,15 @@ function LoginScreen() {
   const [busy, setBusy] = React.useState(false);
 
   // First run: if no active admin exists, open signup. Otherwise login only.
+  // Uses an RPC (anon cannot read the users table under the locked-down RLS).
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!window.OPC_SB) { setChecking(false); return; }
       try {
-        const { data } = await window.OPC_SB
-          .from('users').select('id').eq('role', 'Org Admin').eq('active', true).limit(1);
+        const { data, error } = await window.OPC_SB.rpc('opc_admin_exists');
         if (cancelled) return;
-        setMode(!data || data.length === 0 ? 'signup' : 'login');
+        if (!error) setMode(data ? 'login' : 'signup');
       } catch (e) { /* default to login */ }
       if (!cancelled) setChecking(false);
     })();

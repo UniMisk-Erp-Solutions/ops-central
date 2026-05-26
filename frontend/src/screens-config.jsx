@@ -838,7 +838,7 @@ function ReportsPane() {
 }
 
 function UsersPane() {
-  const { state, createUser, setUserActive, removeUser } = useStore();
+  const { state, createUser, setUserActive, removeUser, realUserId } = useStore();
   const toast = useToast();
   const roles = (state.config.roles && state.config.roles.length) ? state.config.roles : Object.keys(PERMISSIONS);
   const [form, setForm] = React.useState({ name: '', email: '', password: '', role: 'Sales' });
@@ -892,7 +892,7 @@ function UsersPane() {
                   <td className="mono small">{u.email || '—'}</td>
                   <td><span className="badge">{u.role}</span></td>
                   <td><Toggle value={u.active !== false} onChange={v => setUserActive(u.id, v)}/></td>
-                  <td>{u.id !== 'u-admin' && (
+                  <td>{u.id !== realUserId && (
                     <button className="btn btn-ghost btn-sm" onClick={async () => {
                       if (confirm('Remove ' + u.name + '?')) { const r = await removeUser(u.id); toast(r.ok ? 'User removed' : (r.error || 'Failed'), r.ok ? '' : ''); }
                     }}><Icon name="trash" size={11} color="var(--danger)"/></button>

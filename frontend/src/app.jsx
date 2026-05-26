@@ -7,8 +7,12 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "show_internal_bom_inline": true
 }/*EDITMODE-END*/;
 
+function Splash({ label }) {
+  return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'var(--text-muted)', fontSize: 13 }}>{label || 'Loading…'}</div>;
+}
+
 function App() {
-  const { route, currentUser, getUser, navigate } = useStore();
+  const { route, currentUser, getUser, navigate, authReady } = useStore();
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const u = getUser(currentUser);
 
@@ -39,10 +43,12 @@ function App() {
     window.postMessage({ type: '__activate_edit_mode' }, '*');
   }, []);
 
-  // Not signed in (or session points at a removed user) → login screen.
-  if (!currentUser || !u) {
-    return <LoginScreen/>;
-  }
+  // Wait for the initial Supabase session check before deciding.
+  if (!authReady) return <Splash/>;
+  // No session → login screen.
+  if (!currentUser) return <LoginScreen/>;
+  // Session exists but the profile is still loading.
+  if (!u) return <Splash label="Loading your workspace…"/>;
 
   // Onboarding is full-screen — no shell
   if (route === 'onboarding') {

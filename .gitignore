@@ -11,3 +11,6 @@ backend/.env
 
 # Vercel
 .vercel/
+
+# Throwaway diagnostic SQL (underscore-prefixed)
+supabase/_*.sql

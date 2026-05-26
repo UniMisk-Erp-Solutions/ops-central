@@ -26,7 +26,7 @@ window.OPC_ENV = window.OPC_ENV || {
       window.OPC_SB = window.supabase.createClient(
         window.OPC_ENV.SUPABASE_URL,
         window.OPC_ENV.SUPABASE_ANON_KEY,
-        { auth: { persistSession: false, autoRefreshToken: false } },
+        { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } },
       );
       console.info('[OPC] Supabase client ready →', window.OPC_ENV.SUPABASE_URL);
     } else {

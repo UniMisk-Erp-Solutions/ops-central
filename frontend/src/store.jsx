@@ -110,24 +110,34 @@ function StoreProvider({ children }) {
     return h || 'dashboard';
   });
   const [roleFilter, setRoleFilter] = React.useState('All');
-  // realUserId = who is actually logged in (drives the session + admin rights).
-  // currentUser = the persona currently being acted as. They differ only while
-  // an admin is impersonating another user to test the role flow.
-  const [realUserId, setRealUserId] = React.useState(() => {
-    try { return localStorage.getItem('opc.session') || null; } catch (e) { return null; }
-  });
-  const [currentUser, setCurrentUser] = React.useState(realUserId);
+  // realUserId = who is actually logged in (Supabase auth session → drives admin
+  // rights + the session). currentUser = the persona being acted as (differs only
+  // while an admin impersonates another user to test the flow). Both are the
+  // auth user's uuid. supabase-js owns session persistence + JWT attachment.
+  const [realUserId, setRealUserId] = React.useState(null);
+  const [currentUser, setCurrentUser] = React.useState(null);
+  const [authReady, setAuthReady] = React.useState(false);
 
-  // Persist the REAL identity so a reload stays logged in as the actual user
-  // (not whoever was being impersonated).
+  // Drive identity from the Supabase auth session.
   React.useEffect(() => {
-    try {
-      if (realUserId) localStorage.setItem('opc.session', realUserId);
-      else localStorage.removeItem('opc.session');
-    } catch (e) {}
-  }, [realUserId]);
+    if (!window.OPC_SB) { setAuthReady(true); return; }
+    let mounted = true;
+    window.OPC_SB.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      const uid = data.session?.user?.id || null;
+      setRealUserId(uid); setCurrentUser(uid); setAuthReady(true);
+    });
+    const { data: sub } = window.OPC_SB.auth.onAuthStateChange((event, session) => {
+      const uid = session?.user?.id || null;
+      setRealUserId(uid);
+      if (event === 'SIGNED_OUT') setCurrentUser(null);
+      else if (event === 'SIGNED_IN') setCurrentUser(uid);
+      // TOKEN_REFRESHED: leave currentUser as-is (preserves impersonation)
+    });
+    return () => { mounted = false; sub.subscription.unsubscribe(); };
+  }, []);
 
-  // Persist
+  // Persist app state locally (offline cache; source of truth is Supabase).
   React.useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
   }, [state]);
@@ -135,10 +145,12 @@ function StoreProvider({ children }) {
   // Load customization config from Supabase (singleton row). Falls back to the
   // seeded defaults already in state if the instance is unreachable. The config
   // blob stores { org, ...configFields, permissions, so_form_fields, ... }.
+  // The loads below run once we have an authenticated session (RLS now requires
+  // a JWT). They re-run whenever the real identity changes (login/logout).
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!window.OPC_SB) return;
+      if (!window.OPC_SB || !realUserId) return;
       try {
         const { data, error } = await window.OPC_SB
           .from('config').select('data').eq('id', 'singleton').maybeSingle();
@@ -156,32 +168,31 @@ function StoreProvider({ children }) {
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [realUserId]);
 
-  // Load active users from the DB (admin + any the admin created). Password
-  // column is not selected (REST-hidden); login goes through the opc_login RPC.
+  // Load user profiles (admin + any created). Members can read all profiles.
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!window.OPC_SB) return;
+      if (!window.OPC_SB || !realUserId) return;
       try {
         const { data, error } = await window.OPC_SB
-          .from('users').select('id,email,name,role,initials,permissions,active').eq('active', true);
+          .from('users').select('id,email,name,role,initials,active').eq('active', true);
         if (error || !data || cancelled) return;
         if (data.length) setState(prev => ({ ...prev, users: data }));
       } catch (e) {
-        console.warn('[OPC] users load failed; using local defaults', e);
+        console.warn('[OPC] users load failed', e);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [realUserId]);
 
   // Load all transactional data from the DB (Phase 3). The app runs off these
   // rows; mutations are synced back via mutate() → __syncTables.
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!window.OPC_SB) return;
+      if (!window.OPC_SB || !realUserId) return;
       try {
         const results = await Promise.all(LOADED_TABLES.map(t => window.OPC_SB.from(t).select('*')));
         if (cancelled) return;
@@ -194,11 +205,11 @@ function StoreProvider({ children }) {
           return next;
         });
       } catch (e) {
-        console.warn('[OPC] transactional load failed; using local defaults', e);
+        console.warn('[OPC] transactional load failed', e);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [realUserId]);
 
   // Hash routing
   React.useEffect(() => {
@@ -265,84 +276,78 @@ function StoreProvider({ children }) {
     return { ok: true };
   }, []);
 
-  // ===== Auth (simple demo password — see migration 003) =====
+  // ===== Auth (real Supabase Auth / GoTrue — see migration 005) =====
   const login = React.useCallback(async (email, password) => {
-    if (!window.OPC_SB) {
-      // Offline fallback: match a seeded user by email (no password check).
-      const u = (state.users || []).find(x => (x.email || '').toLowerCase() === String(email).toLowerCase());
-      if (u) { setCurrentUser(u.id); return { ok: true, user: u }; }
-      return { ok: false, error: 'Offline — only seeded users can sign in.' };
-    }
+    if (!window.OPC_SB) return { ok: false, error: 'Cannot reach the server.' };
     try {
-      const { data, error } = await window.OPC_SB.rpc('opc_login', { p_email: email, p_password: password });
+      const { data, error } = await window.OPC_SB.auth.signInWithPassword({ email: String(email).trim(), password });
       if (error) return { ok: false, error: error.message };
-      const u = Array.isArray(data) ? data[0] : data;
-      if (!u) return { ok: false, error: 'Invalid email or password.' };
-      setState(prev => ({
-        ...prev,
-        users: prev.users.find(x => x.id === u.id)
-          ? prev.users.map(x => x.id === u.id ? { ...x, ...u } : x)
-          : [...prev.users, u],
-      }));
-      setRealUserId(u.id);
-      setCurrentUser(u.id);
-      return { ok: true, user: u };
-    } catch (e) {
-      return { ok: false, error: String(e.message || e) };
-    }
-  }, [state.users]);
+      const uid = data.user?.id;
+      // Fetch the caller's profile (role drives the dashboard).
+      const { data: prof } = await window.OPC_SB.from('users')
+        .select('id,email,name,role,initials,active').eq('id', uid).maybeSingle();
+      if (!prof) { await window.OPC_SB.auth.signOut(); return { ok: false, error: 'No profile for this account. Contact your admin.' }; }
+      setState(prev => ({ ...prev, users: prev.users.find(x => x.id === uid) ? prev.users.map(x => x.id === uid ? prof : x) : [...prev.users, prof] }));
+      setRealUserId(uid); setCurrentUser(uid);
+      return { ok: true, user: prof };
+    } catch (e) { return { ok: false, error: String(e.message || e) }; }
+  }, []);
 
-  const logout = React.useCallback(() => { setRealUserId(null); setCurrentUser(null); }, []);
+  const logout = React.useCallback(async () => {
+    try { await window.OPC_SB?.auth.signOut(); } catch (e) {}
+    setRealUserId(null); setCurrentUser(null);
+  }, []);
 
-  // Admin-only persona impersonation for flow testing. Does not change the real
-  // identity/session, so you can always switch back (or reload to reset).
+  // Admin-only persona impersonation for flow testing. Does NOT change the real
+  // auth session (the admin JWT still authorizes all data), so you can always
+  // switch back (or reload to reset).
   const impersonate = React.useCallback((uid) => { setCurrentUser(uid); }, []);
   const stopImpersonating = React.useCallback(() => { setCurrentUser(realUserId); }, [realUserId]);
 
-  // One-time admin self-signup (server enforces: only if no admin exists yet).
+  // One-time admin self-signup (server enforces: only if no admin exists yet),
+  // then sign in to establish the session.
   const signupAdmin = React.useCallback(async ({ name, email, password }) => {
-    if (!window.OPC_SB) return { ok: false, error: 'Offline — cannot sign up.' };
+    if (!window.OPC_SB) return { ok: false, error: 'Cannot reach the server.' };
     try {
-      const { data, error } = await window.OPC_SB.rpc('opc_signup_admin', { p_name: name, p_email: email, p_password: password });
+      const { data, error } = await window.OPC_SB.rpc('opc_signup_admin', { p_name: name, p_email: String(email).trim(), p_password: password });
       if (error) return { ok: false, error: error.message };
       const u = Array.isArray(data) ? data[0] : data;
       if (!u) return { ok: false, error: 'Signup failed.' };
+      const signin = await window.OPC_SB.auth.signInWithPassword({ email: String(email).trim(), password });
+      if (signin.error) return { ok: false, error: signin.error.message };
       setState(prev => ({ ...prev, users: [...prev.users.filter(x => x.id !== u.id), u] }));
-      setRealUserId(u.id);
-      setCurrentUser(u.id);
+      setRealUserId(u.id); setCurrentUser(u.id);
       return { ok: true, user: u };
-    } catch (e) {
-      return { ok: false, error: String(e.message || e) };
-    }
+    } catch (e) { return { ok: false, error: String(e.message || e) }; }
   }, []);
 
-  const createUser = React.useCallback(async ({ name, email, password, role, initials }) => {
-    const id = 'u-' + Date.now().toString(36);
-    const ini = (initials || (name || '').split(' ').map(w => w[0]).join('').slice(0, 2)).toUpperCase();
-    const row = { id, name, email, password, role, initials: ini, active: true };
-    if (window.OPC_SB) {
-      const { data, error } = await window.OPC_SB
-        .from('users').insert(row).select('id,email,name,role,initials,active').single();
+  // Admin creates a user (server-side opc_create_user makes the auth user + profile).
+  const createUser = React.useCallback(async ({ name, email, password, role }) => {
+    if (!window.OPC_SB) return { ok: false, error: 'Cannot reach the server.' };
+    try {
+      const { data, error } = await window.OPC_SB.rpc('opc_create_user',
+        { p_name: name, p_email: String(email).trim(), p_password: password, p_role: role });
       if (error) return { ok: false, error: error.message };
-      setState(prev => ({ ...prev, users: [...prev.users, data] }));
-      return { ok: true, user: data };
-    }
-    const { password: _pw, ...safe } = row;
-    setState(prev => ({ ...prev, users: [...prev.users, safe] }));
-    return { ok: true, user: safe };
+      const u = Array.isArray(data) ? data[0] : data;
+      if (!u) return { ok: false, error: 'Create failed.' };
+      setState(prev => ({ ...prev, users: [...prev.users.filter(x => x.id !== u.id), u] }));
+      return { ok: true, user: u };
+    } catch (e) { return { ok: false, error: String(e.message || e) }; }
   }, []);
 
   const setUserActive = React.useCallback(async (id, active) => {
     setState(prev => ({ ...prev, users: prev.users.map(u => u.id === id ? { ...u, active } : u) }));
-    if (window.OPC_SB) { try { await window.OPC_SB.from('users').update({ active }).eq('id', id); } catch (e) { console.error('[OPC] setUserActive failed', e); } }
+    if (window.OPC_SB) { const { error } = await window.OPC_SB.from('users').update({ active }).eq('id', id); if (error) console.error('[OPC] setUserActive failed', error.message); }
   }, []);
 
   const removeUser = React.useCallback(async (id) => {
-    if (id === 'u-admin') return { ok: false, error: 'Cannot remove the Org Admin.' };
+    if (id === realUserId) return { ok: false, error: 'You cannot remove your own account.' };
+    if (!window.OPC_SB) return { ok: false, error: 'Cannot reach the server.' };
+    const { error } = await window.OPC_SB.rpc('opc_delete_user', { p_id: id });
+    if (error) return { ok: false, error: error.message };
     setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
-    if (window.OPC_SB) { try { await window.OPC_SB.from('users').delete().eq('id', id); } catch (e) { console.error('[OPC] removeUser failed', e); } }
     return { ok: true };
-  }, []);
+  }, [realUserId]);
 
   const resetData = () => {
     localStorage.removeItem(STORAGE_KEY);
@@ -352,7 +357,7 @@ function StoreProvider({ children }) {
   const ctx = {
     state, setState, mutate, resetData, saveConfig,
     login, logout, signupAdmin, createUser, setUserActive, removeUser,
-    impersonate, stopImpersonating, realUserId,
+    impersonate, stopImpersonating, realUserId, authReady,
     route, navigate,
     roleFilter, setRoleFilter,
     currentUser, setCurrentUser,
