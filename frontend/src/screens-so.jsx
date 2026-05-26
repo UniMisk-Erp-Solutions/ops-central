@@ -558,6 +558,7 @@ function SalesOrderDetail({ soId }) {
   const [tab, setTab] = React.useState('overview');
   const [showHold, setShowHold] = React.useState(false);
   const [showSource, setShowSource] = React.useState(false);
+  const [showEdit, setShowEdit] = React.useState(false);
   const role = currentUser ? getUser(currentUser).role : '';
   const canApprove = canDo(role, 'approveSO') || role === 'Org Admin' || role === 'Managing Director';
   const canAdvance = canApprove || canDo(role, 'authDispatch');
@@ -635,6 +636,11 @@ function SalesOrderDetail({ soId }) {
     toast(`${so.so_no} → ${next}${notif ? ` · ${notif.role} notified` : ''}`, 'success');
   };
 
+  // ===== Edit requirements mid-flow — Sales adjusts requirements; PM/Purchase fulfil =====
+  // Locked once billing has been issued (use cancel/credit-note instead).
+  const billingLocked = ['Invoiced', 'Payment Pending', 'Partially Paid', 'Fully Paid', 'Closed', 'Cancelled'].includes(so.status);
+  const canEditSO = ['Sales', 'Project Manager', 'Purchase', 'Org Admin'].includes(role);
+
   // ===== On-hold / resume (Op 6/7) — only Project Manager or Purchase (+ Admin) =====
   const canHold = ['Project Manager', 'Purchase', 'Org Admin'].includes(role);
   // Urgent/Critical SOs may source components from other (esp. on-hold) SOs.
@@ -676,6 +682,11 @@ function SalesOrderDetail({ soId }) {
         </div>
         <div className="page-actions">
           <button className="btn" onClick={() => navigate(`godown/${so.id}`)}><Icon name="box" size={13}/>Virtual Godown</button>
+          {canEditSO && !billingLocked && (
+            <button className="btn" onClick={() => setShowEdit(true)} title="Add or adjust line items / requirements">
+              <Icon name="edit" size={13}/>Edit items
+            </button>
+          )}
           {canSource && isUrgent && !['Closed','Cancelled','Fully Delivered'].includes(so.status) && (
             <button className="btn" onClick={() => setShowSource(true)} title="Request components from another SO (e.g. an on-hold SO)">
               <Icon name="arrowLeftRight" size={13}/>Source from SO
@@ -704,6 +715,7 @@ function SalesOrderDetail({ soId }) {
 
       {showHold && <HoldModal soNo={so.so_no} onClose={() => setShowHold(false)} onConfirm={doHold}/>}
       {showSource && <NewTransferModal destSoId={so.id} onClose={() => setShowSource(false)}/>}
+      {showEdit && <EditSOModal so={so} role={role} onClose={() => setShowEdit(false)}/>}
 
       <div className="card mb-2">
         <div className="card-body" style={{ padding: '10px 14px' }}>
@@ -1045,7 +1057,147 @@ function HoldModal({ soNo, onClose, onConfirm }) {
   );
 }
 
+// ===== Edit SO line items / requirements mid-flow =====
+// Sales adjusts what the customer wants; PM/Purchase fulfil. Changes flow into
+// the Virtual Godown (required components) and billing (line subtotal) and
+// notify PM + Purchase. Locked once billing is issued (handled by caller).
+function EditSOModal({ so, role, onClose }) {
+  const { state, mutate, getCategory, getProduct } = useStore();
+  const toast = useToast();
+  const [lines, setLines] = React.useState(() => JSON.parse(JSON.stringify(so.lines || [])));
+  const [expanded, setExpanded] = React.useState({});
+  const [notes, setNotes] = React.useState(so.notes || '');
+  const [priority, setPriority] = React.useState(so.priority || 'Standard');
+  const [saving, setSaving] = React.useState(false);
+
+  const addLine = (categoryId) => {
+    const bom = state.boms[categoryId] || [];
+    const defaultPrice = bom.reduce((s, c) => { const p = getProduct(c.product_id); return s + (p ? p.sell : 0) * c.qty; }, 0);
+    const nl = {
+      id: 'l' + Date.now() + Math.random().toString(36).slice(2, 5),
+      category_id: categoryId, bundle_qty: 1, unit_price: defaultPrice,
+      components: bom.map(c => ({ product_id: c.product_id, qty: c.qty, override: false, original_qty: c.qty })),
+    };
+    setLines(ls => [...ls, nl]);
+    setExpanded(e => ({ ...e, [nl.id]: true }));
+  };
+  const updateLine = (id, patch) => setLines(ls => ls.map(l => l.id === id ? { ...l, ...patch } : l));
+  const removeLine = (id) => setLines(ls => ls.filter(l => l.id !== id));
+  const updateComp = (lid, pid, patch) => setLines(ls => ls.map(l => l.id !== lid ? l : {
+    ...l, components: l.components.map(c => c.product_id !== pid ? c : { ...c, ...patch, override: patch.qty !== undefined ? patch.qty !== c.original_qty : c.override }),
+  }));
+  const addComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : { ...l, components: [...l.components, { product_id: pid, qty: 1, override: true, original_qty: 0 }] }));
+  const removeComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : { ...l, components: l.components.filter(c => c.product_id !== pid) }));
+
+  const subtotal = lines.reduce((s, l) => s + l.bundle_qty * l.unit_price, 0);
+
+  const save = () => {
+    if (lines.length === 0) { toast('An SO needs at least one line item'); return; }
+    setSaving(true);
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, lines, notes, priority } : x),
+      notifications: [
+        { id: 'n-edit-' + Date.now(), kind: 'so', text: `${so.so_no} requirements updated (by ${role}) · review & fulfil`, date: TODAY, read: false, role: 'Project Manager' },
+        { id: 'n-edit2-' + Date.now(), kind: 'so', text: `${so.so_no} updated · check procurement needs`, date: TODAY, read: false, role: 'Purchase' },
+        ...s.notifications,
+      ],
+    }), { action: 'edit', entity: 'SalesOrder', entity_id: so.id });
+    setSaving(false);
+    toast(`${so.so_no} updated · PM & Purchase notified`, 'success');
+    onClose();
+  };
+
+  return (
+    <Modal title={`Edit ${so.so_no} — line items & requirements`} onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save changes'}</button>
+      </>
+    }>
+      <div className="field-row mb-2">
+        <div className="field">
+          <label className="field-label">Priority</label>
+          <select className="select" value={priority} onChange={e => setPriority(e.target.value)}>
+            <option>Standard</option><option>Urgent</option><option>Critical</option>
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label">Add line by category</label>
+          <select className="select" value="" onChange={e => { if (e.target.value) addLine(e.target.value); e.target.value = ''; }}>
+            <option value="">+ Add bundle…</option>
+            {state.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {lines.length === 0 ? (
+        <div className="empty">No line items. Add a bundle above.</div>
+      ) : (
+        <table className="t">
+          <thead><tr>
+            <th style={{ width: 22 }}></th><th>Bundle</th><th className="num">Qty</th><th className="num">Unit ₹</th><th className="num">Line ₹</th><th style={{ width: 28 }}></th>
+          </tr></thead>
+          <tbody>
+            {lines.map(l => {
+              const cat = getCategory(l.category_id) || { name: l.category_id, hsn: '' };
+              const open = expanded[l.id];
+              return (
+                <Fragment key={l.id}>
+                  <tr>
+                    <td style={{ cursor: 'pointer' }} onClick={() => setExpanded(e => ({ ...e, [l.id]: !open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={12}/></td>
+                    <td><div style={{ fontWeight: 500 }}>{cat.name}</div><div className="tiny muted">{l.components.length} components</div></td>
+                    <td className="num"><input type="number" className="input mono" min="1" value={l.bundle_qty} onChange={e => updateLine(l.id, { bundle_qty: parseInt(e.target.value) || 1 })} style={{ width: 64, textAlign: 'right' }}/></td>
+                    <td className="num"><input type="number" className="input mono" value={l.unit_price} onChange={e => updateLine(l.id, { unit_price: parseInt(e.target.value) || 0 })} style={{ width: 96, textAlign: 'right' }}/></td>
+                    <td className="num"><strong>{inr(l.bundle_qty * l.unit_price)}</strong></td>
+                    <td><button className="btn btn-ghost btn-sm" onClick={() => removeLine(l.id)}><Icon name="trash" size={12} color="var(--danger)"/></button></td>
+                  </tr>
+                  {open && (
+                    <>
+                      {l.components.map(c => {
+                        const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id, uom: '' };
+                        return (
+                          <tr key={c.product_id} className="subrow">
+                            <td></td>
+                            <td><div style={{ fontSize: 12 }}>{p.name}</div><div className="tiny muted mono">{p.code}</div></td>
+                            <td className="num"><input type="number" className="input mono" min="0" value={c.qty} onChange={e => updateComp(l.id, c.product_id, { qty: parseInt(e.target.value) || 0 })} style={{ width: 64, textAlign: 'right', height: 24 }}/>{c.override && <div className="tiny" style={{ color: 'var(--warning)' }}>was {c.original_qty}</div>}</td>
+                            <td colSpan="2" className="num small muted">@ {inr(p.buy || 0)}</td>
+                            <td><button className="btn btn-ghost btn-sm" onClick={() => removeComp(l.id, c.product_id)}><Icon name="x" size={11}/></button></td>
+                          </tr>
+                        );
+                      })}
+                      <tr className="subrow">
+                        <td></td>
+                        <td colSpan="5" style={{ padding: '6px 0 12px' }}>
+                          <select className="select" value="" onChange={e => { if (e.target.value) { addComp(l.id, e.target.value); e.target.value = ''; } }} style={{ width: 220, height: 24, fontSize: 11.5 }}>
+                            <option value="">+ Add component…</option>
+                            {state.products.filter(p => !l.components.find(c => c.product_id === p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                        </td>
+                      </tr>
+                    </>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      <div className="field mt-2">
+        <label className="field-label">Notes</label>
+        <textarea className="textarea" value={notes} onChange={e => setNotes(e.target.value)} placeholder="What changed / customer request…"/>
+      </div>
+      <div className="mt-2" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
+        <span className="tiny muted">Saving updates the Virtual Godown requirements & notifies PM + Purchase. Customer billing recomputes from line items.</span>
+        <span style={{ fontWeight: 600 }}>Subtotal {inr(subtotal)}</span>
+      </div>
+    </Modal>
+  );
+}
+
 window.SalesOrdersList = SalesOrdersList;
 window.SalesOrderNew = SalesOrderNew;
 window.SalesOrderDetail = SalesOrderDetail;
 window.HoldModal = HoldModal;
+window.EditSOModal = EditSOModal;
