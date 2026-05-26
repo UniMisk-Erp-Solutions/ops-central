@@ -2,20 +2,31 @@
 
 // ===== RFQ List + Detail =====
 function RFQList() {
-  const { state, navigate, getSO, getVendor } = useStore();
+  const { state, navigate, currentUser, getUser } = useStore();
+  const [showRFQ, setShowRFQ] = React.useState(false);
+  const role = getUser(currentUser)?.role;
+  const canFloat = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1 className="page-title">RFQ Comparison</h1>
-          <div className="page-sub">Side-by-side vendor quotes · LPP variance alerts · winner selection</div>
+          <div className="page-sub">Side-by-side vendor quotes · select the winning vendor</div>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary"><Icon name="plus" size={13}/>Float new RFQ</button>
+          {canFloat && <button className="btn btn-primary" onClick={() => setShowRFQ(true)}><Icon name="plus" size={13}/>Float new RFQ</button>}
         </div>
       </div>
 
-      {state.rfqs.map(rfq => <RFQCard key={rfq.id} rfq={rfq}/>)}
+      {state.rfqs.length === 0 ? (
+        <div className="card"><div className="empty">
+          <div className="empty-title">No RFQs yet</div>
+          Float an RFQ to selected vendors for an approved SO, record their quotes, then pick the winner.
+          {canFloat && <div className="mt-2"><button className="btn btn-primary" onClick={() => setShowRFQ(true)}><Icon name="plus" size={13}/>Float new RFQ</button></div>}
+        </div></div>
+      ) : state.rfqs.map(rfq => <RFQCard key={rfq.id} rfq={rfq}/>)}
+
+      {showRFQ && <CreateRFQModal onClose={() => setShowRFQ(false)}/>}
     </div>
   );
 }
@@ -27,18 +38,33 @@ function RFQCard({ rfq }) {
   const role = getUser(currentUser).role;
   const canSelectWinner = canDo(role, 'selectVendor') || role === 'Org Admin';
   const [selected, setSelected] = React.useState(rfq.selected_vendor);
+  const [showPO, setShowPO] = React.useState(false);
+  const [draft, setDraft] = React.useState(() => rfq.quotes.reduce((m, q) => { m[q.vendor_id] = { total: q.total || '', delivery_days: q.delivery_days || '', terms: q.terms || '' }; return m; }, {}));
+  const locked = rfq.status === 'Vendor Approved';
+  const setQ = (vid, patch) => setDraft(d => ({ ...d, [vid]: { ...d[vid], ...patch } }));
+
+  const saveQuotes = () => {
+    mutate(s => ({
+      ...s,
+      rfqs: s.rfqs.map(r => r.id !== rfq.id ? r : {
+        ...r, quotes: r.quotes.map(q => { const d = draft[q.vendor_id] || {}; const total = Number(d.total) || 0; return { ...q, total, delivery_days: Number(d.delivery_days) || 0, terms: d.terms || '', responded: total > 0 }; }),
+      }),
+    }), { action: 'quotes', entity: 'RFQ', entity_id: rfq.id });
+    toast('Quotes recorded', 'success');
+  };
 
   const bestQuote = rfq.quotes.filter(q => q.responded).reduce((b, q) => !b || q.total < b.total ? q : b, null);
 
   const confirmWinner = () => {
-    const q = rfq.quotes.find(x => x.vendor_id === selected);
+    const dq = draft[selected] || {};
+    const total = Number(dq.total) || (rfq.quotes.find(x => x.vendor_id === selected)?.total || 0);
     const v = getVendor(selected);
-    const needsMD = q.total > 500000;
+    const needsMD = total > 500000;
     mutate(s => ({
       ...s,
       rfqs: s.rfqs.map(r => r.id === rfq.id ? { ...r, selected_vendor: selected, status: needsMD ? 'Responses In' : 'Vendor Approved' } : r),
       notifications: needsMD ? [
-        { id: 'n-rfq-md-' + Date.now(), kind: 'po', text: `${rfq.rfq_no} · ${v.name} selected · ${inrK(q.total)} · awaiting MD approval`, date: TODAY, read: false, role: 'Managing Director' },
+        { id: 'n-rfq-md-' + Date.now(), kind: 'po', text: `${rfq.rfq_no} · ${v.name} selected · ${inrK(total)} · awaiting MD approval`, date: TODAY, read: false, role: 'Managing Director' },
         ...s.notifications,
       ] : [
         { id: 'n-rfq-' + Date.now(), kind: 'po', text: `${rfq.rfq_no} · ${v.name} approved · draft Vendor PO`, date: TODAY, read: false, role: 'Purchase' },
@@ -58,10 +84,9 @@ function RFQCard({ rfq }) {
           <div className="tiny muted">For SO <span className="mono">{so?.so_no}</span> · floated {fmtDate(rfq.floated_date)} · closes {fmtDate(rfq.closes_date)}</div>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button className="btn"><Icon name="mail" size={12}/>Request revision</button>
-          <button className="btn"><Icon name="download" size={12}/>Export</button>
-          {canSelectWinner && <button className="btn btn-primary" disabled={!selected || rfq.status === 'Vendor Approved'} onClick={confirmWinner}>
-            {rfq.status === 'Vendor Approved' ? 'Vendor selected' : 'Select winner'}
+          {canSelectWinner && !locked && <button className="btn" onClick={saveQuotes}><Icon name="save" size={12}/>Record quotes</button>}
+          {canSelectWinner && <button className="btn btn-primary" disabled={!selected || locked} onClick={confirmWinner}>
+            {locked ? 'Vendor selected' : 'Select winner'}
           </button>}
         </div>
       </div>
@@ -93,12 +118,17 @@ function RFQCard({ rfq }) {
                     <div className="tiny muted">{v.city} · ★ {v.rating}</div>
                   </td>
                   <td className="num">
-                    {q.responded ? (
-                      <strong style={{ fontFamily: 'var(--mono)' }}>{inr(q.total)}</strong>
-                    ) : <span className="muted">—</span>}
+                    {locked ? <strong style={{ fontFamily: 'var(--mono)' }}>{inr(q.total)}</strong> :
+                      <input type="number" className="input mono" min="0" placeholder="total" value={(draft[q.vendor_id] || {}).total} onChange={e => setQ(q.vendor_id, { total: e.target.value })} style={{ width: 100, textAlign: 'right', height: 26 }}/>}
                   </td>
-                  <td className="num">{q.responded ? `${q.delivery_days} days` : '—'}</td>
-                  <td>{q.terms || <span className="muted">—</span>}</td>
+                  <td className="num">
+                    {locked ? (q.responded ? `${q.delivery_days} days` : '—') :
+                      <input type="number" className="input mono" min="0" placeholder="days" value={(draft[q.vendor_id] || {}).delivery_days} onChange={e => setQ(q.vendor_id, { delivery_days: e.target.value })} style={{ width: 60, textAlign: 'right', height: 26 }}/>}
+                  </td>
+                  <td>
+                    {locked ? (q.terms || <span className="muted">—</span>) :
+                      <input className="input" placeholder="terms" value={(draft[q.vendor_id] || {}).terms} onChange={e => setQ(q.vendor_id, { terms: e.target.value })} style={{ width: 90, height: 26 }}/>}
+                  </td>
                   <td className="num">
                     {q.responded ? (
                       lppWarn ? <span style={{ color: 'var(--danger)', fontWeight: 600 }}>+{q.lpp_variance}% ⚠</span> :
@@ -110,8 +140,8 @@ function RFQCard({ rfq }) {
                     {q.responded ? <span className="badge success dot">Responded</span> : <span className="badge dot">Awaiting</span>}
                   </td>
                   <td>
-                    {q.responded && (
-                      <input type="radio" name={`pick-${rfq.id}`} checked={selected === q.vendor_id} onChange={() => setSelected(q.vendor_id)}/>
+                    {(Number((draft[q.vendor_id] || {}).total) > 0 || q.responded) && (
+                      <input type="radio" name={`pick-${rfq.id}`} checked={selected === q.vendor_id} disabled={locked} onChange={() => setSelected(q.vendor_id)}/>
                     )}
                   </td>
                 </tr>
@@ -123,20 +153,27 @@ function RFQCard({ rfq }) {
       {selected && (
         <div style={{ padding: '10px 14px', background: 'var(--accent-bg)', borderTop: '1px solid var(--accent-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div className="small">
-            <strong>{getVendor(selected).name}</strong> selected · {rfq.quotes.find(q => q.vendor_id === selected).total > 500000 && <span style={{ color: 'var(--warning)' }}>⚠ Requires MD approval (above ₹5L)</span>}
+            <strong>{getVendor(selected)?.name}</strong> selected
+            {(Number((draft[selected] || {}).total) || 0) > 500000 && <span style={{ color: 'var(--warning)' }}> · ⚠ Requires MD approval (above ₹5L)</span>}
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => { toast('PO drafted · sent for MD approval', 'success'); navigate('vendor-pos'); }}>
-            Draft Vendor PO <Icon name="arrowRight" size={11}/>
-          </button>
+          {canSelectWinner && (
+            <button className="btn btn-primary btn-sm" onClick={() => setShowPO(true)}>
+              Draft Vendor PO <Icon name="arrowRight" size={11}/>
+            </button>
+          )}
         </div>
       )}
+      {showPO && <CreateVendorPOModal soId={rfq.so_id} vendorId={selected} onClose={() => setShowPO(false)}/>}
     </div>
   );
 }
 
 // ===== Vendor PO List =====
 function VendorPOList() {
-  const { state, navigate, getVendor, getSO } = useStore();
+  const { state, navigate, getVendor, getSO, currentUser, getUser } = useStore();
+  const [showPO, setShowPO] = React.useState(false);
+  const role = getUser(currentUser)?.role;
+  const canCreate = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
   return (
     <div className="page">
       <div className="page-header">
@@ -146,9 +183,10 @@ function VendorPOList() {
         </div>
         <div className="page-actions">
           <button className="btn"><Icon name="download" size={13}/>Export</button>
-          <button className="btn btn-primary"><Icon name="plus" size={13}/>Create Vendor PO</button>
+          {canCreate && <button className="btn btn-primary" onClick={() => setShowPO(true)}><Icon name="plus" size={13}/>Create Vendor PO</button>}
         </div>
       </div>
+      {showPO && <CreateVendorPOModal onClose={() => setShowPO(false)}/>}
 
       <div className="card">
         <div className="filter-bar">
@@ -708,6 +746,199 @@ function ThreeWayMatchDetail({ viId }) {
   );
 }
 
+// ===== Shared: aggregate an SO's required components =====
+function procComponentList(so) {
+  const m = {};
+  (so.lines || []).forEach(l => (l.components || []).forEach(c => { m[c.product_id] = (m[c.product_id] || 0) + (c.qty || 0); }));
+  return Object.entries(m).map(([product_id, qty]) => ({ product_id, qty }));
+}
+
+// ===== Float RFQ to selected vendors (Purchase) =====
+function CreateRFQModal({ soId, onClose }) {
+  const { state, mutate, getSO, getProduct } = useStore();
+  const toast = useToast();
+  const [so, setSo] = React.useState(soId || '');
+  const soObj = so ? getSO(so) : null;
+  const comps = soObj ? procComponentList(soObj) : [];
+  const [picked, setPicked] = React.useState({});
+  const [vendors, setVendors] = React.useState({});
+  const [closes, setCloses] = React.useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() + 5); return d.toISOString().slice(0, 10); });
+
+  React.useEffect(() => {
+    if (soObj) { const m = {}; procComponentList(soObj).forEach(c => { m[c.product_id] = true; }); setPicked(m); }
+  }, [so]);
+
+  const selectedComps = comps.filter(c => picked[c.product_id]);
+  const selectedVendors = Object.keys(vendors).filter(v => vendors[v]);
+
+  const submit = () => {
+    if (!so || selectedComps.length === 0 || selectedVendors.length === 0) { toast('Pick an SO, at least one component, and at least one vendor'); return; }
+    const rfqNo = `RFQ/FY26/${String(23 + state.rfqs.length).padStart(4, '0')}`;
+    const names = selectedComps.map(c => getProduct(c.product_id)?.name || c.product_id);
+    const items_label = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3} more` : '');
+    const rfq = {
+      id: 'rfq-' + Date.now(), rfq_no: rfqNo, so_id: so, items_label,
+      floated_date: TODAY, closes_date: closes, status: 'Responses In',
+      vendors: selectedVendors,
+      quotes: selectedVendors.map(vid => ({ vendor_id: vid, total: 0, delivery_days: 0, terms: '', lpp_variance: 0, responded: false })),
+      selected_vendor: null,
+      items: selectedComps.map(c => ({ product_id: c.product_id, qty: c.qty })),
+    };
+    mutate(s => ({
+      ...s,
+      rfqs: [rfq, ...s.rfqs],
+      sales_orders: s.sales_orders.map(x => x.id === so && x.status === 'Approved' ? { ...x, status: 'Procurement Started' } : x),
+      notifications: [{ id: 'n-rfq-' + Date.now(), kind: 'po', text: `${rfqNo} floated to ${selectedVendors.length} vendor(s) for ${getSO(so)?.so_no}`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications],
+    }), { action: 'create', entity: 'RFQ', entity_id: rfq.id });
+    toast(`${rfqNo} floated to ${selectedVendors.length} vendor(s)`, 'success');
+    onClose();
+  };
+
+  return (
+    <Modal title="Float RFQ to vendors" onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={!so || selectedComps.length === 0 || selectedVendors.length === 0} onClick={submit}>Float RFQ</button>
+      </>
+    }>
+      <div className="field-row">
+        <div className="field">
+          <label className="field-label">For Sales Order *</label>
+          <select className="select" value={so} onChange={e => setSo(e.target.value)} disabled={!!soId}>
+            <option value="">Pick SO…</option>
+            {state.sales_orders.filter(s => !['Closed', 'Cancelled'].includes(s.status)).map(s => <option key={s.id} value={s.id}>{s.so_no} · {s.status}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label">Responses close by</label>
+          <input type="date" className="input mono" value={closes} onChange={e => setCloses(e.target.value)}/>
+        </div>
+      </div>
+
+      {soObj && (
+        <div className="field mt-2">
+          <label className="field-label">Components to source ({selectedComps.length}/{comps.length})</label>
+          <div className="card"><div className="card-body" style={{ maxHeight: 160, overflowY: 'auto' }}>
+            {comps.map(c => {
+              const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id };
+              return (
+                <label key={c.product_id} className="small" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+                  <input type="checkbox" checked={!!picked[c.product_id]} onChange={e => setPicked(m => ({ ...m, [c.product_id]: e.target.checked }))}/>
+                  {p.name} <span className="muted tiny mono">{p.code}</span> <span className="muted">· qty {c.qty}</span>
+                </label>
+              );
+            })}
+          </div></div>
+        </div>
+      )}
+
+      <div className="field mt-2">
+        <label className="field-label">Invite vendors * ({selectedVendors.length} selected)</label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
+          {state.vendors.map(v => (
+            <label key={v.id} className="small" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!vendors[v.id]} onChange={e => setVendors(m => ({ ...m, [v.id]: e.target.checked }))}/>
+              <span>{v.name} <span className="muted tiny">· ★ {v.rating} · {v.city}</span></span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="mt-2 tiny muted" style={{ padding: 10, background: 'var(--info-bg)', borderRadius: 4 }}>
+        After floating, record each vendor's quote on the RFQ, then select the winning vendor — that vendor flows into the Vendor PO. Above ₹5L the selection needs MD approval.
+      </div>
+    </Modal>
+  );
+}
+
+// ===== Create Vendor PO for an SO (Purchase) =====
+function CreateVendorPOModal({ soId, vendorId, onClose }) {
+  const { state, mutate, getSO, getProduct, getVendor } = useStore();
+  const toast = useToast();
+  const [so, setSo] = React.useState(soId || '');
+  const [vendor, setVendor] = React.useState(vendorId || '');
+  const soObj = so ? getSO(so) : null;
+  const [items, setItems] = React.useState([]);
+  const [expected, setExpected] = React.useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); });
+
+  React.useEffect(() => {
+    if (soObj) setItems(procComponentList(soObj).map(c => { const p = getProduct(c.product_id); return { product_id: c.product_id, qty: c.qty, rate: p ? p.buy : 0 }; }));
+    else setItems([]);
+  }, [so]);
+
+  const setItem = (i, patch) => setItems(its => its.map((x, j) => j === i ? { ...x, ...patch } : x));
+  const amount = items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0);
+  const needsMD = amount > 500000;
+
+  const submit = () => {
+    const real = items.filter(i => i.qty > 0);
+    if (!so || !vendor || real.length === 0) { toast('Pick SO, vendor and at least one item'); return; }
+    const poNo = `VPO/FY26/${String(40 + state.vendor_pos.length).padStart(4, '0')}`;
+    const po = { id: 'po-' + Date.now(), po_no: poNo, so_id: so, vendor_id: vendor, date: TODAY, expected, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: real };
+    mutate(s => ({
+      ...s,
+      vendor_pos: [po, ...s.vendor_pos],
+      sales_orders: s.sales_orders.map(x => x.id === so && x.status === 'Approved' ? { ...x, status: 'Procurement Started' } : x),
+      notifications: [{ id: 'n-po-' + Date.now(), kind: 'po', text: `${poNo} ${needsMD ? 'awaiting MD approval' : 'issued'} → ${getVendor(vendor)?.name} for ${getSO(so)?.so_no} · ${inrK(amount)}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
+    }), { action: 'create', entity: 'VendorPO', entity_id: po.id });
+    toast(`${poNo} created${needsMD ? ' · sent to MD' : ''}`, 'success');
+    onClose();
+  };
+
+  return (
+    <Modal title="Create Vendor PO" onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={!so || !vendor || amount <= 0} onClick={submit}>Create PO {amount > 0 ? `· ${inr(amount)}` : ''}</button>
+      </>
+    }>
+      <div className="field-row">
+        <div className="field">
+          <label className="field-label">For Sales Order *</label>
+          <select className="select" value={so} onChange={e => setSo(e.target.value)} disabled={!!soId}>
+            <option value="">Pick SO…</option>
+            {state.sales_orders.filter(s => !['Closed', 'Cancelled'].includes(s.status)).map(s => <option key={s.id} value={s.id}>{s.so_no} · {s.status}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label">Vendor *</label>
+          <select className="select" value={vendor} onChange={e => setVendor(e.target.value)}>
+            <option value="">Pick vendor…</option>
+            {state.vendors.map(v => <option key={v.id} value={v.id}>{v.name} · ★ {v.rating}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field mt-2">
+        <label className="field-label">Expected delivery</label>
+        <input type="date" className="input mono" value={expected} onChange={e => setExpected(e.target.value)} style={{ width: 180 }}/>
+      </div>
+
+      {items.length > 0 ? (
+        <div className="card mt-2"><div className="card-body flush">
+          <table className="t">
+            <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Rate ₹</th><th className="num">Amount</th></tr></thead>
+            <tbody>
+              {items.map((it, i) => {
+                const p = getProduct(it.product_id) || { name: it.product_id, code: it.product_id };
+                return (
+                  <tr key={it.product_id}>
+                    <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
+                    <td className="num"><input type="number" className="input mono" min="0" value={it.qty} onChange={e => setItem(i, { qty: parseInt(e.target.value) || 0 })} style={{ width: 64, textAlign: 'right', height: 24 }}/></td>
+                    <td className="num"><input type="number" className="input mono" min="0" value={it.rate} onChange={e => setItem(i, { rate: parseInt(e.target.value) || 0 })} style={{ width: 90, textAlign: 'right', height: 24 }}/></td>
+                    <td className="num">{inr((it.qty || 0) * (it.rate || 0))}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot><tr><td colSpan="3" className="right small">Total {needsMD && <span style={{ color: 'var(--warning)' }}>· &gt; ₹5L needs MD</span>}</td><td className="num"><strong>{inr(amount)}</strong></td></tr></tfoot>
+          </table>
+        </div></div>
+      ) : <div className="empty mt-2">{so ? 'This SO has no components' : 'Pick an SO to load its components'}</div>}
+    </Modal>
+  );
+}
+
+window.CreateRFQModal = CreateRFQModal;
+window.CreateVendorPOModal = CreateVendorPOModal;
 window.RFQList = RFQList;
 window.VendorPOList = VendorPOList;
 window.VendorPODetail = VendorPODetail;

@@ -961,12 +961,25 @@ function SalesOrderDetail({ soId }) {
 }
 
 function ProcurementTab({ so }) {
-  const { state, navigate } = useStore();
+  const { state, navigate, currentUser, getUser } = useStore();
+  const [showRFQ, setShowRFQ] = React.useState(false);
+  const [showPO, setShowPO] = React.useState(false);
+  const role = getUser(currentUser)?.role;
+  const canProcure = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
   const linkedPOs = state.vendor_pos.filter(p => p.so_id === so.id);
   const linkedRFQs = state.rfqs.filter(r => r.so_id === so.id);
 
   return (
     <div className="stack">
+      {canProcure && (
+        <div className="card"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div className="grow"><strong className="small">Procure for this SO</strong><div className="tiny muted">Float an RFQ to chosen vendors, or raise a Vendor PO directly.</div></div>
+          <button className="btn" onClick={() => setShowRFQ(true)}><Icon name="grid" size={13}/>Float RFQ</button>
+          <button className="btn btn-primary" onClick={() => setShowPO(true)}><Icon name="cart" size={13}/>Create Vendor PO</button>
+        </div></div>
+      )}
+      {showRFQ && <CreateRFQModal soId={so.id} onClose={() => setShowRFQ(false)}/>}
+      {showPO && <CreateVendorPOModal soId={so.id} onClose={() => setShowPO(false)}/>}
       {linkedRFQs.length > 0 && (
         <div className="card">
           <div className="card-header"><h3 className="card-title">Open RFQs</h3></div>
@@ -990,7 +1003,7 @@ function ProcurementTab({ so }) {
       )}
       <div className="card">
         <div className="card-header"><h3 className="card-title">Vendor POs</h3>
-          <button className="btn btn-primary btn-sm"><Icon name="plus" size={12}/>New Vendor PO</button>
+          {canProcure && <button className="btn btn-primary btn-sm" onClick={() => setShowPO(true)}><Icon name="plus" size={12}/>New Vendor PO</button>}
         </div>
         <div className="card-body flush">
           {linkedPOs.length === 0 ? <div className="empty">No vendor POs yet</div> : (
