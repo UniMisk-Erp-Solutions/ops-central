@@ -340,11 +340,51 @@ function RadioCardGroup({ options, value, onChange }) {
   );
 }
 
+// ===== Shared helpers (download / CSV) =====
+function opcDownload(filename, content, mime = 'application/json') {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function opcToCSV(rows) {
+  if (!rows || !rows.length) return '';
+  const cols = Object.keys(rows[0]);
+  const esc = (v) => {
+    if (v === null || v === undefined) return '';
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  return [cols.join(','), ...rows.map(r => cols.map(c => esc(r[c])).join(','))].join('\n');
+}
+
 // ===== Settings / Customisation Engine =====
 function Settings() {
-  const { state, mutate, resetData } = useStore();
+  const { state, resetData, saveConfig, navigate } = useStore();
   const toast = useToast();
   const [tab, setTab] = React.useState('branding');
+  const fileRef = React.useRef(null);
+
+  const exportConfig = () => {
+    const blob = { org: state.org, ...state.config };
+    opcDownload('opcentral-config.json', JSON.stringify(blob, null, 2));
+    toast('Config exported', 'success');
+  };
+  const importConfig = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const { org, ...cfg } = parsed;
+      const res = await saveConfig(cfg, org || null);
+      toast(res && res.ok === false ? 'Import save failed' : 'Config imported & saved', res && res.ok === false ? '' : 'success');
+    } catch (err) {
+      toast('Invalid config file: ' + (err.message || err), '');
+    }
+  };
 
   const tabs = [
     { id: 'branding', label: 'Identity & branding', icon: 'sparkles' },
@@ -372,8 +412,9 @@ function Settings() {
           <div className="page-sub">13 tiers · everything configurable · zero hardcoded business logic</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="download" size={13}/>Export config (JSON)</button>
-          <button className="btn"><Icon name="upload" size={13}/>Import config</button>
+          <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={importConfig}/>
+          <button className="btn" onClick={exportConfig}><Icon name="download" size={13}/>Export config (JSON)</button>
+          <button className="btn" onClick={() => fileRef.current && fileRef.current.click()}><Icon name="upload" size={13}/>Import config</button>
           <button className="btn btn-danger" onClick={() => { if (confirm('Reset all demo data?')) resetData(); }}><Icon name="repeat" size={13}/>Reset demo data</button>
         </div>
       </div>
@@ -400,7 +441,13 @@ function Settings() {
             {tab === 'billing' && <BillingPatternsPane/>}
             {tab === 'docs' && <DocsPane/>}
             {tab === 'fields' && <CustomFieldsPane/>}
-            {tab === 'catalogue' && <div className="empty"><div className="empty-title">Catalogue → manage via Products screen</div></div>}
+            {tab === 'catalogue' && (
+              <div className="empty">
+                <div className="empty-title">Catalogue & BOM</div>
+                Products, categories and BOM templates are managed on the Products screen.
+                <div className="mt-2"><button className="btn btn-primary" onClick={() => navigate('products')}><Icon name="book" size={13}/>Open Products &amp; BOM</button></div>
+              </div>
+            )}
             {tab === 'reports' && <ReportsPane/>}
             {tab === 'wizard' && <WizardPane/>}
           </div>
@@ -468,115 +515,178 @@ function BrandingPane() {
   );
 }
 
+const DEFAULT_TEAMS = [
+  { name: 'Sales', desc: 'Receives customer POs, creates SOs' },
+  { name: 'Pre-sales', desc: 'Drafts quotations' },
+  { name: 'Project Management', desc: 'Owns SOs end-to-end' },
+  { name: 'Purchase', desc: 'RFQ + vendor selection' },
+  { name: 'Stores', desc: 'GRN + QC + surplus' },
+  { name: 'Billing', desc: '3-way match + invoices' },
+  { name: 'Collections', desc: 'Overdue follow-ups' },
+  { name: 'Managing Director', desc: 'High-value approvals' },
+  { name: 'Org Admin', desc: 'Customisation + billing' },
+];
+
 function StructurePane() {
-  const { state } = useStore();
+  const { state, saveConfig } = useStore();
+  const toast = useToast();
+  const [teams, setTeams] = React.useState(() => {
+    const t = state.config.org_teams;
+    return (Array.isArray(t) && t.length) ? t.map(x => ({ ...x })) : DEFAULT_TEAMS.map(x => ({ ...x }));
+  });
+  const [saving, setSaving] = React.useState(false);
+  const memberCount = (name) => state.users.filter(u => u.role === name).length;
+  const update = (i, patch) => setTeams(ts => ts.map((t, j) => j === i ? { ...t, ...patch } : t));
+  const remove = (i) => setTeams(ts => ts.filter((_, j) => j !== i));
+  const add = () => setTeams(ts => [...ts, { name: 'New Team', desc: '' }]);
+  const save = async () => {
+    setSaving(true);
+    const res = await saveConfig({ org_teams: teams });
+    setSaving(false);
+    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Org structure saved', res && res.ok === false ? '' : 'success');
+  };
   return (
     <div className="stack">
       <h3 className="card-title">Org structure</h3>
-      <div className="muted small">Rename, merge, split or remove any team. {state.users.length} users mapped.</div>
+      <div className="muted small">Rename, add or remove teams. {state.users.length} users mapped.</div>
       <div className="card">
         <div className="card-body flush">
           <table className="t">
             <thead><tr><th>Team</th><th className="num">Members</th><th>Description</th><th></th></tr></thead>
             <tbody>
-              {[
-                ['Sales', 1, 'Receives customer POs, creates SOs'],
-                ['Pre-sales', 0, 'Drafts quotations'],
-                ['Project Management', 2, 'Owns SOs end-to-end'],
-                ['Purchase', 1, 'RFQ + vendor selection'],
-                ['Stores', 1, 'GRN + QC + surplus'],
-                ['Billing', 1, '3-way match + invoices'],
-                ['Collections', 1, 'Overdue follow-ups'],
-                ['Managing Director', 1, 'High-value approvals'],
-                ['Org Admin', 1, 'Customisation + billing'],
-              ].map(([n,c,d], i) => (
+              {teams.map((t, i) => (
                 <tr key={i}>
-                  <td><strong>{n}</strong></td>
-                  <td className="num">{c}</td>
-                  <td className="small muted">{d}</td>
-                  <td>
-                    <div className="row-actions" style={{ opacity: 1, display: 'flex', gap: 4 }}>
-                      <button className="btn btn-ghost btn-sm"><Icon name="edit" size={11}/></button>
-                      <button className="btn btn-ghost btn-sm"><Icon name="trash" size={11}/></button>
-                    </div>
-                  </td>
+                  <td><input className="input" value={t.name} onChange={e => update(i, { name: e.target.value })} style={{ height: 26 }}/></td>
+                  <td className="num">{memberCount(t.name)}</td>
+                  <td><input className="input" value={t.desc || ''} onChange={e => update(i, { desc: e.target.value })} style={{ height: 26 }}/></td>
+                  <td><button className="btn btn-ghost btn-sm" onClick={() => remove(i)}><Icon name="trash" size={11} color="var(--danger)"/></button></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
-      <button className="btn"><Icon name="plus" size={11}/>Add team</button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" onClick={add}><Icon name="plus" size={11}/>Add team</button>
+        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save structure'}</button>
+      </div>
     </div>
   );
 }
 
+const PERMISSION_SCREENS = [
+  ['dashboard', 'Dashboard'], ['inbox', 'My Tasks'], ['sales-orders', 'Sales Orders'],
+  ['customers', 'Customers'], ['godown', 'Virtual Godowns'], ['pool', 'Master Pool'],
+  ['transfers', 'Transfers'], ['rfq', 'RFQ'], ['vendor-pos', 'Vendor POs'], ['grn', 'GRN'],
+  ['three-way', '3-Way Match'], ['vendors', 'Vendors'], ['invoices', 'Invoices'],
+  ['collections', 'Collections'], ['products', 'Products'], ['settings', 'Customisation'],
+  ['audit', 'Audit Log'], ['onboarding', 'Onboarding'],
+];
+
 function PermissionsPane() {
+  const { state, saveConfig } = useStore();
+  const toast = useToast();
+  const base = state.config.permissions || (typeof PERMISSIONS !== 'undefined' ? PERMISSIONS : {});
+  const [perms, setPerms] = React.useState(() => JSON.parse(JSON.stringify(base)));
+  const [saving, setSaving] = React.useState(false);
+  const roles = Object.keys(perms);
+  const has = (role, sid) => (perms[role] && perms[role].nav || []).includes(sid);
+  const toggle = (role, sid) => {
+    if (role === 'Org Admin') return; // admin always has full access
+    setPerms(p => {
+      const nav = new Set((p[role] && p[role].nav) || []);
+      nav.has(sid) ? nav.delete(sid) : nav.add(sid);
+      return { ...p, [role]: { ...p[role], nav: Array.from(nav) } };
+    });
+  };
+  const save = async () => {
+    setSaving(true);
+    const res = await saveConfig({ permissions: perms });
+    setSaving(false);
+    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Permissions saved · applied live', res && res.ok === false ? '' : 'success');
+  };
   return (
     <div className="stack">
-      <h3 className="card-title">Permissions matrix</h3>
-      <div className="muted small">6 grains: Module · Screen · Action · Field · Record · Approval authority</div>
+      <h3 className="card-title">Screen access by role</h3>
+      <div className="muted small">Tick which screens each role can open. Drives the sidebar and route access live. Org Admin always has full access.</div>
       <div className="card">
-        <div className="card-body flush">
+        <div className="table-wrap">
           <table className="t" style={{ fontSize: 11.5 }}>
             <thead><tr>
-              <th>Permission</th>
-              <th className="num">Sales</th><th className="num">PM</th><th className="num">Purchase</th>
-              <th className="num">Stores</th><th className="num">Billing</th><th className="num">MD</th><th className="num">Coll.</th>
+              <th>Screen</th>
+              {roles.map(r => <th key={r} className="num" title={r}>{r === 'Managing Director' ? 'MD' : r === 'Project Manager' ? 'PM' : r === 'Collections' ? 'Coll.' : r === 'Org Admin' ? 'Admin' : r}</th>)}
             </tr></thead>
             <tbody>
-              {[
-                ['View Sales Orders', 'C', 'A', '−', '−', 'V', 'A', 'V'],
-                ['Create Sales Orders', 'C', 'C', '−', '−', '−', '−', '−'],
-                ['View cost / margin', '−', 'V', 'V', '−', 'V', 'V', '−'],
-                ['Approve Vendor PO', '−', '−', 'C', '−', '−', 'V', '−'],
-                ['MD approval threshold', '−', '−', '−', '−', '−', '✓', '−'],
-                ['Post GRN', '−', 'V', 'V', 'C', '−', '−', '−'],
-                ['3-Way Match', '−', 'V', '−', '−', 'C', '−', '−'],
-                ['Raise Tax Invoice', '−', 'V', '−', '−', 'C', 'V', '−'],
-                ['Modify approval gates', '−', '−', '−', '−', '−', '−', '−'],
-                ['Reset demo data (Admin)', '−', '−', '−', '−', '−', '−', '−'],
-              ].map((row, i) => (
-                <tr key={i}>
-                  <td><strong>{row[0]}</strong></td>
-                  {row.slice(1).map((v, j) => (
-                    <td key={j} className="num mono" style={{ color: v === 'C' ? 'var(--success)' : v === 'V' ? 'var(--info)' : v === '✓' ? 'var(--accent)' : v === 'A' ? 'var(--warning)' : 'var(--text-muted)' }}>{v}</td>
+              {PERMISSION_SCREENS.map(([sid, label]) => (
+                <tr key={sid}>
+                  <td><strong>{label}</strong> <span className="tiny muted mono">{sid}</span></td>
+                  {roles.map(r => (
+                    <td key={r} className="num">
+                      <input type="checkbox" checked={r === 'Org Admin' ? true : has(r, sid)}
+                             disabled={r === 'Org Admin'} onChange={() => toggle(r, sid)}/>
+                    </td>
                   ))}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div className="card-body" style={{ borderTop: '1px solid var(--border)' }}>
-          <div className="tiny muted">Legend: <strong className="mono" style={{ color: 'var(--success)' }}>C</strong> create · <strong className="mono" style={{ color: 'var(--warning)' }}>A</strong> approve · <strong className="mono" style={{ color: 'var(--info)' }}>V</strong> view · <strong className="mono">−</strong> none</div>
-        </div>
       </div>
+      <div><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save permissions'}</button></div>
     </div>
   );
 }
 
 function WorkflowPane() {
+  const { state, saveConfig } = useStore();
+  const toast = useToast();
+  const [stages, setStages] = React.useState(() => {
+    const s = state.config.workflow_stages;
+    return (Array.isArray(s) && s.length) ? [...s] : [...SO_LIFECYCLE];
+  });
+  const [saving, setSaving] = React.useState(false);
+  const rename = (i, v) => setStages(ss => ss.map((s, j) => j === i ? v : s));
+  const remove = (i) => setStages(ss => ss.filter((_, j) => j !== i));
+  const move = (i, dir) => setStages(ss => {
+    const j = i + dir; if (j < 0 || j >= ss.length) return ss;
+    const next = [...ss]; [next[i], next[j]] = [next[j], next[i]]; return next;
+  });
+  const add = () => setStages(ss => [...ss, 'New Stage']);
+  const save = async () => {
+    setSaving(true);
+    const res = await saveConfig({ workflow_stages: stages });
+    setSaving(false);
+    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Workflow stages saved', res && res.ok === false ? '' : 'success');
+  };
   return (
     <div className="stack">
       <h3 className="card-title">SO Workflow stages</h3>
-      <div className="muted small">Rename, reorder, add or remove stages. Set owners and auto-transition rules.</div>
+      <div className="muted small">Rename, reorder, add or remove stages. The configured list is saved to the DB and shown across the app.</div>
       <div className="card">
         <div className="card-body flush">
           <table className="t">
-            <thead><tr><th>#</th><th>Stage</th><th>Default owner</th><th>Auto-rules</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Stage</th><th>Reorder</th><th></th></tr></thead>
             <tbody>
-              {SO_LIFECYCLE.map((s, i) => (
-                <tr key={s}>
-                  <td className="mono small muted">{i+1}</td>
-                  <td><strong>{s}</strong></td>
-                  <td className="small">{['Sales','MD/PM','PM','Purchase','Stores','PM','PM','Billing','Billing','Collections','Accounts','PM'][i]}</td>
-                  <td className="small muted">{i === 2 ? 'Auto-open VG' : i === 4 ? 'On GRN posted' : i === 7 ? 'On dispatch authorised' : '—'}</td>
-                  <td><Icon name="move" size={12} color="var(--text-3)"/></td>
+              {stages.map((s, i) => (
+                <tr key={i}>
+                  <td className="mono small muted">{i + 1}</td>
+                  <td><input className="input" value={s} onChange={e => rename(i, e.target.value)} style={{ height: 26 }}/></td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button className="btn btn-ghost btn-sm" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+                      <button className="btn btn-ghost btn-sm" disabled={i === stages.length - 1} onClick={() => move(i, 1)}>↓</button>
+                    </div>
+                  </td>
+                  <td><button className="btn btn-ghost btn-sm" onClick={() => remove(i)}><Icon name="trash" size={11} color="var(--danger)"/></button></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" onClick={add}><Icon name="plus" size={11}/>Add stage</button>
+        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save stages'}</button>
       </div>
     </div>
   );
@@ -708,30 +818,53 @@ function RuleRow({ label, desc, value, locked }) {
   );
 }
 
+const DEFAULT_NOTIF_EVENTS = [
+  ['SO created', 'Sales · PM'], ['SO approved', 'PM · Purchase'], ['Vendor PO sent', 'Vendor · Purchase'],
+  ['Material received', 'PM · Billing'], ['3-Way match exception', 'Billing · PM'],
+  ['Invoice sent', 'Customer · Sales'], ['Payment due 7d', 'Customer · Coll.'],
+  ['Payment overdue', 'Customer · Coll · Sales'], ['Approval pending', 'Approver'],
+  ['Cross-SO transfer', 'Source PM'],
+].map(([event, recipients]) => ({
+  event, recipients,
+  email: true,
+  sms: event.includes('Payment') || event.includes('Invoice'),
+  whatsapp: event.includes('Payment'),
+  inapp: true,
+}));
+
 function NotificationsPane() {
+  const { state, saveConfig } = useStore();
+  const toast = useToast();
+  const [events, setEvents] = React.useState(() => {
+    const e = state.config.notification_events;
+    return (Array.isArray(e) && e.length) ? e.map(x => ({ ...x })) : DEFAULT_NOTIF_EVENTS.map(x => ({ ...x }));
+  });
+  const [saving, setSaving] = React.useState(false);
+  const channels = [['email', 'Email'], ['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['inapp', 'In-app']];
+  const toggle = (i, ch) => setEvents(es => es.map((e, j) => j === i ? { ...e, [ch]: !e[ch] } : e));
+  const save = async () => {
+    setSaving(true);
+    const res = await saveConfig({ notification_events: events });
+    setSaving(false);
+    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Notification settings saved', res && res.ok === false ? '' : 'success');
+  };
   return (
     <div className="stack">
       <h3 className="card-title">Notification events</h3>
-      <div className="muted small">Per event · per channel · template editable</div>
+      <div className="muted small">Toggle channels per event. Saved to the DB.</div>
       <div className="card">
         <div className="card-body flush">
           <table className="t" style={{ fontSize: 12 }}>
             <thead><tr>
-              <th>Event</th><th>Recipients</th><th className="num">Email</th><th className="num">SMS</th><th className="num">WhatsApp</th><th className="num">In-app</th>
+              <th>Event</th><th>Recipients</th>{channels.map(([k, l]) => <th key={k} className="num">{l}</th>)}
             </tr></thead>
             <tbody>
-              {[
-                ['SO created', 'Sales · PM'],['SO approved', 'PM · Purchase'],['Vendor PO sent', 'Vendor · Purchase'],
-                ['Material received', 'PM · Billing'],['3-Way match exception', 'Billing · PM'],
-                ['Invoice sent', 'Customer · Sales'],['Payment due 7d', 'Customer · Coll.'],
-                ['Payment overdue', 'Customer · Coll · Sales'],['Approval pending', 'Approver'],
-                ['Cross-SO transfer', 'Source PM'],
-              ].map(([e, r], i) => (
+              {events.map((e, i) => (
                 <tr key={i}>
-                  <td><strong>{e}</strong></td>
-                  <td className="small muted">{r}</td>
-                  {[true, e.includes('Payment') || e.includes('Invoice'), e.includes('Payment'), true].map((on, j) => (
-                    <td key={j} className="num"><div style={{ display: 'flex', justifyContent: 'flex-end' }}><Toggle value={on} onChange={() => {}}/></div></td>
+                  <td><strong>{e.event}</strong></td>
+                  <td className="small muted">{e.recipients}</td>
+                  {channels.map(([ch]) => (
+                    <td key={ch} className="num"><div style={{ display: 'flex', justifyContent: 'flex-end' }}><Toggle value={!!e[ch]} onChange={() => toggle(i, ch)}/></div></td>
                   ))}
                 </tr>
               ))}
@@ -739,97 +872,220 @@ function NotificationsPane() {
           </table>
         </div>
       </div>
+      <div><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save notifications'}</button></div>
     </div>
   );
 }
 
+const DEFAULT_BILLING_PATTERNS = [
+  { t: 'Lumpsum', d: 'Single invoice on full delivery', on: true },
+  { t: 'Advance + Balance', d: 'Advance %, balance on delivery', on: true, hint: '30% advance default' },
+  { t: 'Milestone', d: 'Define milestones with %', on: true },
+  { t: 'Recurring (AMC)', d: 'Monthly/quarterly invoices', on: false },
+  { t: 'Per-unit', d: 'Bill per dispatched unit', on: true },
+];
+
 function BillingPatternsPane() {
+  const { state, saveConfig } = useStore();
+  const toast = useToast();
+  const [patterns, setPatterns] = React.useState(() => {
+    const p = state.config.billing_patterns;
+    return (Array.isArray(p) && p.length) ? p.map(x => ({ ...x })) : DEFAULT_BILLING_PATTERNS.map(x => ({ ...x }));
+  });
+  const [saving, setSaving] = React.useState(false);
+  const toggle = (i) => setPatterns(ps => ps.map((p, j) => j === i ? { ...p, on: !p.on } : p));
+  const save = async () => {
+    setSaving(true);
+    const res = await saveConfig({ billing_patterns: patterns });
+    setSaving(false);
+    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Billing patterns saved', res && res.ok === false ? '' : 'success');
+  };
   return (
     <div className="stack">
       <h3 className="card-title">Billing patterns</h3>
-      <div className="muted small">Pick the patterns enabled for new SOs</div>
+      <div className="muted small">Enable the patterns available for new SOs. Saved to the DB.</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-        {[
-          { t: 'Lumpsum', d: 'Single invoice on full delivery', on: true },
-          { t: 'Advance + Balance', d: 'Advance %, balance on delivery', on: true, hint: '30% advance default' },
-          { t: 'Milestone', d: 'Define milestones with %', on: true },
-          { t: 'Recurring (AMC)', d: 'Monthly/quarterly invoices', on: false },
-          { t: 'Per-unit', d: 'Bill per dispatched unit', on: true },
-        ].map((p, i) => (
+        {patterns.map((p, i) => (
           <div key={i} className="pool-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <strong>{p.t}</strong>
-              <Toggle value={p.on} onChange={() => {}}/>
+              <Toggle value={p.on} onChange={() => toggle(i)}/>
             </div>
             <div className="tiny muted">{p.d}</div>
             {p.hint && <div className="tiny mono" style={{ color: 'var(--accent)' }}>{p.hint}</div>}
           </div>
         ))}
       </div>
+      <div><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save patterns'}</button></div>
     </div>
   );
 }
 
+const DEFAULT_DOC_TEMPLATES = ['Quotation','SO Acknowledgement','Vendor Purchase Order','GRN','Delivery Challan','Proforma Invoice','Tax Invoice','Partial Invoice','Final Settlement Invoice','Credit Note','Debit Note (vendor)','Payment Receipt','e-Way Bill','AMC Contract']
+  .map(name => ({ name, body: '' }));
+
 function DocsPane() {
+  const { state, saveConfig } = useStore();
+  const toast = useToast();
+  const [docs, setDocs] = React.useState(() => {
+    const d = state.config.document_templates;
+    return (Array.isArray(d) && d.length) ? d.map(x => ({ ...x })) : DEFAULT_DOC_TEMPLATES.map(x => ({ ...x }));
+  });
+  const [sel, setSel] = React.useState(0);
+  const [saving, setSaving] = React.useState(false);
+  const update = (i, patch) => setDocs(ds => ds.map((d, j) => j === i ? { ...d, ...patch } : d));
+  const remove = (i) => { setDocs(ds => ds.filter((_, j) => j !== i)); setSel(0); };
+  const add = () => { setDocs(ds => [...ds, { name: 'New Template', body: '' }]); };
+  const save = async () => {
+    setSaving(true);
+    const res = await saveConfig({ document_templates: docs });
+    setSaving(false);
+    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Document templates saved', res && res.ok === false ? '' : 'success');
+  };
+  const cur = docs[sel];
   return (
     <div className="stack">
       <h3 className="card-title">Document templates</h3>
-      <div className="muted small">14 default templates · WYSIWYG editor · placeholders like {`{{customer_name}}`} · live preview</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-        {['Quotation','SO Acknowledgement','Vendor Purchase Order','GRN','Delivery Challan','Proforma Invoice','Tax Invoice','Partial Invoice','Final Settlement Invoice','Credit Note','Debit Note (vendor)','Payment Receipt','e-Way Bill','AMC Contract'].map(t => (
-          <div key={t} className="pool-item">
-            <div>
-              <strong className="small">{t}</strong>
-              <div className="tiny muted">Default · v1.0</div>
-            </div>
-            <button className="btn btn-sm">Edit</button>
+      <div className="muted small">Edit template bodies. Use placeholders like <span className="mono">{`{{customer_name}}`}</span>. Saved to the DB.</div>
+      <div className="split-2to1">
+        <div className="card">
+          <div className="card-header"><h3 className="card-title">{cur ? cur.name : 'No template'}</h3></div>
+          <div className="card-body">
+            {cur ? (
+              <>
+                <div className="field"><label className="field-label">Name</label><input className="input" value={cur.name} onChange={e => update(sel, { name: e.target.value })}/></div>
+                <div className="field mt-2"><label className="field-label">Body</label>
+                  <textarea className="textarea" rows="10" value={cur.body || ''} onChange={e => update(sel, { body: e.target.value })} placeholder="Template content with {{placeholders}}…"/>
+                </div>
+              </>
+            ) : <div className="empty">No template selected</div>}
           </div>
-        ))}
+        </div>
+        <div className="card">
+          <div className="card-header"><h3 className="card-title">Templates · {docs.length}</h3></div>
+          <div className="card-body flush">
+            {docs.map((d, i) => (
+              <div key={i} className="queue-item" style={{ background: i === sel ? 'var(--accent-bg)' : 'transparent', cursor: 'pointer' }} onClick={() => setSel(i)}>
+                <div className="grow"><div className="small">{d.name}</div><div className="tiny muted">{d.body ? 'Customised' : 'Default'}</div></div>
+                <button className="btn btn-ghost btn-sm" onClick={(e) => { e.stopPropagation(); remove(i); }}><Icon name="trash" size={11} color="var(--danger)"/></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" onClick={add}><Icon name="plus" size={11}/>Add template</button>
+        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save templates'}</button>
       </div>
     </div>
   );
 }
 
+const DEFAULT_CUSTOM_FIELDS = [
+  { master: 'Customer', field: 'Region', type: 'Dropdown', required: false },
+  { master: 'Customer', field: 'Sales channel', type: 'Dropdown', required: true },
+  { master: 'Vendor', field: 'Empanelment date', type: 'Date', required: false },
+  { master: 'Product', field: 'Warranty months', type: 'Number', required: true },
+];
+
 function CustomFieldsPane() {
+  const { state, saveConfig } = useStore();
+  const toast = useToast();
+  const [fields, setFields] = React.useState(() => {
+    const f = state.config.custom_fields;
+    return (Array.isArray(f) && f.length) ? f.map(x => ({ ...x })) : DEFAULT_CUSTOM_FIELDS.map(x => ({ ...x }));
+  });
+  const [saving, setSaving] = React.useState(false);
+  const update = (i, patch) => setFields(fs => fs.map((f, j) => j === i ? { ...f, ...patch } : f));
+  const remove = (i) => setFields(fs => fs.filter((_, j) => j !== i));
+  const add = () => setFields(fs => [...fs, { master: 'Customer', field: 'New field', type: 'Text', required: false }]);
+  const save = async () => {
+    setSaving(true);
+    const res = await saveConfig({ custom_fields: fields });
+    setSaving(false);
+    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Custom fields saved', res && res.ok === false ? '' : 'success');
+  };
   return (
     <div className="stack">
       <h3 className="card-title">Custom fields</h3>
-      <div className="muted small">Up to 20 custom fields per master · text · number · dropdown · date</div>
+      <div className="muted small">Define custom fields per master. Saved to the DB.</div>
       <div className="card">
         <div className="card-body flush">
           <table className="t">
             <thead><tr><th>Master</th><th>Field</th><th>Type</th><th>Required</th><th></th></tr></thead>
             <tbody>
-              <tr><td>Customer</td><td>Region</td><td>Dropdown</td><td>No</td><td></td></tr>
-              <tr><td>Customer</td><td>Sales channel</td><td>Dropdown</td><td>Yes</td><td></td></tr>
-              <tr><td>Vendor</td><td>Empanelment date</td><td>Date</td><td>No</td><td></td></tr>
-              <tr><td>Product</td><td>Warranty months</td><td>Number</td><td>Yes</td><td></td></tr>
+              {fields.map((f, i) => (
+                <tr key={i}>
+                  <td>
+                    <select className="select" value={f.master} onChange={e => update(i, { master: e.target.value })} style={{ height: 26 }}>
+                      <option>Customer</option><option>Vendor</option><option>Product</option><option>Sales Order</option>
+                    </select>
+                  </td>
+                  <td><input className="input" value={f.field} onChange={e => update(i, { field: e.target.value })} style={{ height: 26 }}/></td>
+                  <td>
+                    <select className="select" value={f.type} onChange={e => update(i, { type: e.target.value })} style={{ height: 26 }}>
+                      <option>Text</option><option>Number</option><option>Date</option><option>Dropdown</option>
+                    </select>
+                  </td>
+                  <td><Toggle value={!!f.required} onChange={() => update(i, { required: !f.required })}/></td>
+                  <td><button className="btn btn-ghost btn-sm" onClick={() => remove(i)}><Icon name="trash" size={11} color="var(--danger)"/></button></td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </div>
-      <button className="btn"><Icon name="plus" size={11}/>Add custom field</button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" onClick={add}><Icon name="plus" size={11}/>Add custom field</button>
+        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save fields'}</button>
+      </div>
     </div>
   );
 }
 
 function ReportsPane() {
+  const { state, getCustomer, getVendor, getProduct } = useStore();
+  const toast = useToast();
+  const cust = id => (getCustomer(id) || {}).name || id;
+  const vend = id => (getVendor(id) || {}).name || id;
+  const prod = id => (getProduct(id) || {}).name || id;
+  const taxable = a => Math.round((a || 0) / 1.18);
+
+  const builders = {
+    'Sales register (GSTR-1 ready)': () => state.sales_orders.filter(s => s.invoice_no).map(s => ({ invoice_no: s.invoice_no, date: s.invoice_date, customer: cust(s.customer_id), taxable: taxable(s.invoice_amount), gst: (s.invoice_amount || 0) - taxable(s.invoice_amount), total: s.invoice_amount })),
+    'Purchase register (GSTR-2B reco)': () => state.vendor_pos.map(p => ({ po_no: p.po_no, vendor: vend(p.vendor_id), date: p.date, amount: p.amount, status: p.status })),
+    'Stock ageing (Master Pool)': () => state.pool.map(p => ({ product: prod(p.product_id), qty: p.qty, source_so: p.source_so, received: p.received_date })),
+    'Vendor performance': () => state.vendors.map(v => ({ code: v.code, name: v.name, city: v.city, rating: v.rating, terms: v.terms })),
+    'Customer outstanding': () => state.sales_orders.filter(s => s.status === 'Payment Pending').map(s => ({ invoice_no: s.invoice_no, customer: cust(s.customer_id), amount: s.invoice_amount, days_overdue: s.days_overdue || 0 })),
+    'SO P&L per order': () => state.sales_orders.map(s => ({ so_no: s.so_no, customer: cust(s.customer_id), value: (s.lines || []).reduce((a, l) => a + l.bundle_qty * l.unit_price, 0), status: s.status })),
+    'LPP variance log': () => state.rfqs.flatMap(r => (r.quotes || []).map(q => ({ rfq: r.rfq_no, vendor: vend(q.vendor_id), total: q.total, lpp_variance: q.lpp_variance, responded: q.responded }))),
+    'Approval log': () => state.audit.filter(a => /approv/i.test(a.action || '')).map(a => ({ ts: a.ts, action: a.action, entity: a.entity, ref: a.entity_id })),
+    'Cross-SO transfer log': () => state.transfer_requests.map(t => ({ id: t.id, from_so: t.from_so, to_so: t.to_so, status: t.status, reason: t.reason })),
+    'Audit log': () => state.audit.map(a => ({ ts: a.ts, action: a.action, entity: a.entity, entity_id: a.entity_id, user: a.user_id })),
+    'GSTR-3B summary': () => state.sales_orders.filter(s => s.invoice_no).map(s => ({ invoice: s.invoice_no, taxable: taxable(s.invoice_amount), output_gst: (s.invoice_amount || 0) - taxable(s.invoice_amount) })),
+    'TDS register': () => state.vendor_invoices.map(vi => ({ invoice: vi.vendor_invoice_no, vendor: vend(vi.vendor_id), amount: vi.amount, tds: Math.round((vi.amount || 0) * 0.02) })),
+  };
+
+  const download = (name) => {
+    let rows = [];
+    try { rows = (builders[name] ? builders[name]() : []) || []; } catch (e) { rows = []; }
+    if (!rows.length) { toast('No data yet for "' + name + '"'); return; }
+    opcDownload(name.replace(/[^a-z0-9]+/gi, '_').toLowerCase() + '.csv', opcToCSV(rows), 'text/csv');
+    toast(name + ' exported (' + rows.length + ' rows)', 'success');
+  };
+
   return (
     <div className="stack">
       <h3 className="card-title">Reports & dashboards</h3>
-      <div className="muted small">Drag-drop widgets · custom report builder · schedule exports</div>
+      <div className="muted small">Export live data from the database as CSV.</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-        {[
-          'Sales register (GSTR-1 ready)','Purchase register (GSTR-2B reco)','Stock ageing (Master Pool)',
-          'Vendor performance','Customer outstanding','SO P&L per order',
-          'LPP variance log','Approval log','Cross-SO transfer log','Audit log','GSTR-3B summary','TDS register',
-        ].map(r => (
+        {Object.keys(builders).map(r => (
           <div key={r} className="pool-item">
             <div>
               <div className="small"><strong>{r}</strong></div>
-              <div className="tiny muted">Pre-built · Excel + PDF</div>
+              <div className="tiny muted">CSV · live data</div>
             </div>
-            <button className="btn btn-sm"><Icon name="download" size={11}/></button>
+            <button className="btn btn-sm" onClick={() => download(r)}><Icon name="download" size={11}/></button>
           </div>
         ))}
       </div>
