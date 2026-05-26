@@ -8,6 +8,7 @@ const SYNCED_TABLES = {
   payments: 'id', rfqs: 'id', transfer_requests: 'id', notifications: 'id', audit: 'id',
 };
 const LOADED_TABLES = [
+  'customers', 'vendors',
   'sales_orders', 'vendor_pos', 'grns', 'vendor_invoices', 'payments',
   'pool', 'rfqs', 'transfer_requests', 'notifications', 'audit',
 ];
@@ -105,6 +106,10 @@ const Store = React.createContext(null);
 
 function StoreProvider({ children }) {
   const [state, setState] = React.useState(loadInitialState);
+  // Always-current snapshot of state for callbacks that must read the latest
+  // value synchronously (setState updaters run later, so closures go stale).
+  const stateRef = React.useRef(state);
+  stateRef.current = state;
   const [route, setRoute] = React.useState(() => {
     const h = window.location.hash.slice(1);
     return h || 'dashboard';
@@ -255,22 +260,24 @@ function StoreProvider({ children }) {
   // into state.config (industry_template, teams, gates, permissions, so_form_fields, …);
   // `orgPatch` merges into state.org. The DB blob is rebuilt as { org, ...config }.
   const saveConfig = React.useCallback(async (configPatch = {}, orgPatch = null) => {
-    let snapshot = null;
-    setState(prev => {
-      const nextConfig = { ...prev.config, ...configPatch };
-      const nextOrg = orgPatch ? { ...prev.org, ...orgPatch } : prev.org;
-      snapshot = { org: nextOrg, ...nextConfig };
-      if (nextConfig.permissions) window.__opcPerms = nextConfig.permissions;
-      return { ...prev, config: nextConfig, org: nextOrg };
-    });
-    if (window.OPC_SB && snapshot) {
+    // Compute the snapshot synchronously from the latest state (NOT from inside
+    // the setState updater, which runs later — that left snapshot null and
+    // skipped the DB write, so config changes never persisted).
+    const cur = stateRef.current;
+    const nextConfig = { ...cur.config, ...configPatch };
+    const nextOrg = orgPatch ? { ...cur.org, ...orgPatch } : cur.org;
+    const snapshot = { org: nextOrg, ...nextConfig };
+    if (nextConfig.permissions) window.__opcPerms = nextConfig.permissions;
+    setState(prev => ({ ...prev, config: { ...prev.config, ...configPatch }, org: orgPatch ? { ...prev.org, ...orgPatch } : prev.org }));
+    if (window.OPC_SB) {
       try {
-        await window.OPC_SB.from('config')
+        const { error } = await window.OPC_SB.from('config')
           .update({ data: snapshot, updated_at: new Date().toISOString() })
           .eq('id', 'singleton');
+        if (error) { console.error('[OPC] saveConfig failed', error.message); return { ok: false, error: error.message }; }
       } catch (e) {
         console.error('[OPC] saveConfig failed (kept local change)', e);
-        return { ok: false, error: e };
+        return { ok: false, error: String(e.message || e) };
       }
     }
     return { ok: true };
@@ -349,6 +356,33 @@ function StoreProvider({ children }) {
     return { ok: true };
   }, [realUserId]);
 
+  // ===== Master data: add vendor / customer (any active member may add) =====
+  const addVendor = React.useCallback(async (v) => {
+    const id = 'v-' + Date.now().toString(36);
+    const row = { id, type: 'Goods', rating: 4.0, ...v };
+    if (window.OPC_SB) {
+      const { data, error } = await window.OPC_SB.from('vendors').insert(row).select('*').single();
+      if (error) return { ok: false, error: error.message };
+      setState(prev => ({ ...prev, vendors: [...prev.vendors, data] }));
+      return { ok: true, vendor: data };
+    }
+    setState(prev => ({ ...prev, vendors: [...prev.vendors, row] }));
+    return { ok: true, vendor: row };
+  }, []);
+
+  const addCustomer = React.useCallback(async (c) => {
+    const id = 'c-' + Date.now().toString(36);
+    const row = { id, tier: 'Silver', credit_limit: 0, ...c };
+    if (window.OPC_SB) {
+      const { data, error } = await window.OPC_SB.from('customers').insert(row).select('*').single();
+      if (error) return { ok: false, error: error.message };
+      setState(prev => ({ ...prev, customers: [...prev.customers, data] }));
+      return { ok: true, customer: data };
+    }
+    setState(prev => ({ ...prev, customers: [...prev.customers, row] }));
+    return { ok: true, customer: row };
+  }, []);
+
   const resetData = () => {
     localStorage.removeItem(STORAGE_KEY);
     window.location.reload();
@@ -357,6 +391,7 @@ function StoreProvider({ children }) {
   const ctx = {
     state, setState, mutate, resetData, saveConfig,
     login, logout, signupAdmin, createUser, setUserActive, removeUser,
+    addVendor, addCustomer,
     impersonate, stopImpersonating, realUserId, authReady,
     route, navigate,
     roleFilter, setRoleFilter,

@@ -2,6 +2,7 @@
 
 function CustomersList() {
   const { state, navigate } = useStore();
+  const [showNew, setShowNew] = React.useState(false);
   return (
     <div className="page">
       <div className="page-header">
@@ -11,9 +12,10 @@ function CustomersList() {
         </div>
         <div className="page-actions">
           <button className="btn"><Icon name="upload" size={13}/>Import (Excel / Tally)</button>
-          <button className="btn btn-primary"><Icon name="plus" size={13}/>New customer</button>
+          <button className="btn btn-primary" onClick={() => setShowNew(true)}><Icon name="plus" size={13}/>New customer</button>
         </div>
       </div>
+      {showNew && <NewCustomerModal onClose={() => setShowNew(false)}/>}
 
       <div className="card">
         <div className="filter-bar">
@@ -159,18 +161,20 @@ function CustomerLedger({ custId }) {
 
 function VendorsList() {
   const { state, navigate } = useStore();
+  const [showNew, setShowNew] = React.useState(false);
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1 className="page-title">Vendors</h1>
-          <div className="page-sub">{state.vendors.length} vendors · ratings auto-updated from on-time delivery & QC</div>
+          <div className="page-sub">{state.vendors.length} vendors · used by Purchase when floating RFQs / POs</div>
         </div>
         <div className="page-actions">
           <button className="btn"><Icon name="upload" size={13}/>Import</button>
-          <button className="btn btn-primary"><Icon name="plus" size={13}/>New vendor</button>
+          <button className="btn btn-primary" onClick={() => setShowNew(true)}><Icon name="plus" size={13}/>New vendor</button>
         </div>
       </div>
+      {showNew && <NewVendorModal onClose={() => setShowNew(false)}/>}
 
       <div className="card">
         <div className="filter-bar">
@@ -451,9 +455,111 @@ function AuditLog() {
   );
 }
 
+// ===== Add Vendor / Add Customer modals =====
+function NewVendorModal({ onClose }) {
+  const { addVendor } = useStore();
+  const toast = useToast();
+  const [f, setF] = React.useState({ name: '', code: '', gstin: '', city: '', contact: '', phone: '', terms: 'Net 30', type: 'Goods', rating: 4.0 });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const submit = async () => {
+    if (!f.name.trim()) { toast('Vendor name is required'); return; }
+    setBusy(true);
+    const res = await addVendor({ ...f, rating: Number(f.rating) || 4.0 });
+    setBusy(false);
+    if (!res.ok) { toast('Add failed: ' + (res.error || ''), ''); return; }
+    toast(`${f.name} added`, 'success');
+    onClose();
+  };
+  return (
+    <Modal title="New vendor" onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={busy || !f.name.trim()} onClick={submit}>{busy ? 'Adding…' : 'Add vendor'}</button>
+      </>
+    }>
+      <div className="field-row">
+        <div className="field"><label className="field-label">Vendor name *</label><input className="input" value={f.name} onChange={e => set('name', e.target.value)}/></div>
+        <div className="field"><label className="field-label">Code</label><input className="input mono" value={f.code} onChange={e => set('code', e.target.value)} placeholder="V0006"/></div>
+      </div>
+      <div className="field-row mt-2">
+        <div className="field"><label className="field-label">GSTIN</label><input className="input mono" value={f.gstin} onChange={e => set('gstin', e.target.value)}/></div>
+        <div className="field"><label className="field-label">City</label><input className="input" value={f.city} onChange={e => set('city', e.target.value)}/></div>
+      </div>
+      <div className="field-row mt-2">
+        <div className="field"><label className="field-label">Contact person</label><input className="input" value={f.contact} onChange={e => set('contact', e.target.value)}/></div>
+        <div className="field"><label className="field-label">Phone</label><input className="input mono" value={f.phone} onChange={e => set('phone', e.target.value)}/></div>
+      </div>
+      <div className="field-row-3 mt-2">
+        <div className="field"><label className="field-label">Payment terms</label>
+          <select className="select" value={f.terms} onChange={e => set('terms', e.target.value)}>
+            <option>Advance</option><option>Net 15</option><option>Net 30</option><option>Net 45</option><option>Net 60</option>
+          </select>
+        </div>
+        <div className="field"><label className="field-label">Type</label>
+          <select className="select" value={f.type} onChange={e => set('type', e.target.value)}><option>Goods</option><option>Services</option></select>
+        </div>
+        <div className="field"><label className="field-label">Rating</label><input type="number" step="0.1" min="0" max="5" className="input mono" value={f.rating} onChange={e => set('rating', e.target.value)}/></div>
+      </div>
+    </Modal>
+  );
+}
+
+function NewCustomerModal({ onClose }) {
+  const { addCustomer } = useStore();
+  const toast = useToast();
+  const [f, setF] = React.useState({ name: '', code: '', gstin: '', state: '', address: '', contact: '', phone: '', terms: 'Net 30', credit_limit: 0, tier: 'Silver' });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const submit = async () => {
+    if (!f.name.trim()) { toast('Customer name is required'); return; }
+    setBusy(true);
+    const res = await addCustomer({ ...f, credit_limit: Number(f.credit_limit) || 0 });
+    setBusy(false);
+    if (!res.ok) { toast('Add failed: ' + (res.error || ''), ''); return; }
+    toast(`${f.name} added`, 'success');
+    onClose();
+  };
+  return (
+    <Modal title="New customer" onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={busy || !f.name.trim()} onClick={submit}>{busy ? 'Adding…' : 'Add customer'}</button>
+      </>
+    }>
+      <div className="field-row">
+        <div className="field"><label className="field-label">Customer name *</label><input className="input" value={f.name} onChange={e => set('name', e.target.value)}/></div>
+        <div className="field"><label className="field-label">Code</label><input className="input mono" value={f.code} onChange={e => set('code', e.target.value)} placeholder="C0006"/></div>
+      </div>
+      <div className="field-row mt-2">
+        <div className="field"><label className="field-label">GSTIN</label><input className="input mono" value={f.gstin} onChange={e => set('gstin', e.target.value)}/></div>
+        <div className="field"><label className="field-label">State</label><input className="input" value={f.state} onChange={e => set('state', e.target.value)}/></div>
+      </div>
+      <div className="field mt-2"><label className="field-label">Address</label><textarea className="textarea" rows="2" value={f.address} onChange={e => set('address', e.target.value)}/></div>
+      <div className="field-row mt-2">
+        <div className="field"><label className="field-label">Contact person</label><input className="input" value={f.contact} onChange={e => set('contact', e.target.value)}/></div>
+        <div className="field"><label className="field-label">Phone</label><input className="input mono" value={f.phone} onChange={e => set('phone', e.target.value)}/></div>
+      </div>
+      <div className="field-row-3 mt-2">
+        <div className="field"><label className="field-label">Payment terms</label>
+          <select className="select" value={f.terms} onChange={e => set('terms', e.target.value)}>
+            <option>Advance</option><option>Net 15</option><option>Net 30</option><option>Net 45</option><option>Net 60</option>
+          </select>
+        </div>
+        <div className="field"><label className="field-label">Credit limit (₹)</label><input type="number" className="input mono" value={f.credit_limit} onChange={e => set('credit_limit', e.target.value)}/></div>
+        <div className="field"><label className="field-label">Tier</label>
+          <select className="select" value={f.tier} onChange={e => set('tier', e.target.value)}><option>Silver</option><option>Gold</option><option>Platinum</option></select>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 window.CustomersList = CustomersList;
 window.CustomerLedger = CustomerLedger;
 window.VendorsList = VendorsList;
 window.ProductsList = ProductsList;
 window.ApprovalInbox = ApprovalInbox;
 window.AuditLog = AuditLog;
+window.NewVendorModal = NewVendorModal;
+window.NewCustomerModal = NewCustomerModal;
