@@ -89,8 +89,19 @@ function LoginScreen() {
 
               <div className="tiny muted mt-2" style={{ textAlign: 'center' }}>
                 {isSignup
-                  ? 'This is the first admin. Other users are created from Customisation → Users.'
+                  ? 'Creates your organisation’s first admin. Other users are added later from Customisation → Users.'
                   : 'New users are created by your Org Admin.'}
+              </div>
+              <div className="tiny mt-2" style={{ textAlign: 'center', borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                {isSignup ? (
+                  <>Already have an organisation?{' '}
+                    <a style={{ cursor: 'pointer', color: 'var(--accent)', fontWeight: 600 }}
+                       onClick={() => { setMode('login'); setError(''); }}>Sign in</a></>
+                ) : (
+                  <>New organisation?{' '}
+                    <a style={{ cursor: 'pointer', color: 'var(--accent)', fontWeight: 600 }}
+                       onClick={() => { setMode('signup'); setError(''); }}>Create admin account</a></>
+                )}
               </div>
             </>
           )}
