@@ -14,3 +14,7 @@ backend/.env
 
 # Throwaway diagnostic SQL (underscore-prefixed)
 supabase/_*.sql
+
+# Full cluster dump — large (~99MB) AND contains role password hashes. Never commit.
+full_cluster.sql
+*.dump
