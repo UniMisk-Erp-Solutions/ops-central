@@ -600,7 +600,7 @@ function SalesOrderDetail({ soId }) {
   // Next-action engine — what THIS role can do at THIS status
   const NEXT_ACTION = {
     'Pending Approval': { roles: ['Project Manager','Managing Director','Org Admin'], label: 'Approve SO', icon: 'check', next: 'Approved', kind: 'success', notify: { role: 'Purchase', text: `${so.so_no} approved · float RFQ to vendors` }, detail: 'Verify customer, line items and pricing. On approval the order moves to Purchase for RFQ.' },
-    'Approved': { roles: ['Purchase','Org Admin'], label: 'Start Procurement (Float RFQ)', icon: 'cart', next: 'Procurement Started', notify: { role: 'Purchase', text: `${so.so_no} procurement in progress` }, detail: 'Float RFQ to vendors. Components present in Master Pool are auto-allocated first.' },
+    'Approved': { roles: ['Purchase','Org Admin'], label: 'Start Procurement', icon: 'cart', next: 'Procurement Started', notify: { role: 'Purchase', text: `${so.so_no} procurement in progress` }, detail: 'Open the Procurement tab to raise Vendor PO(s) for the vendors selected during the inquiry — no RFQ needed. (Non-sourced orders can still float an RFQ.)' },
     'Procurement Started': { roles: ['Purchase','Stores','Org Admin'], label: 'Mark Material Received', icon: 'package', next: 'Material Received', notify: { role: 'Project Manager', text: `${so.so_no} material received · authorize dispatch` }, detail: 'Once all vendor POs arrive and GRN is posted, mark material received.' },
     'Material Received': { roles: ['Project Manager','Org Admin'], label: 'Authorize Dispatch', icon: 'truck', next: 'Ready to Dispatch', notify: { role: 'Billing', text: `${so.so_no} ready · raise tax invoice + e-Way Bill` }, detail: 'Confirm items match SO, authorize logistics, hand over to Billing.' },
     'Ready to Dispatch': { roles: ['Billing','Org Admin'], label: 'Raise Tax Invoice + EWB', icon: 'receipt', next: 'Invoiced', notify: { role: 'Collections', text: `${so.so_no} invoiced · awaiting payment` }, detail: 'Generate Tax Invoice with IRN, link e-Way Bill, dispatch material.', generatesInvoice: true },
@@ -961,7 +961,8 @@ function SalesOrderDetail({ soId }) {
 }
 
 function ProcurementTab({ so }) {
-  const { state, navigate, currentUser, getUser } = useStore();
+  const { state, navigate, currentUser, getUser, getProduct, getVendor, mutate } = useStore();
+  const toast = useToast();
   const [showRFQ, setShowRFQ] = React.useState(false);
   const [showPO, setShowPO] = React.useState(false);
   const role = getUser(currentUser)?.role;
@@ -969,12 +970,37 @@ function ProcurementTab({ so }) {
   const linkedPOs = state.vendor_pos.filter(p => p.so_id === so.id);
   const linkedRFQs = state.rfqs.filter(r => r.so_id === so.id);
 
+  // New flow: vendor already chosen during the inquiry → no RFQ; generate the
+  // Vendor PO(s) directly from the selected vendors at the sourced prices.
+  const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
+  const groups = sourcing && window.vendorPOGroups ? window.vendorPOGroups(state, so, sourcing, getProduct) : [];
+  const canGenerate = canProcure && sourcing && linkedPOs.length === 0 && ['Approved', 'Procurement Started'].includes(so.status);
+  const doGenerate = () => window.generateVendorPOsFromSourcing(so, sourcing, { state, mutate, toast, navigate, getProduct });
+
   return (
     <div className="stack">
+      {canGenerate && groups.length > 0 && (
+        <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
+          <div className="card-body">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+              <div>
+                <strong className="small">Vendors already selected during inquiry <span className="mono">{sourcing.src_no}</span></strong>
+                <div className="tiny muted">No RFQ needed — generate the Vendor PO(s) below at the sourced prices, then receive material as usual.</div>
+              </div>
+              <button className="btn btn-primary" onClick={doGenerate}><Icon name="cart" size={13}/>Generate {groups.length} Vendor PO(s)</button>
+            </div>
+            <table className="t mt-2"><thead><tr><th>Vendor</th><th className="num">Items</th><th className="num">PO amount</th></tr></thead>
+              <tbody>{groups.map(g => { const v = getVendor(g.vendor_id); return (
+                <tr key={g.vendor_id}><td>{v ? v.name : g.vendor_id}</td><td className="num">{g.items.length}</td><td className="num mono">{inr(g.amount)}</td></tr>
+              ); })}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {canProcure && (
         <div className="card"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div className="grow"><strong className="small">Procure for this SO</strong><div className="tiny muted">Float an RFQ to chosen vendors, or raise a Vendor PO directly.</div></div>
-          <button className="btn" onClick={() => setShowRFQ(true)}><Icon name="grid" size={13}/>Float RFQ</button>
+          <div className="grow"><strong className="small">Procure for this SO</strong><div className="tiny muted">{sourcing ? 'Vendor chosen during the inquiry — raise the Vendor PO (RFQ not required).' : 'Float an RFQ to chosen vendors, or raise a Vendor PO directly.'}</div></div>
+          {!sourcing && <button className="btn" onClick={() => setShowRFQ(true)}><Icon name="grid" size={13}/>Float RFQ</button>}
           <button className="btn btn-primary" onClick={() => setShowPO(true)}><Icon name="cart" size={13}/>Create Vendor PO</button>
         </div></div>
       )}

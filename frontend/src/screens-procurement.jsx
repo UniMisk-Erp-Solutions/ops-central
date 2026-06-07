@@ -168,21 +168,66 @@ function RFQCard({ rfq }) {
   );
 }
 
-// ===== Vendor PO List =====
+// ===== Vendor PO List ===== (payables side — kept separate from client billing)
 function VendorPOList() {
-  const { state, navigate, getVendor, getSO, currentUser, getUser } = useStore();
+  const { state, navigate, getVendor, getSO, getCustomer, currentUser, getUser } = useStore();
   const [showPO, setShowPO] = React.useState(false);
+  const [search, setSearch] = React.useState('');
+  const [vendorF, setVendorF] = React.useState('');
+  const [statusF, setStatusF] = React.useState('');
+  const [groupBySO, setGroupBySO] = React.useState(true);
   const role = getUser(currentUser)?.role;
   const canCreate = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+
+  const poStatusBadge = (st) => st === 'Material Received' ? <span className="badge success dot">Received</span>
+    : st === 'In Transit' ? <span className="badge accent dot">In transit</span>
+    : st === 'Pending MD Approval' ? <span className="badge warning dot">MD approval</span>
+    : <span className="badge dot">{st}</span>;
+
+  const rows = state.vendor_pos.filter(po => {
+    if (vendorF && po.vendor_id !== vendorF) return false;
+    if (statusF && po.status !== statusF) return false;
+    if (search) {
+      const v = getVendor(po.vendor_id); const so = getSO(po.so_id); const cust = so && getCustomer(so.customer_id);
+      const blob = `${po.po_no} ${v?.name || ''} ${so?.so_no || ''} ${cust?.name || ''}`.toLowerCase();
+      if (!blob.includes(search.toLowerCase())) return false;
+    }
+    return true;
+  });
+  const statuses = [...new Set(state.vendor_pos.map(p => p.status))];
+
+  const Row = (po) => {
+    const v = getVendor(po.vendor_id);
+    const so = getSO(po.so_id);
+    const cust = so ? getCustomer(so.customer_id) : null;
+    const ebilled = po.ebill && po.ebill.generated;
+    return (
+      <tr key={po.id} onClick={() => navigate(`vendor-pos/${po.id}`)} style={{ cursor: 'pointer' }}>
+        <td><a className="mono">{po.po_no}</a>{po.source === 'sourcing' && <div className="tiny muted">from inquiry</div>}</td>
+        <td>{v ? v.name : '—'}<div className="tiny muted mono">{v?.gstin}</div></td>
+        {!groupBySO && <td className="mono small">{so?.so_no}<div className="tiny muted">{cust?.name}</div></td>}
+        <td className="mono small">{fmtDate(po.date)}</td>
+        <td className="num">{inr(po.amount)}</td>
+        <td>{poStatusBadge(po.status)}</td>
+        <td>{ebilled ? <span className="badge success dot" title={po.ebill.no}>e-Bill</span> : <span className="badge dot">—</span>}</td>
+        <td><Icon name="chevronRight" size={12}/></td>
+      </tr>
+    );
+  };
+
+  // Group by SO (project) so each project's selected vendors read clearly.
+  const groups = {};
+  rows.forEach(po => { (groups[po.so_id || '—'] = groups[po.so_id || '—'] || []).push(po); });
+
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1 className="page-title">Vendor Purchase Orders</h1>
-          <div className="page-sub">{state.vendor_pos.length} POs · FY {state.org.fiscal_year}</div>
+          <div className="page-sub">Money we pay vendors (payables) · {state.vendor_pos.length} POs · FY {state.org.fiscal_year} · client invoices live separately under Invoices</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="download" size={13}/>Export</button>
+          <button className={`btn ${groupBySO ? 'btn-primary' : ''}`} onClick={() => setGroupBySO(g => !g)}><Icon name="layers" size={13}/>{groupBySO ? 'Grouped by project' : 'Flat list'}</button>
           {canCreate && <button className="btn btn-primary" onClick={() => setShowPO(true)}><Icon name="plus" size={13}/>Create Vendor PO</button>}
         </div>
       </div>
@@ -190,57 +235,77 @@ function VendorPOList() {
 
       <div className="card">
         <div className="filter-bar">
-          <input className="input search" placeholder="Search PO no, vendor…" style={{ flex: '0 0 220px' }}/>
-          <select className="select" style={{ width: 130 }}><option>All vendors</option></select>
-          <select className="select" style={{ width: 130 }}><option>All statuses</option></select>
+          <input className="input search" placeholder="Search PO no, vendor, SO, customer…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: '0 0 240px' }}/>
+          <select className="select" style={{ width: 150 }} value={vendorF} onChange={e => setVendorF(e.target.value)}>
+            <option value="">All vendors</option>
+            {state.vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </select>
+          <select className="select" style={{ width: 150 }} value={statusF} onChange={e => setStatusF(e.target.value)}>
+            <option value="">All statuses</option>
+            {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
           <div className="grow"/>
-          <span className="muted small">{state.vendor_pos.length} shown</span>
+          <span className="muted small">{rows.length} shown</span>
         </div>
-        <div className="table-wrap">
-          <table className="t">
-            <thead><tr>
-              <th>PO No</th><th>Vendor</th><th>For SO</th><th>Date</th><th>Expected</th>
-              <th className="num">Amount</th><th>Status</th><th></th>
-            </tr></thead>
-            <tbody>
-              {state.vendor_pos.map(po => {
-                const v = getVendor(po.vendor_id);
-                const so = getSO(po.so_id);
-                return (
-                  <tr key={po.id} onClick={() => navigate(`vendor-pos/${po.id}`)} style={{ cursor: 'pointer' }}>
-                    <td><a className="mono">{po.po_no}</a></td>
-                    <td>{v.name}<div className="tiny muted mono">{v.gstin}</div></td>
-                    <td className="mono small">{so?.so_no}</td>
-                    <td className="mono small">{fmtDate(po.date)}</td>
-                    <td className="mono small">{fmtDate(po.expected)}</td>
-                    <td className="num">{inr(po.amount)}</td>
-                    <td>
-                      {po.status === 'Material Received' ? <span className="badge success dot">Received</span> :
-                       po.status === 'In Transit' ? <span className="badge accent dot">In transit</span> :
-                       <span className="badge dot">{po.status}</span>}
-                    </td>
-                    <td><Icon name="chevronRight" size={12}/></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+
+        {state.vendor_pos.length === 0 ? (
+          <div className="card-body"><div className="empty"><div className="empty-title">No Vendor POs yet</div>Approve a sourced Sales Order, then generate POs for the selected vendors — they appear here, grouped by project.</div></div>
+        ) : groupBySO ? (
+          Object.entries(groups).map(([soId, pos]) => {
+            const so = getSO(soId); const cust = so ? getCustomer(so.customer_id) : null;
+            const total = pos.reduce((s, p) => s + (p.amount || 0), 0);
+            return (
+              <div key={soId} style={{ borderTop: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', background: 'var(--bg-subtle, var(--surface))' }}>
+                  <div className="small"><strong className="mono" onClick={() => so && navigate(`sales-orders/${soId}`)} style={{ cursor: so ? 'pointer' : 'default' }}>{so ? so.so_no : 'Unlinked'}</strong>{cust && <span className="muted"> · {cust.name}</span>} <span className="muted">· {pos.length} vendor PO(s)</span></div>
+                  <div className="small mono">{inr(total)}</div>
+                </div>
+                <div className="table-wrap"><table className="t"><thead><tr>
+                  <th>PO No</th><th>Vendor</th><th>Date</th><th className="num">Amount</th><th>Status</th><th>e-Bill</th><th></th>
+                </tr></thead><tbody>{pos.map(Row)}</tbody></table></div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="table-wrap"><table className="t"><thead><tr>
+            <th>PO No</th><th>Vendor</th><th>For SO · Customer</th><th>Date</th><th className="num">Amount</th><th>Status</th><th>e-Bill</th><th></th>
+          </tr></thead><tbody>{rows.map(Row)}</tbody></table></div>
+        )}
       </div>
     </div>
   );
 }
 
 function VendorPODetail({ poId }) {
-  const { state, navigate, getVendor, getSO, getProduct } = useStore();
+  const { state, navigate, mutate, getVendor, getSO, getCustomer, getProduct } = useStore();
+  const toast = useToast();
   const po = state.vendor_pos.find(p => p.id === poId);
   if (!po) return <div className="page"><div className="empty">PO not found</div></div>;
   const v = getVendor(po.vendor_id);
   const so = getSO(po.so_id);
+  const cust = so ? getCustomer(so.customer_id) : null;
 
   const subtotal = po.items.reduce((s,i) => s + i.qty * i.rate, 0);
   const gst = subtotal * 0.18;
   const grand = subtotal + gst;
+  const ebilled = po.ebill && po.ebill.generated;
+
+  // Sibling POs for the same project (SO) — the vendors selected for this order.
+  const siblings = state.vendor_pos.filter(p => p.so_id === po.so_id);
+  // Vendor invoice booked against this PO (payables / 3-way side).
+  const vInv = (state.vendor_invoices || []).find(x => x.po_id === po.id);
+
+  const genEbill = () => {
+    const seq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
+    const ebill = {
+      no: `VPO-EB/FY26/${seq}`,
+      irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(),
+      date: TODAY, amount: grand, generated: true,
+    };
+    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, ebill } : p) }),
+      { action: 'ebill', entity: 'VendorPO', entity_id: po.id });
+    toast('Vendor PO e-Bill generated & stored on this PO', 'success');
+  };
 
   return (
     <div className="page">
@@ -251,15 +316,36 @@ function VendorPODetail({ poId }) {
           </div>
           <h1 className="page-title">
             <span className="mono">{po.po_no}</span>
-            <span className="badge ml-2" style={{ marginLeft: 8 }}>{po.status}</span>
+            <span className="badge dot ml-2" style={{ marginLeft: 8 }}>{po.status}</span>
+            {po.source === 'sourcing' && <span className="badge accent" style={{ marginLeft: 6 }}>from inquiry</span>}
           </h1>
-          <div className="page-sub">{v.name} · For SO <span className="mono">{so?.so_no}</span></div>
+          <div className="page-sub">Payable to <strong>{v.name}</strong> · For project <span className="mono">{so?.so_no}</span>{cust ? ` · ${cust.name}` : ''}</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="print" size={13}/>Print</button>
+          {ebilled
+            ? <button className="btn" onClick={() => window.print()}><Icon name="print" size={13}/>Print e-Bill</button>
+            : <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>}
           <button className="btn"><Icon name="mail" size={13}/>Resend to vendor</button>
           <button className="btn btn-primary" onClick={() => navigate('grn')}><Icon name="package" size={13}/>Create GRN</button>
         </div>
+      </div>
+
+      {/* Client vs vendor billing — kept explicitly separate */}
+      <div className="mb-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}><div className="card-body">
+          <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Vendor side · we pay (payable)</div>
+          <div className="mono" style={{ fontSize: 17, fontWeight: 700, marginTop: 2 }}>{inr(grand)}</div>
+          <div className="tiny muted">{ebilled ? <>e-Bill <span className="mono">{po.ebill.no}</span> · {fmtDate(po.ebill.date)}</> : 'PO e-Bill not generated yet'} · {vInv ? `vendor invoice ${vInv.vendor_invoice_no} (3-way)` : 'no vendor invoice yet'}</div>
+        </div></div>
+        <div className="card"><div className="card-body">
+          <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Client side · customer pays (receivable)</div>
+          <div className="mono" style={{ fontSize: 17, fontWeight: 700, marginTop: 2 }}>{so && so.invoice_amount ? inr(so.invoice_amount) : '—'}</div>
+          <div className="tiny muted">
+            {so && so.invoice_no
+              ? <>Tax invoice <span className="mono">{so.invoice_no}</span> · <a style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate(`invoices/${so.id}`)}>view</a></>
+              : 'Customer not invoiced yet — billed on the SO, separate from this PO'}
+          </div>
+        </div></div>
       </div>
 
       <div className="detail-grid">
@@ -327,6 +413,45 @@ function VendorPODetail({ poId }) {
                 <dt>LR / Tracking</dt><dd className="mono">TCI-MUM-99821</dd>
                 <dt>Ship to</dt><dd className="small">Brightline Godown · Powai · Mumbai 400076</dd>
               </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header"><h3 className="card-title">PO e-Bill</h3></div>
+            <div className="card-body">
+              {ebilled ? (
+                <div className="dl">
+                  <dt>e-Bill no.</dt><dd className="mono">{po.ebill.no}</dd>
+                  <dt>IRN</dt><dd className="mono small">{po.ebill.irn}</dd>
+                  <dt>Generated</dt><dd className="mono">{fmtDate(po.ebill.date)}</dd>
+                  <dt>Amount</dt><dd className="mono">{inr(po.ebill.amount || grand)}</dd>
+                </div>
+              ) : (
+                <div className="small muted">No e-Bill yet. Generate it to issue an official PO document, stored on this Vendor PO. <div className="mt-2"><button className="btn btn-sm btn-primary" onClick={genEbill}><Icon name="receipt" size={12}/>Generate PO e-Bill</button></div></div>
+              )}
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header"><h3 className="card-title">Project vendor history</h3></div>
+            <div className="card-body flush">
+              <div className="small muted" style={{ padding: '6px 14px' }}>All vendors selected for <span className="mono">{so?.so_no}</span></div>
+              <table className="t">
+                <thead><tr><th>PO</th><th>Vendor</th><th className="num">Amount</th><th>Status</th></tr></thead>
+                <tbody>
+                  {siblings.map(s => {
+                    const sv = getVendor(s.vendor_id);
+                    return (
+                      <tr key={s.id} className={s.id === po.id ? 'selected' : ''} onClick={() => navigate(`vendor-pos/${s.id}`)} style={{ cursor: 'pointer' }}>
+                        <td><a className="mono">{s.po_no}</a></td>
+                        <td className="small">{sv?.name}</td>
+                        <td className="num">{inr(s.amount)}</td>
+                        <td>{s.ebill && s.ebill.generated ? <span className="badge success dot">e-Bill</span> : <span className="badge dot">{s.status}</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -746,6 +871,78 @@ function ThreeWayMatchDetail({ viId }) {
   );
 }
 
+// ===== Sourcing → Vendor PO bridge =====
+// In the new flow the vendor is already chosen during the inquiry, so there is
+// NO RFQ: once the SO is approved, Purchase generates the Vendor PO(s) straight
+// from the inquiry's selected vendors at the sourced prices.
+
+function soSourcing(state, soId) {
+  return (state.sourcings || []).find(s => s.converted_so_id === soId) || null;
+}
+
+// True required component qty for an SO (bundle_qty × component qty), per product.
+function soReqComponents(so) {
+  const m = {};
+  (so.lines || []).forEach(l => (l.components || []).forEach(c => {
+    m[c.product_id] = (m[c.product_id] || 0) + (c.qty || 0) * (l.bundle_qty || 1);
+  }));
+  return m;
+}
+
+// Group an SO's required components by the vendor chosen during sourcing, each at
+// the sourced unit price. Components without a saved pick fall back to the
+// cheapest vendor / baseline so nothing is left unsourced.
+function vendorPOGroups(state, so, sourcing, getProduct) {
+  const req = soReqComponents(so);
+  const picks = (sourcing && sourcing.picks) || {};
+  const prices = (sourcing && sourcing.prices) || {};
+  const groups = {};
+  Object.entries(req).forEach(([pid, qty]) => {
+    const p = getProduct(pid);
+    let vid = picks[pid];
+    if (!vid && p && window.vendorSuggestions) { const sug = window.vendorSuggestions(p, state.vendors); if (sug[0]) vid = sug[0].vendor.id; }
+    if (!vid) return;
+    let rate = prices[pid] && prices[pid][vid];
+    if (rate === undefined || rate === null) rate = window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : (p ? p.buy : 0);
+    (groups[vid] = groups[vid] || []).push({ product_id: pid, qty, rate });
+  });
+  return Object.entries(groups).map(([vendor_id, items]) => ({
+    vendor_id, items, amount: items.reduce((s, i) => s + i.qty * i.rate, 0),
+  }));
+}
+
+// Create one Vendor PO per selected vendor and move the SO into procurement.
+function generateVendorPOsFromSourcing(so, sourcing, ctx) {
+  const { state, mutate, toast, navigate, getProduct } = ctx;
+  const groups = vendorPOGroups(state, so, sourcing, getProduct);
+  if (groups.length === 0) { toast('No vendor selections found to generate POs'); return; }
+  const base = 40 + state.vendor_pos.length;
+  const expected = (() => { const d = new Date(TODAY); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
+  const pos = groups.map((g, i) => ({
+    id: 'po-' + Date.now() + '-' + i,
+    po_no: `VPO/FY26/${String(base + i).padStart(4, '0')}`,
+    so_id: so.id, vendor_id: g.vendor_id, date: TODAY, expected,
+    status: g.amount > 500000 ? 'Pending MD Approval' : 'Issued',
+    amount: g.amount, items: g.items, ebill: {}, source: 'sourcing',
+  }));
+  const anyMD = pos.some(p => p.status === 'Pending MD Approval');
+  mutate(s => ({
+    ...s,
+    vendor_pos: [...pos, ...s.vendor_pos],
+    sales_orders: s.sales_orders.map(x => x.id === so.id && x.status === 'Approved' ? { ...x, status: 'Procurement Started' } : x),
+    notifications: [
+      { id: 'n-genpo-' + Date.now(), kind: 'po', text: `${pos.length} Vendor PO(s) raised for ${so.so_no} from selected vendors${anyMD ? ' · some need MD approval' : ''}`, date: TODAY, read: false, role: anyMD ? 'Managing Director' : 'Stores' },
+      ...s.notifications,
+    ],
+  }), { action: 'generate-po', entity: 'SalesOrder', entity_id: so.id });
+  toast(`${pos.length} Vendor PO(s) created from inquiry`, 'success');
+  navigate('vendor-pos');
+}
+
+window.soSourcing = soSourcing;
+window.vendorPOGroups = vendorPOGroups;
+window.generateVendorPOsFromSourcing = generateVendorPOsFromSourcing;
+
 // ===== Shared: aggregate an SO's required components =====
 function procComponentList(so) {
   const m = {};
@@ -860,10 +1057,30 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
   const [items, setItems] = React.useState([]);
   const [expected, setExpected] = React.useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); });
 
+  // Default to the vendor chosen during the inquiry (most-picked), if any.
   React.useEffect(() => {
-    if (soObj) setItems(procComponentList(soObj).map(c => { const p = getProduct(c.product_id); return { product_id: c.product_id, qty: c.qty, rate: p ? p.buy : 0 }; }));
-    else setItems([]);
+    if (vendorId || !soObj) return;
+    const sourcing = window.soSourcing ? window.soSourcing(state, so) : null;
+    if (sourcing && sourcing.picks) {
+      const counts = {}; Object.values(sourcing.picks).forEach(vid => { counts[vid] = (counts[vid] || 0) + 1; });
+      const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+      if (top) setVendor(top[0]);
+    }
   }, [so]);
+
+  // Load items with sourced prices for the chosen vendor (falls back to baseline).
+  React.useEffect(() => {
+    if (!soObj) { setItems([]); return; }
+    const sourcing = window.soSourcing ? window.soSourcing(state, so) : null;
+    const prices = (sourcing && sourcing.prices) || {};
+    setItems(procComponentList(soObj).map(c => {
+      const p = getProduct(c.product_id);
+      let rate = p ? p.buy : 0;
+      if (vendor && prices[c.product_id] && prices[c.product_id][vendor] != null) rate = prices[c.product_id][vendor];
+      else if (vendor && window.vendorUnitPrice && p) rate = window.vendorUnitPrice(vendor, p);
+      return { product_id: c.product_id, qty: c.qty, rate };
+    }));
+  }, [so, vendor]);
 
   const setItem = (i, patch) => setItems(its => its.map((x, j) => j === i ? { ...x, ...patch } : x));
   const amount = items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0);
@@ -873,7 +1090,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
     const real = items.filter(i => i.qty > 0);
     if (!so || !vendor || real.length === 0) { toast('Pick SO, vendor and at least one item'); return; }
     const poNo = `VPO/FY26/${String(40 + state.vendor_pos.length).padStart(4, '0')}`;
-    const po = { id: 'po-' + Date.now(), po_no: poNo, so_id: so, vendor_id: vendor, date: TODAY, expected, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: real };
+    const po = { id: 'po-' + Date.now(), po_no: poNo, so_id: so, vendor_id: vendor, date: TODAY, expected, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: real, ebill: {}, source: 'manual' };
     mutate(s => ({
       ...s,
       vendor_pos: [po, ...s.vendor_pos],
