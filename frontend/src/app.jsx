@@ -66,6 +66,9 @@ function App() {
   else if (route === 'sales-orders') Content = <SalesOrdersList/>;
   else if (route === 'sales-orders/new') Content = <SalesOrderNew/>;
   else if (parts[0] === 'sales-orders' && parts[1]) Content = <SalesOrderDetail soId={parts[1]}/>;
+  else if (route === 'sourcing') Content = <SourcingList/>;
+  else if (route === 'sourcing/new') Content = <SourcingNew/>;
+  else if (parts[0] === 'sourcing' && parts[1]) Content = <SourcingDetail srcId={parts[1]}/>;
   else if (route === 'customers') Content = <CustomersList/>;
   else if (parts[0] === 'customers' && parts[1] && parts[2] === 'ledger') Content = <CustomerLedger custId={parts[1]}/>;
   else if (route === 'vendors') Content = <VendorsList/>;

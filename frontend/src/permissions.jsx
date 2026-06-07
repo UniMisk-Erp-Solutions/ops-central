@@ -3,27 +3,28 @@
 
 const PERMISSIONS = {
   'Org Admin': {
-    nav: ['dashboard','inbox','sales-orders','customers','godown','pool','transfers','rfq','vendor-pos','grn','three-way','vendors','invoices','collections','products','settings','audit','onboarding'],
+    nav: ['dashboard','inbox','sourcing','sales-orders','customers','godown','pool','transfers','rfq','vendor-pos','grn','three-way','vendors','invoices','collections','products','settings','audit','onboarding'],
     primary: { route: 'dashboard', label: 'Dashboard' },
     can: { all: true },
   },
   'Sales': {
-    nav: ['dashboard','inbox','sales-orders','customers','products'],
-    primary: { route: 'sales-orders/new', label: 'New Sales Order', icon: 'plus' },
+    nav: ['dashboard','inbox','sourcing','sales-orders','customers','products'],
+    primary: { route: 'sourcing', label: 'Sourcing / Inquiries', icon: 'bookmark' },
     can: {
       createSO: true,
+      createSourcing: true,
       editOwnDraft: true,
       viewProducts: true,
       viewCustomers: true,
     },
   },
   'Pre-sales': {
-    nav: ['dashboard','inbox','sales-orders','customers','products'],
-    primary: { route: 'sales-orders', label: 'Quotations' },
-    can: { viewProducts: true, viewCustomers: true },
+    nav: ['dashboard','inbox','sourcing','sales-orders','customers','products'],
+    primary: { route: 'sourcing', label: 'Sourcing / Inquiries' },
+    can: { createSourcing: true, viewProducts: true, viewCustomers: true },
   },
   'Project Manager': {
-    nav: ['dashboard','inbox','sales-orders','customers','godown','pool','transfers','rfq','vendor-pos','grn','invoices'],
+    nav: ['dashboard','inbox','sourcing','sales-orders','customers','godown','pool','transfers','rfq','vendor-pos','grn','invoices'],
     primary: { route: 'inbox', label: 'My Approvals', icon: 'bell' },
     can: {
       approveSO: true, editSO: true, viewCost: true,
@@ -32,10 +33,10 @@ const PERMISSIONS = {
     },
   },
   'Purchase': {
-    nav: ['dashboard','inbox','sales-orders','rfq','vendor-pos','grn','vendors','pool','products'],
-    primary: { route: 'rfq', label: 'RFQs', icon: 'grid' },
+    nav: ['dashboard','inbox','sourcing','sales-orders','rfq','vendor-pos','grn','vendors','pool','products'],
+    primary: { route: 'sourcing', label: 'Sourcing', icon: 'bookmark' },
     can: {
-      createRFQ: true, selectVendor: true, createVendorPO: true,
+      createRFQ: true, selectVendor: true, createVendorPO: true, doSourcing: true,
       viewVendors: true, viewCost: true, viewProducts: true,
     },
   },
@@ -53,7 +54,7 @@ const PERMISSIONS = {
     },
   },
   'Managing Director': {
-    nav: ['dashboard','inbox','sales-orders','rfq','vendor-pos','godown','pool','transfers','invoices','collections','audit'],
+    nav: ['dashboard','inbox','sourcing','sales-orders','rfq','vendor-pos','godown','pool','transfers','invoices','collections','audit'],
     primary: { route: 'inbox', label: 'Approvals queue', icon: 'bell' },
     can: { approveAll: true, viewCost: true, viewMD: true },
   },
@@ -152,6 +153,48 @@ function buildTasks(state, mutate, navigate, toast) {
         navigate('rfq');
       },
       approveLabel: 'Float RFQ',
+    });
+  });
+
+  // 2b. Sourcing inquiries sent to Purchase → Purchase to compare vendors
+  (state.sourcings || []).filter(x => x.status === 'Sent to Purchase').forEach(src => {
+    const cust = state.customers.find(c => c.id === src.customer_id);
+    const value = (src.lines || []).reduce((sum, l) => sum + (l.bundle_qty || 0) * (l.unit_price || 0), 0);
+    tasks.push({
+      id: `task-src-${src.id}`,
+      role: 'Purchase',
+      kind: 'Vendor Sourcing',
+      ref: src.src_no,
+      refId: src.id,
+      by: state.users.find(u => u.role === 'Sales')?.name || 'Sales',
+      amount: value,
+      detail: `${cust?.name || ''} · compare vendors per item & return the margin`,
+      gate: 'Purchase action',
+      icon: 'bookmark',
+      navigateTo: `sourcing/${src.id}`,
+      approve: () => navigate(`sourcing/${src.id}`),
+      approveLabel: 'Open sourcing',
+    });
+  });
+
+  // 2c. Sourcing costed & sent back → Sales to raise the SO
+  (state.sourcings || []).filter(x => x.status === 'Sent to Sales').forEach(src => {
+    const cust = state.customers.find(c => c.id === src.customer_id);
+    const m = src.margin || {};
+    tasks.push({
+      id: `task-src-sales-${src.id}`,
+      role: 'Sales',
+      kind: 'Raise SO from inquiry',
+      ref: src.src_no,
+      refId: src.id,
+      by: state.users.find(u => u.role === 'Purchase')?.name || 'Purchase',
+      amount: m.sell || 0,
+      detail: `${cust?.name || ''} · vendor quotation ready · margin ${m.marginPct !== undefined ? (m.marginPct >= 0 ? '+' : '') + m.marginPct.toFixed(1) + '%' : '—'}`,
+      gate: 'Sales action',
+      icon: 'receipt',
+      navigateTo: `sourcing/${src.id}`,
+      approve: () => navigate(`sourcing/${src.id}`),
+      approveLabel: 'Review & raise SO',
     });
   });
 

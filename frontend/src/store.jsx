@@ -5,12 +5,12 @@ const STORAGE_KEY = 'opc.state.v3';
 // elsewhere). pool is read-only (display) so it's loaded but not write-synced.
 const SYNCED_TABLES = {
   sales_orders: 'id', vendor_pos: 'id', grns: 'id', vendor_invoices: 'id',
-  payments: 'id', rfqs: 'id', transfer_requests: 'id', notifications: 'id', audit: 'id',
+  payments: 'id', rfqs: 'id', sourcings: 'id', transfer_requests: 'id', notifications: 'id', audit: 'id',
 };
 const LOADED_TABLES = [
   'customers', 'vendors',
   'sales_orders', 'vendor_pos', 'grns', 'vendor_invoices', 'payments',
-  'pool', 'rfqs', 'transfer_requests', 'notifications', 'audit',
+  'pool', 'rfqs', 'sourcings', 'transfer_requests', 'notifications', 'audit',
 ];
 
 // Map an arbitrary audit entry onto the audit table's columns (extras → detail).
@@ -76,6 +76,7 @@ function loadInitialState() {
     payments: window.OPC_SEED.payments,
     pool: window.OPC_SEED.pool,
     rfqs: window.OPC_SEED.rfqs,
+    sourcings: window.OPC_SEED.sourcings || [],
     audit: [],
     notifications: [],
     transfer_requests: [],

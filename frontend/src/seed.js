@@ -7,7 +7,7 @@
 // SO-creation form needs (customers, categories, products, BOMs) plus the users
 // that drive the role flow.
 
-const SEED_VERSION = 'opc-2026-05-25-v5-nomock';
+const SEED_VERSION = 'opc-2026-06-03-v6-sourcing';
 
 const CATEGORIES = [
   { id: 'cat-pc', name: 'Office PC Bundle', hsn: '8471', gst: 18, bundle_desc: 'Office PC bundle — Intel i5, 16GB RAM, 512GB SSD' },
@@ -103,6 +103,7 @@ const GRNS = [];
 const VENDOR_INVOICES = [];
 const PAYMENTS = [];
 const RFQS = [];
+const SOURCINGS = [];   // pre-SO sourcing/costing exercises (created via the app)
 
 // No users seeded. The first admin self-signs-up on the login screen (only
 // possible while no admin exists); the admin then creates all other users, who
@@ -137,6 +138,7 @@ const SEED = {
   payments: PAYMENTS,
   pool: POOL_ITEMS,
   rfqs: RFQS,
+  sourcings: SOURCINGS,
 };
 
 window.OPC_SEED = SEED;

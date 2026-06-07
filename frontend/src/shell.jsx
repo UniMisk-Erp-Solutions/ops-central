@@ -16,6 +16,7 @@ function Sidebar() {
       { id: 'inbox', label: 'My Tasks', icon: 'bell', badge: myTasks || null },
     ]},
     { label: 'Sales', items: [
+      { id: 'sourcing', label: 'Sourcing / Inquiries', icon: 'bookmark' },
       { id: 'sales-orders', label: 'Sales Orders', icon: 'receipt' },
       { id: 'customers', label: 'Customers', icon: 'user' },
     ]},
@@ -228,6 +229,7 @@ function NotificationsDrawer({ onClose, role }) {
                    else if (n.kind === 'grn') navigate('grn');
                    else if (n.kind === 'overdue') navigate('collections');
                    else if (n.kind === 'match') navigate('three-way');
+                   else if (n.kind === 'sourcing') navigate('sourcing');
                    else navigate('inbox');
                    onClose();
                  }}>
