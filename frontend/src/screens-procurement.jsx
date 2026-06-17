@@ -1,30 +1,123 @@
 // OP Central — Procurement screens: RFQ, Vendor PO, GRN, 3-Way Match
 
-// ===== RFQ List + Detail =====
+// ===== Auto comparison engine =====
+// For one project (SO): compare the chosen vendor per item against the cheapest
+// available across all vendors, and roll up revenue / spend / savings.
+function projectComparison(state, soId, getProduct) {
+  const so = state.sales_orders.find(x => x.id === soId);
+  if (!so) return null;
+  const sourcing = soSourcing(state, soId);
+  const pos = state.vendor_pos.filter(p => p.so_id === soId);
+  const req = soReqComponents(so);
+  const picks = (sourcing && sourcing.picks) || {};
+  const sprices = (sourcing && sourcing.prices) || {};
+  const priceFor = (vid, p) => (sprices[p.id] && sprices[p.id][vid] != null)
+    ? sprices[p.id][vid]
+    : (window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : (p.buy || 0));
+  const poLineVendor = (pid) => {
+    for (const po of pos) { const it = (po.items || []).find(x => x.product_id === pid); if (it) return { vid: po.vendor_id, rate: it.rate }; }
+    return null;
+  };
+  const rows = Object.entries(req).map(([pid, qty]) => {
+    const p = getProduct(pid) || { id: pid, name: pid, code: pid, buy: 0 };
+    const all = state.vendors.map(v => ({ v, price: priceFor(v.id, p) })).sort((a, b) => a.price - b.price);
+    const cheapest = all[0] || null;
+    const fromPO = poLineVendor(pid);
+    const chosenVid = fromPO ? fromPO.vid : (picks[pid] || (cheapest && cheapest.v.id));
+    const chosenRate = fromPO ? fromPO.rate : priceFor(chosenVid, p);
+    const cheapestRate = cheapest ? cheapest.price : chosenRate;
+    return { pid, p, qty, all, chosenVid, chosenRate, cheapestVid: cheapest && cheapest.v.id, cheapestRate, lineSpend: chosenRate * qty, lineBest: cheapestRate * qty, saving: (chosenRate - cheapestRate) * qty };
+  });
+  const spend = rows.reduce((s, r) => s + r.lineSpend, 0);
+  const best = rows.reduce((s, r) => s + r.lineBest, 0);
+  const indicative = (so.lines || []).reduce((s, l) => s + (l.bundle_qty || 0) * (l.unit_price || 0), 0);
+  const revenue = (sourcing && sourcing.our_price) ? Number(sourcing.our_price) : indicative;
+  return { so, sourcing, pos, rows, spend, best, potentialSaving: spend - best, revenue, poTotal: pos.reduce((s, p) => s + (p.amount || 0), 0), marginPct: revenue ? ((revenue - spend) / revenue) * 100 : 0 };
+}
+window.projectComparison = projectComparison;
+
+// ===== RFQ / Vendor Comparison page (auto engine) =====
 function RFQList() {
-  const { state, navigate, currentUser, getUser } = useStore();
+  const { state, navigate, currentUser, getUser, getProduct, getVendor, getCustomer } = useStore();
   const [showRFQ, setShowRFQ] = React.useState(false);
   const role = getUser(currentUser)?.role;
   const canFloat = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+
+  // Auto-fetch every project that has sourcing and/or vendor POs.
+  const ids = new Set();
+  (state.sourcings || []).forEach(s => { if (s.converted_so_id) ids.add(s.converted_so_id); });
+  state.vendor_pos.forEach(p => { if (p.so_id) ids.add(p.so_id); });
+  const comps = [...ids].map(id => projectComparison(state, id, getProduct)).filter(Boolean);
+  const totSpend = comps.reduce((s, c) => s + c.spend, 0);
+  const totSaving = comps.reduce((s, c) => s + c.potentialSaving, 0);
+
   return (
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">RFQ Comparison</h1>
-          <div className="page-sub">Side-by-side vendor quotes · select the winning vendor</div>
+          <h1 className="page-title">RFQ / Vendor Comparison</h1>
+          <div className="page-sub">Automatic cross-vendor comparison across all projects · chosen vs cheapest, mapped per item</div>
         </div>
         <div className="page-actions">
-          {canFloat && <button className="btn btn-primary" onClick={() => setShowRFQ(true)}><Icon name="plus" size={13}/>Float new RFQ</button>}
+          {canFloat && <button className="btn" onClick={() => setShowRFQ(true)}><Icon name="plus" size={13}/>Float manual RFQ</button>}
         </div>
       </div>
 
-      {state.rfqs.length === 0 ? (
+      <div className="mb-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Projects compared</div><div style={{ fontSize: 20, fontWeight: 700 }}>{comps.length}</div></div></div>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Total vendor spend</div><div style={{ fontSize: 20, fontWeight: 700 }} className="mono">{inr(totSpend)}</div></div></div>
+        <div className="card" style={{ borderColor: totSaving > 0 ? 'oklch(0.85 0.09 75)' : undefined }}><div className="card-body" style={{ textAlign: 'center', background: totSaving > 0 ? 'var(--warning-bg)' : undefined }}><div className="tiny muted">Potential extra savings</div><div style={{ fontSize: 20, fontWeight: 700, color: totSaving > 0 ? 'var(--warning)' : 'var(--success)' }} className="mono">{inr(totSaving)}</div></div></div>
+      </div>
+
+      {comps.length === 0 ? (
         <div className="card"><div className="empty">
-          <div className="empty-title">No RFQs yet</div>
-          Float an RFQ to selected vendors for an approved SO, record their quotes, then pick the winner.
-          {canFloat && <div className="mt-2"><button className="btn btn-primary" onClick={() => setShowRFQ(true)}><Icon name="plus" size={13}/>Float new RFQ</button></div>}
+          <div className="empty-title">Nothing to compare yet</div>
+          Once inquiries are converted to SOs and vendors are chosen, every project's vendor comparison appears here automatically.
         </div></div>
-      ) : state.rfqs.map(rfq => <RFQCard key={rfq.id} rfq={rfq}/>)}
+      ) : comps.map(c => {
+        const cust = getCustomer(c.so.customer_id);
+        return (
+          <div className="card mb-2" key={c.so.id}>
+            <div className="card-header">
+              <div>
+                <h3 className="card-title"><span className="mono" onClick={() => navigate(`sales-orders/${c.so.id}`)} style={{ cursor: 'pointer' }}>{c.so.so_no}</span> — {cust ? cust.name : ''}</h3>
+                <div className="tiny muted">revenue {inr(c.revenue)} · vendor spend {inr(c.spend)} · margin <strong style={{ color: c.marginPct >= 0 ? 'var(--success)' : 'var(--danger)' }}>{c.marginPct >= 0 ? '+' : ''}{c.marginPct.toFixed(1)}%</strong>{c.potentialSaving > 0 ? <> · <span style={{ color: 'var(--warning)' }}>save {inr(c.potentialSaving)} more if all-cheapest</span></> : ' · already optimal'}</div>
+              </div>
+              <span className="badge dot">{c.pos.length} PO(s)</span>
+            </div>
+            <div className="card-body flush">
+              <table className="t">
+                <thead><tr><th>Item</th><th className="num">Qty</th><th>Chosen vendor</th><th className="num">Rate</th><th>Cheapest</th><th className="num">Best rate</th><th className="num">Δ / line</th></tr></thead>
+                <tbody>
+                  {c.rows.map(r => {
+                    const cv = getVendor(r.chosenVid); const bv = getVendor(r.cheapestVid);
+                    const optimal = r.chosenVid === r.cheapestVid || r.saving <= 0;
+                    return (
+                      <tr key={r.pid}>
+                        <td>{r.p.name}<div className="tiny muted mono">{r.p.code}</div></td>
+                        <td className="num">{r.qty}</td>
+                        <td>{cv ? cv.name : '—'}</td>
+                        <td className="num mono">{inr(r.chosenRate)}</td>
+                        <td>{optimal ? <span className="muted">— same</span> : (bv ? bv.name : '—')}</td>
+                        <td className="num mono">{inr(r.cheapestRate)}</td>
+                        <td className="num">{optimal ? <span style={{ color: 'var(--success)' }}>best</span> : <span style={{ color: 'var(--warning)', fontWeight: 600 }}>+{inr(r.saving)}</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot><tr><td colSpan="3" className="right small">Totals</td><td className="num mono">{inr(c.spend)}</td><td></td><td className="num mono">{inr(c.best)}</td><td className="num">{c.potentialSaving > 0 ? <strong style={{ color: 'var(--warning)' }}>+{inr(c.potentialSaving)}</strong> : <span style={{ color: 'var(--success)' }}>optimal</span>}</td></tr></tfoot>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+
+      {state.rfqs.length > 0 && (
+        <>
+          <div className="page-sub mt-3 mb-2" style={{ fontWeight: 600 }}>Manual RFQs</div>
+          {state.rfqs.map(rfq => <RFQCard key={rfq.id} rfq={rfq}/>)}
+        </>
+      )}
 
       {showRFQ && <CreateRFQModal onClose={() => setShowRFQ(false)}/>}
     </div>
@@ -289,6 +382,7 @@ function VendorPODetail({ poId }) {
   const gst = subtotal * 0.18;
   const grand = subtotal + gst;
   const ebilled = po.ebill && po.ebill.generated;
+  const [showVI, setShowVI] = React.useState(false);
 
   // Sibling POs for the same project (SO) — the vendors selected for this order.
   const siblings = state.vendor_pos.filter(p => p.so_id === po.so_id);
@@ -326,9 +420,14 @@ function VendorPODetail({ poId }) {
             ? <button className="btn" onClick={() => window.print()}><Icon name="print" size={13}/>Print e-Bill</button>
             : <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>}
           <button className="btn"><Icon name="mail" size={13}/>Resend to vendor</button>
-          <button className="btn btn-primary" onClick={() => navigate('grn')}><Icon name="package" size={13}/>Create GRN</button>
+          {po.status !== 'Material Received'
+            ? <button className="btn btn-primary" onClick={() => navigate('grn')}><Icon name="package" size={13}/>Create GRN</button>
+            : !vInv
+              ? <button className="btn btn-primary" onClick={() => setShowVI(true)}><Icon name="receipt" size={13}/>Record vendor invoice</button>
+              : <button className="btn" onClick={() => navigate(`three-way/${vInv.id}`)}><Icon name="check" size={13}/>View 3-way match</button>}
         </div>
       </div>
+      {showVI && <RecordVendorInvoiceModal poId={po.id} onClose={() => setShowVI(false)}/>}
 
       {/* Client vs vendor billing — kept explicitly separate */}
       <div className="mb-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -610,17 +709,23 @@ function GRNDetail({ grnId }) {
 }
 
 function GRNNew() {
-  const { navigate, state, getVendor, getProduct } = useStore();
+  const { navigate, state, mutate, getVendor, getProduct, getSO } = useStore();
   const toast = useToast();
-  // Receive against the first PO that is still awaiting/in-transit material.
-  const po = state.vendor_pos.find(p => p.status === 'In Transit')
-    || state.vendor_pos.find(p => p.status !== 'Material Received')
-    || state.vendor_pos[0];
-  const [items, setItems] = React.useState(
-    po ? po.items.map(it => ({ ...it, received: it.qty, accepted: it.qty, rejected: 0, reason: '' })) : []
-  );
+  // Receivable = POs not yet fully received.
+  const receivable = state.vendor_pos.filter(p => p.status !== 'Material Received');
+  const [poId, setPoId] = React.useState(() => {
+    const d = state.vendor_pos.find(p => p.status === 'In Transit') || receivable[0] || state.vendor_pos[0];
+    return d ? d.id : '';
+  });
+  const po = state.vendor_pos.find(p => p.id === poId) || null;
+  const [items, setItems] = React.useState([]);
+  const [lr, setLr] = React.useState('DELHIVERY-D88234');
+  const [grnDate, setGrnDate] = React.useState(TODAY);
+  React.useEffect(() => {
+    setItems(po ? po.items.map(it => ({ ...it, received: it.qty, accepted: it.qty, rejected: 0, reason: '' })) : []);
+  }, [poId]);
 
-  if (!po) return (
+  if (state.vendor_pos.length === 0) return (
     <div className="page">
       <div className="muted tiny mb-1" style={{ cursor: 'pointer' }} onClick={() => navigate('grn')}>
         <Icon name="chevronLeft" size={12}/> GRN
@@ -633,7 +738,26 @@ function GRNNew() {
     </div>
   );
 
-  const v = getVendor(po.vendor_id);
+  const v = po ? getVendor(po.vendor_id) : null;
+  const so = po ? getSO(po.so_id) : null;
+
+  const post = () => {
+    if (!po) { toast('Pick a Vendor PO to receive against'); return; }
+    if (items.some(it => it.rejected > 0 && !it.reason)) { toast('Add a reason for each rejected line'); return; }
+    const grnNo = `GRN/FY26/${String(28 + state.grns.length).padStart(4, '0')}`;
+    const grn = {
+      id: 'grn-' + Date.now(), grn_no: grnNo, po_id: po.id, date: grnDate, lr, received_by: 'Stores', status: 'Posted',
+      items: items.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null })),
+    };
+    mutate(s => ({
+      ...s,
+      grns: [grn, ...s.grns],
+      vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received' } : p),
+      notifications: [{ id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · material received → record vendor invoice for 3-way match`, date: TODAY, read: false, role: 'Billing' }, ...s.notifications],
+    }), { action: 'create', entity: 'GRN', entity_id: grn.id });
+    toast(`${grnNo} posted · ${po.po_no} received`, 'success');
+    navigate(`grn/${grn.id}`);
+  };
 
   return (
     <div className="page">
@@ -643,16 +767,28 @@ function GRNNew() {
             <Icon name="chevronLeft" size={12}/> GRN
           </div>
           <h1 className="page-title">New GRN</h1>
-          <div className="page-sub">Receiving material against <span className="mono">{po.po_no}</span> · {v.name}</div>
+          <div className="page-sub">Receiving material against <span className="mono">{po ? po.po_no : '—'}</span>{v ? ` · ${v.name}` : ''}</div>
         </div>
         <div className="page-actions">
           <button className="btn" onClick={() => navigate('grn')}>Cancel</button>
-          <button className="btn">Save Draft</button>
-          <button className="btn btn-primary" onClick={() => { toast('GRN posted · items added to VG', 'success'); navigate('grn'); }}>
+          <button className="btn btn-primary" onClick={post}>
             <Icon name="check" size={13}/>Post GRN
           </button>
         </div>
       </div>
+
+      <div className="card mb-2"><div className="card-body" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="field" style={{ minWidth: 280 }}>
+          <label className="field-label">Receive against Vendor PO</label>
+          <select className="select" value={poId} onChange={e => setPoId(e.target.value)}>
+            {state.vendor_pos.map(p => { const vv = getVendor(p.vendor_id); const ss = getSO(p.so_id); return (
+              <option key={p.id} value={p.id}>{p.po_no} · {vv?.name} · {ss?.so_no || '—'} · {p.status}</option>
+            ); })}
+          </select>
+        </div>
+        <div className="field"><label className="field-label">LR / tracking</label><input className="input mono" value={lr} onChange={e => setLr(e.target.value)}/></div>
+        <div className="field"><label className="field-label">Received date</label><input type="date" className="input mono" value={grnDate} onChange={e => setGrnDate(e.target.value)}/></div>
+      </div></div>
 
       <div className="detail-grid">
         <div className="stack">
@@ -681,7 +817,7 @@ function GRNNew() {
                                  onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, rejected: v, accepted: it.received - v}; setItems(next); }}
                                  style={{ width: 70, textAlign: 'right' }}/>
                         </td>
-                        <td><input className="input" placeholder={it.rejected > 0 ? 'Reason required' : ''} disabled={!it.rejected}/></td>
+                        <td><input className="input" placeholder={it.rejected > 0 ? 'Reason required' : ''} disabled={!it.rejected} value={it.reason || ''} onChange={e => { const next = [...items]; next[i] = { ...it, reason: e.target.value }; setItems(next); }}/></td>
                       </tr>
                     );
                   })}
@@ -711,8 +847,12 @@ function GRNNew() {
           <div className="card">
             <div className="card-header"><h3 className="card-title">Receipt Info</h3></div>
             <div className="card-body">
-              <div className="field"><label className="field-label">LR / tracking no.</label><input className="input mono" defaultValue="DELHIVERY-D88234"/></div>
-              <div className="field mt-2"><label className="field-label">Received date</label><input type="date" className="input mono" defaultValue={TODAY}/></div>
+              <div className="dl">
+                <dt>Vendor PO</dt><dd className="mono">{po ? po.po_no : '—'}</dd>
+                <dt>For SO</dt><dd className="mono">{so?.so_no || '—'}</dd>
+                <dt>LR / tracking</dt><dd className="mono">{lr}</dd>
+                <dt>Received</dt><dd className="mono">{fmtDate(grnDate)}</dd>
+              </div>
               <div className="field mt-2"><label className="field-label">Vehicle no.</label><input className="input mono" defaultValue="MH-04-EZ-9921"/></div>
             </div>
           </div>
@@ -728,15 +868,26 @@ function GRNNew() {
   );
 }
 
-// ===== 3-Way Match =====
+// ===== 3-Way Match (real routing: GRN → record vendor invoice → match → book) =====
 function ThreeWayMatchList() {
-  const { state, navigate } = useStore();
+  const { state, navigate, currentUser, getUser, getVendor } = useStore();
+  const [showRecord, setShowRecord] = React.useState(false);
+  const role = currentUser ? getUser(currentUser)?.role : '';
+  const canRecord = ['Billing', 'Purchase', 'Org Admin'].includes(role);
+  const stBadge = (st) => st === 'Booked' ? <span className="badge success dot">Booked</span>
+    : st === 'Rejected' ? <span className="badge danger dot">Rejected</span>
+    : st === 'Parked' ? <span className="badge warning dot">Parked</span>
+    : <span className="badge accent dot">{st}</span>;
+
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1 className="page-title">3-Way Match</h1>
-          <div className="page-sub">Vendor invoice ⟷ Vendor PO ⟷ GRN · auto-tolerance check</div>
+          <div className="page-sub">Vendor Invoice ⟷ Vendor PO ⟷ GRN · auto tolerance check before booking payables</div>
+        </div>
+        <div className="page-actions">
+          {canRecord && <button className="btn btn-primary" onClick={() => setShowRecord(true)}><Icon name="plus" size={13}/>Record vendor invoice</button>}
         </div>
       </div>
 
@@ -749,38 +900,133 @@ function ThreeWayMatchList() {
             </tr></thead>
             <tbody>
               {state.vendor_invoices.map(vi => {
-                const v = state.vendors.find(x => x.id === vi.vendor_id);
+                const v = getVendor(vi.vendor_id);
                 const po = state.vendor_pos.find(p => p.id === vi.po_id);
                 return (
                   <tr key={vi.id} onClick={() => navigate(`three-way/${vi.id}`)} style={{ cursor: 'pointer' }}>
                     <td className="mono">{vi.vendor_invoice_no}</td>
-                    <td>{v.name}</td>
+                    <td>{v?.name}</td>
                     <td className="mono">{po?.po_no}</td>
                     <td>{vi.grn_id ? <span className="badge success dot">Received</span> : <span className="badge warning dot">Pending</span>}</td>
                     <td className="num">{inr(vi.amount)}</td>
-                    <td>{vi.tolerance === 'within' ? <span className="badge success">Within ±2%</span> : <span className="badge danger">Outside</span>}</td>
-                    <td><span className="badge warning dot">{vi.status}</span></td>
+                    <td>{vi.tolerance === 'within' ? <span className="badge success">Within</span> : <span className="badge danger">Outside</span>}</td>
+                    <td>{stBadge(vi.status)}</td>
                     <td><Icon name="chevronRight" size={12}/></td>
                   </tr>
                 );
               })}
+              {state.vendor_invoices.length === 0 && (
+                <tr><td colSpan="8"><div className="empty">
+                  <div className="empty-title">No vendor invoices yet</div>
+                  Post a GRN against a Vendor PO, then record the vendor's invoice here — it's auto-checked against the PO &amp; GRN, then booked.
+                  {canRecord && <div className="mt-2"><button className="btn btn-primary" onClick={() => setShowRecord(true)}><Icon name="plus" size={13}/>Record vendor invoice</button></div>}
+                </div></td></tr>
+              )}
             </tbody>
           </table>
         </div>
       </div>
+      {showRecord && <RecordVendorInvoiceModal onClose={() => setShowRecord(false)}/>}
     </div>
   );
 }
 
+// Record a vendor's invoice against a received PO; tolerance auto-computed.
+function RecordVendorInvoiceModal({ onClose, poId }) {
+  const { state, mutate, getVendor, getSO } = useStore();
+  const toast = useToast();
+  const tol = state.config.three_way_value_tolerance != null ? state.config.three_way_value_tolerance : 2;
+  // Eligible: POs with a posted GRN and no invoice recorded yet.
+  const eligible = state.vendor_pos.filter(p => state.grns.find(g => g.po_id === p.id) && !state.vendor_invoices.find(vi => vi.po_id === p.id));
+  const [pid, setPid] = React.useState(poId || (eligible[0] ? eligible[0].id : ''));
+  const po = state.vendor_pos.find(p => p.id === pid) || null;
+  const grn = po ? state.grns.find(g => g.po_id === po.id) : null;
+  const [invNo, setInvNo] = React.useState('');
+  const [amount, setAmount] = React.useState(po ? po.amount : 0);
+  const [date, setDate] = React.useState(TODAY);
+  React.useEffect(() => { setAmount(po ? po.amount : 0); }, [pid]);
+
+  const valueVar = po && po.amount ? ((Number(amount) - po.amount) / po.amount) * 100 : 0;
+  const within = Math.abs(valueVar) <= tol;
+
+  const submit = () => {
+    if (!po) { toast('Pick a received Vendor PO'); return; }
+    if (!invNo.trim()) { toast('Enter the vendor invoice number'); return; }
+    const vi = {
+      id: 'vi-' + Date.now(), vendor_invoice_no: invNo.trim(), po_id: po.id, grn_id: grn ? grn.id : null,
+      vendor_id: po.vendor_id, date, amount: Number(amount) || 0, status: 'Pending 3-Way Match',
+      tolerance: within ? 'within' : 'outside',
+    };
+    mutate(s => ({
+      ...s,
+      vendor_invoices: [vi, ...s.vendor_invoices],
+      notifications: [{ id: 'n-vi-' + Date.now(), kind: 'match', text: `${vi.vendor_invoice_no} recorded · ${within ? 'within' : 'OUTSIDE'} tolerance · 3-way match for ${po.po_no}`, date: TODAY, read: false, role: 'Billing' }, ...s.notifications],
+    }), { action: 'create', entity: 'VendorInvoice', entity_id: vi.id });
+    toast(`${vi.vendor_invoice_no} recorded · ${within ? 'within tolerance' : 'outside tolerance'}`, within ? 'success' : '');
+    onClose();
+  };
+
+  return (
+    <Modal title="Record vendor invoice" onClose={onClose} footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={!po || !invNo.trim()} onClick={submit}>Record &amp; run match</button>
+      </>
+    }>
+      {eligible.length === 0 && !poId ? (
+        <div className="empty">No received POs awaiting an invoice. Post a GRN against a Vendor PO first.</div>
+      ) : (
+        <>
+          <div className="field">
+            <label className="field-label">Vendor PO (received) *</label>
+            <select className="select" value={pid} onChange={e => setPid(e.target.value)} disabled={!!poId}>
+              {(poId ? state.vendor_pos.filter(p => p.id === poId) : eligible).map(p => {
+                const v = getVendor(p.vendor_id); const so = getSO(p.so_id);
+                return <option key={p.id} value={p.id}>{p.po_no} · {v?.name} · {so?.so_no || '—'} · {inr(p.amount)}</option>;
+              })}
+            </select>
+          </div>
+          <div className="field-row mt-2">
+            <div className="field"><label className="field-label">Vendor invoice no. *</label><input className="input mono" placeholder="e.g. INV-2026-0456" value={invNo} onChange={e => setInvNo(e.target.value)}/></div>
+            <div className="field"><label className="field-label">Invoice date</label><input type="date" className="input mono" value={date} onChange={e => setDate(e.target.value)}/></div>
+          </div>
+          <div className="field mt-2">
+            <label className="field-label">Invoice amount</label>
+            <input type="number" min="0" className="input mono" value={amount} onChange={e => setAmount(e.target.value)} style={{ width: 180 }}/>
+          </div>
+          {po && (
+            <div className="mt-2" style={{ padding: 10, borderRadius: 4, background: within ? 'var(--success-bg)' : 'var(--danger-bg)', fontSize: 12.5 }}>
+              PO amount {inr(po.amount)} · invoice {inr(Number(amount) || 0)} · variance <strong>{valueVar >= 0 ? '+' : ''}{valueVar.toFixed(1)}%</strong> — {within ? `within ±${tol}% tolerance` : `OUTSIDE ±${tol}% tolerance (will flag for review)`}
+            </div>
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function ThreeWayMatchDetail({ viId }) {
-  const { state, navigate, getVendor, getProduct } = useStore();
+  const { state, navigate, mutate, getVendor, getProduct } = useStore();
   const toast = useToast();
   const vi = state.vendor_invoices.find(v => v.id === viId);
   if (!vi) return <div className="page"><div className="empty">Not found</div></div>;
   const po = state.vendor_pos.find(p => p.id === vi.po_id);
   const grn = state.grns.find(g => g.id === vi.grn_id);
   const v = getVendor(vi.vendor_id);
-  const within = vi.tolerance === 'within';
+  const tol = state.config.three_way_value_tolerance != null ? state.config.three_way_value_tolerance : 2;
+  const valueVar = po && po.amount ? ((vi.amount - po.amount) / po.amount) * 100 : 0;
+  const within = Math.abs(valueVar) <= tol;
+  const done = ['Booked', 'Rejected'].includes(vi.status);
+
+  const setStatus = (status, msg, kind, notify) => {
+    mutate(s => ({
+      ...s,
+      vendor_invoices: s.vendor_invoices.map(x => x.id === vi.id ? { ...x, status } : x),
+      ...(notify ? { notifications: [{ id: 'n-3w-' + Date.now(), kind: 'po', text: notify, date: TODAY, read: false, role: 'Managing Director' }, ...s.notifications] } : {}),
+    }), { action: status.toLowerCase(), entity: 'VendorInvoice', entity_id: vi.id });
+    toast(msg, kind || '');
+    navigate('three-way');
+  };
 
   return (
     <div className="page">
@@ -789,63 +1035,64 @@ function ThreeWayMatchDetail({ viId }) {
           <div className="muted tiny mb-1" style={{ cursor: 'pointer' }} onClick={() => navigate('three-way')}>
             <Icon name="chevronLeft" size={12}/> 3-Way Match
           </div>
-          <h1 className="page-title">3-Way Match — <span className="mono">{vi.vendor_invoice_no}</span></h1>
-          <div className="page-sub">{v.name} · invoice amount {inr(vi.amount)}</div>
+          <h1 className="page-title">3-Way Match — <span className="mono">{vi.vendor_invoice_no}</span>
+            <span style={{ marginLeft: 8 }}><span className={`badge dot ${vi.status === 'Booked' ? 'success' : vi.status === 'Rejected' ? 'danger' : 'accent'}`}>{vi.status}</span></span>
+          </h1>
+          <div className="page-sub">{v?.name} · invoice amount {inr(vi.amount)} · PO {po?.po_no} · GRN {grn?.grn_no || 'pending'}</div>
         </div>
         <div className="page-actions">
-          <button className="btn btn-danger" onClick={() => { toast('Invoice rejected · email sent to vendor'); navigate('three-way'); }}>Reject</button>
-          <button className="btn" onClick={() => { toast('Parked for PM review'); navigate('three-way'); }}>Park for review</button>
-          <button className="btn btn-primary" onClick={() => { toast('Booked in payables · payment scheduled', 'success'); navigate('three-way'); }}>
-            <Icon name="check" size={13}/>Approve & Book
-          </button>
+          {!done && <button className="btn btn-danger" onClick={() => setStatus('Rejected', 'Invoice rejected · vendor notified', '', `${vi.vendor_invoice_no} REJECTED at 3-way match`)}>Reject</button>}
+          {!done && <button className="btn" onClick={() => setStatus('Parked', 'Parked for PM review')}>Park for review</button>}
+          {!done && <button className="btn btn-primary" onClick={() => setStatus('Booked', 'Booked in payables · payment scheduled', 'success', `${vi.vendor_invoice_no} booked · ${inrK(vi.amount)} payable to ${v?.name}`)}><Icon name="check" size={13}/>Approve &amp; Book</button>}
+          {done && <span className="badge dot">{vi.status}</span>}
         </div>
       </div>
 
       <div className="mb-2" style={{ padding: 10, background: within ? 'var(--success-bg)' : 'var(--danger-bg)', border: '1px solid', borderColor: within ? 'oklch(0.85 0.06 155)' : 'oklch(0.86 0.08 25)', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
         <Icon name={within ? 'check' : 'alert'} size={14} color={within ? 'var(--success)' : 'var(--danger)'}/>
-        <span><strong>{within ? 'Within tolerance' : 'Outside tolerance'}</strong> · Value tolerance ±2% · Qty tolerance ±1 unit · {!within && 'PM review recommended before booking'}</span>
+        <span><strong>{within ? 'Within tolerance' : 'Outside tolerance'}</strong> · value variance {valueVar >= 0 ? '+' : ''}{valueVar.toFixed(1)}% (±{tol}% allowed){!within && ' · PM review recommended before booking'}</span>
       </div>
 
       <div className="compare">
         <div className="compare-h">Field</div>
-        <div className="compare-h">Vendor PO · {po.po_no}</div>
+        <div className="compare-h">Vendor PO · {po?.po_no}</div>
         <div className="compare-h">GRN · {grn?.grn_no || 'Pending'}</div>
         <div className="compare-h">Vendor Invoice · {vi.vendor_invoice_no}</div>
 
         <div className="compare-row-label">Vendor</div>
-        <div>{v.name}</div><div>{v.name}</div><div className="ok">{v.name} <Icon name="check" size={11}/></div>
+        <div>{v?.name}</div><div>{v?.name}</div><div className="ok">{v?.name} <Icon name="check" size={11}/></div>
 
         <div className="compare-row-label">Date</div>
-        <div className="mono">{fmtDate(po.date)}</div><div className="mono">{grn ? fmtDate(grn.date) : '—'}</div><div className="mono">{fmtDate(vi.date)}</div>
+        <div className="mono">{fmtDate(po?.date)}</div><div className="mono">{grn ? fmtDate(grn.date) : '—'}</div><div className="mono">{fmtDate(vi.date)}</div>
 
-        {po.items.map((it, i) => {
+        {(po?.items || []).map((it, i) => {
           const p = getProduct(it.product_id);
           const grnLine = grn?.items.find(x => x.product_id === it.product_id);
-          const qtyMatch = grnLine && grnLine.accepted === it.qty;
+          const qtyMatch = !grnLine || grnLine.accepted === it.qty;
           return (
             <Fragment key={i}>
-              <div className="compare-row-label">{p.name}</div>
+              <div className="compare-row-label">{p ? p.name : it.product_id}</div>
               <div className="num">Qty {it.qty} @ {inr(it.rate)}</div>
-              <div className="num">{grnLine ? `Acc ${grnLine.accepted} / Rej ${grnLine.rejected}` : '—'}</div>
-              <div className={`num ${within ? 'ok' : 'warn'}`}>{it.qty} @ {inr(it.rate * (within ? 1 : 1.025))} {!within && <Icon name="alert" size={11}/>}</div>
+              <div className={`num ${qtyMatch ? 'ok' : 'warn'}`}>{grnLine ? `Acc ${grnLine.accepted} / Rej ${grnLine.rejected || 0}` : '—'} {!qtyMatch && <Icon name="alert" size={11}/>}</div>
+              <div className="num">{inr(it.qty * it.rate)}</div>
             </Fragment>
           );
         })}
 
         <div className="compare-row-label">Subtotal</div>
-        <div className="num">{inr(po.amount)}</div>
+        <div className="num">{inr(po?.amount || 0)}</div>
         <div className="num">—</div>
         <div className={`num ${within ? 'ok' : 'warn'}`}>{inr(vi.amount)}</div>
 
         <div className="compare-row-label">Variance</div>
         <div>—</div>
         <div>—</div>
-        <div className={within ? 'ok' : 'warn'}>{within ? '+0.0% (within ±2%)' : '+2.1% (outside ±2%)'}</div>
+        <div className={within ? 'ok' : 'warn'}>{valueVar >= 0 ? '+' : ''}{valueVar.toFixed(1)}% ({within ? `within ±${tol}%` : `outside ±${tol}%`})</div>
       </div>
 
       <div className="mt-3 split-2">
         <div className="card">
-          <div className="card-header"><h3 className="card-title">TDS & RCM</h3></div>
+          <div className="card-header"><h3 className="card-title">TDS &amp; RCM</h3></div>
           <div className="card-body">
             <div className="dl">
               <dt>TDS rate</dt><dd>2% (194Q)</dd>
@@ -856,20 +1103,23 @@ function ThreeWayMatchDetail({ viId }) {
           </div>
         </div>
         <div className="card">
-          <div className="card-header"><h3 className="card-title">Payment Schedule</h3></div>
+          <div className="card-header"><h3 className="card-title">Payment Schedule (vendor / payable)</h3></div>
           <div className="card-body">
             <div className="dl">
-              <dt>Vendor terms</dt><dd>{v.terms}</dd>
+              <dt>Vendor terms</dt><dd>{v?.terms}</dd>
               <dt>Invoice date</dt><dd className="mono">{fmtDate(vi.date)}</dd>
-              <dt>Due date</dt><dd className="mono">{fmtDate(new Date(new Date(vi.date).getTime() + 30*86400000).toISOString().slice(0,10))}</dd>
-              <dt>Bank A/c</dt><dd className="mono small">HDFC ·0042 — TechSource Dist.</dd>
+              <dt>Due date</dt><dd className="mono">{fmtDate(new Date(new Date(vi.date + 'T00:00:00').getTime() + 30 * 86400000).toISOString().slice(0, 10))}</dd>
+              <dt>Status</dt><dd>{vi.status === 'Booked' ? <span className="badge success">Scheduled</span> : <span className="badge">{vi.status}</span>}</dd>
             </div>
+            <div className="tiny muted mt-2">This is the <strong>vendor payable</strong> — separate from the customer invoice/collections on the Sales Order.</div>
           </div>
         </div>
       </div>
     </div>
   );
 }
+
+window.RecordVendorInvoiceModal = RecordVendorInvoiceModal;
 
 // ===== Sourcing → Vendor PO bridge =====
 // In the new flow the vendor is already chosen during the inquiry, so there is

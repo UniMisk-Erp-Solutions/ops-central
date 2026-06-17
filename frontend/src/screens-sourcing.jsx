@@ -66,11 +66,18 @@ function computeMargin(src, picks, getProduct) {
       benefitPct: base ? ((base - unit) / base) * 100 : 0,
     };
   });
-  const sell = srcSellTotal(src);
+  // Budget Purchase optimises against: "our price" if set, else the indicative
+  // (line-computed) sell total.
+  const indicative = srcSellTotal(src);
+  const sell = (src.our_price && Number(src.our_price) > 0) ? Number(src.our_price) : indicative;
   const buy = perItem.reduce((s, i) => s + i.lineBuy, 0);
   const marginAmt = sell - buy;
   const marginPct = sell ? (marginAmt / sell) * 100 : 0;
-  return { sell, buy, marginAmt, marginPct, perItem };
+  return {
+    sell, indicative, buy, marginAmt, marginPct, perItem,
+    client_req: (src.client_req_price != null && src.client_req_price !== '') ? Number(src.client_req_price) : null,
+    our_price: (src.our_price != null && src.our_price !== '') ? Number(src.our_price) : null,
+  };
 }
 
 function pct1(n) { return (n >= 0 ? '+' : '') + (n || 0).toFixed(1) + '%'; }
@@ -141,6 +148,8 @@ function SourcingNew() {
   const toast = useToast();
   const [customer, setCustomer] = React.useState('');
   const [ref, setRef] = React.useState('');
+  const [clientReqPrice, setClientReqPrice] = React.useState('');
+  const [ourPrice, setOurPrice] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [lines, setLines] = React.useState([]);
   const [expanded, setExpanded] = React.useState({});
@@ -174,6 +183,8 @@ function SourcingNew() {
       id: 'src-' + Date.now(),
       src_no: `INQ/FY26/${String(1 + (state.sourcings || []).length).padStart(4, '0')}`,
       customer_id: customer, ref: ref || null, date: TODAY, status: 'Sent to Purchase',
+      client_req_price: clientReqPrice === '' ? null : Number(clientReqPrice),
+      our_price: ourPrice === '' ? null : Number(ourPrice),
       notes: notes || null, created_by: currentUser || null,
       lines, picks: {}, prices: {}, margin: {}, converted_so_id: null,
     };
@@ -220,6 +231,18 @@ function SourcingNew() {
                   <label className="field-label">Inquiry / customer ref</label>
                   <input className="input mono" placeholder="e.g. email dated 03-Jun / RFQ-882" value={ref} onChange={e => setRef(e.target.value)}/>
                   <div className="field-hint">Optional — for your reference only</div>
+                </div>
+              </div>
+              <div className="field-row mt-2">
+                <div className="field">
+                  <label className="field-label">Client's req price</label>
+                  <input type="number" min="0" className="input mono" placeholder="what the client asked (optional)" value={clientReqPrice} onChange={e => setClientReqPrice(e.target.value)}/>
+                  <div className="field-hint">Shown to Purchase as the client's target</div>
+                </div>
+                <div className="field">
+                  <label className="field-label">Our price</label>
+                  <input type="number" min="0" className="input mono" placeholder="our intended quote (optional)" value={ourPrice} onChange={e => setOurPrice(e.target.value)}/>
+                  <div className="field-hint">If set, Purchase uses this as the quote budget (else the indicative total)</div>
                 </div>
               </div>
             </div>
@@ -303,9 +326,11 @@ function SourcingNew() {
             <div className="card-body">
               <div className="dl">
                 <dt>Bundles</dt><dd className="num mono right">{lines.length}</dd>
-                <dt>Customer sell value</dt><dd className="num mono right">{inr(sell)}</dd>
+                <dt>Indicative sell value</dt><dd className="num mono right">{inr(sell)}</dd>
+                {clientReqPrice !== '' && <><dt>Client's req price</dt><dd className="num mono right">{inr(Number(clientReqPrice))}</dd></>}
+                {ourPrice !== '' && <><dt>Our price (budget)</dt><dd className="num mono right"><strong>{inr(Number(ourPrice))}</strong></dd></>}
               </div>
-              <div className="tiny muted mt-2">Purchase will source each component from vendors and return the achievable margin. Nothing is committed until you raise the Sales Order.</div>
+              <div className="tiny muted mt-2">Purchase sees the quote budget ({ourPrice !== '' ? 'your "our price"' : 'the indicative total'}) and sources each component from vendors to hit a good margin. Nothing is committed until you raise the Sales Order.</div>
             </div>
           </div>
         </div>
@@ -398,9 +423,13 @@ function SourcingDetail({ srcId }) {
       {/* Margin match — Customer sell ⟷ Vendor buy ⟷ Margin */}
       <div className="split-3 mb-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}>
-          <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Customer (SO quotation)</div>
+          <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Quote budget</div>
           <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4 }} className="mono">{inr(margin.sell)}</div>
-          <div className="tiny muted">what we quote the customer</div>
+          <div className="tiny muted">
+            {margin.our_price ? 'our price' : 'indicative quote'}
+            {margin.our_price && margin.indicative !== margin.our_price ? ` · indicative ${inr(margin.indicative)}` : ''}
+            {margin.client_req ? ` · client asked ${inr(margin.client_req)}` : ''}
+          </div>
         </div></div>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}>
           <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Vendor (PO quotation)</div>
