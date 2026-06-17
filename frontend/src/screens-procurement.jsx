@@ -388,6 +388,15 @@ function VendorPODetail({ poId }) {
   const siblings = state.vendor_pos.filter(p => p.so_id === po.so_id);
   // Vendor invoice booked against this PO (payables / 3-way side).
   const vInv = (state.vendor_invoices || []).find(x => x.po_id === po.id);
+  const grn = state.grns.find(g => g.po_id === po.id);
+  // Simple, mostly-automatic lifecycle for non-tech users.
+  const stages = [
+    { label: 'Issued', done: true },
+    { label: 'Received', done: po.status === 'Material Received' || !!grn },
+    { label: 'e-Bill', done: !!ebilled },
+    { label: 'Vendor Invoice', done: !!vInv },
+    { label: 'Booked', done: !!(vInv && vInv.status === 'Booked') },
+  ];
 
   const genEbill = () => {
     const seq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
@@ -428,6 +437,16 @@ function VendorPODetail({ poId }) {
         </div>
       </div>
       {showVI && <RecordVendorInvoiceModal poId={po.id} onClose={() => setShowVI(false)}/>}
+
+      <div className="card mb-2"><div className="card-body" style={{ padding: '10px 14px' }}>
+        <div className="h-timeline">
+          {stages.map((st, i) => {
+            const current = !st.done && (i === 0 || stages[i - 1].done);
+            return <div key={st.label} className={`h-step ${st.done ? 'done' : ''} ${current ? 'current' : ''}`}><Icon name={st.done ? 'check' : 'spinner'} size={11}/>{st.label}</div>;
+          })}
+        </div>
+        <div className="tiny muted mt-1">Ordered → received → e-Billed → vendor invoice 3-way matched → booked for payment. Receiving auto-creates the e-Bill; a matching invoice auto-books.</div>
+      </div></div>
 
       {/* Client vs vendor billing — kept explicitly separate */}
       <div className="mb-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -749,14 +768,21 @@ function GRNNew() {
       id: 'grn-' + Date.now(), grn_no: grnNo, po_id: po.id, date: grnDate, lr, received_by: 'Stores', status: 'Posted',
       items: items.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null })),
     };
+    // Auto-stamp the PO e-Bill on receipt (no manual step) and save it on the PO.
+    const ebillSeq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
+    const ebill = po.ebill && po.ebill.generated ? po.ebill : {
+      no: `VPO-EB/FY26/${ebillSeq}`,
+      irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(),
+      date: grnDate, amount: Math.round((po.amount || 0) * 1.18), generated: true, auto: true,
+    };
     mutate(s => ({
       ...s,
       grns: [grn, ...s.grns],
-      vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received' } : p),
-      notifications: [{ id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · material received → record vendor invoice for 3-way match`, date: TODAY, read: false, role: 'Billing' }, ...s.notifications],
+      vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received', ebill } : p),
+      notifications: [{ id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · received + e-Bill ${ebill.no} auto-saved → record vendor invoice`, date: TODAY, read: false, role: 'Billing' }, ...s.notifications],
     }), { action: 'create', entity: 'GRN', entity_id: grn.id });
-    toast(`${grnNo} posted · ${po.po_no} received`, 'success');
-    navigate(`grn/${grn.id}`);
+    toast(`${grnNo} posted · ${po.po_no} received · e-Bill auto-generated`, 'success');
+    navigate(`vendor-pos/${po.id}`);
   };
 
   return (
@@ -952,17 +978,26 @@ function RecordVendorInvoiceModal({ onClose, poId }) {
   const submit = () => {
     if (!po) { toast('Pick a received Vendor PO'); return; }
     if (!invNo.trim()) { toast('Enter the vendor invoice number'); return; }
+    // Auto-book clean matches; only out-of-tolerance invoices stop for review.
+    const vendorName = getVendor(po.vendor_id)?.name || 'vendor';
     const vi = {
       id: 'vi-' + Date.now(), vendor_invoice_no: invNo.trim(), po_id: po.id, grn_id: grn ? grn.id : null,
-      vendor_id: po.vendor_id, date, amount: Number(amount) || 0, status: 'Pending 3-Way Match',
+      vendor_id: po.vendor_id, date, amount: Number(amount) || 0,
+      status: within ? 'Booked' : 'Pending 3-Way Match',
       tolerance: within ? 'within' : 'outside',
     };
     mutate(s => ({
       ...s,
       vendor_invoices: [vi, ...s.vendor_invoices],
-      notifications: [{ id: 'n-vi-' + Date.now(), kind: 'match', text: `${vi.vendor_invoice_no} recorded · ${within ? 'within' : 'OUTSIDE'} tolerance · 3-way match for ${po.po_no}`, date: TODAY, read: false, role: 'Billing' }, ...s.notifications],
+      notifications: [{
+        id: 'n-vi-' + Date.now(), kind: 'match',
+        text: within
+          ? `${vi.vendor_invoice_no} auto-matched & booked · ${inrK(vi.amount)} payable to ${vendorName} (${po.po_no})`
+          : `${vi.vendor_invoice_no} OUTSIDE tolerance · needs review · ${po.po_no}`,
+        date: TODAY, read: false, role: within ? 'Managing Director' : 'Billing',
+      }, ...s.notifications],
     }), { action: 'create', entity: 'VendorInvoice', entity_id: vi.id });
-    toast(`${vi.vendor_invoice_no} recorded · ${within ? 'within tolerance' : 'outside tolerance'}`, within ? 'success' : '');
+    toast(within ? `${vi.vendor_invoice_no} matched & booked automatically` : `${vi.vendor_invoice_no} flagged — needs review`, within ? 'success' : '');
     onClose();
   };
 
