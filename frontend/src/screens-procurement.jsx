@@ -977,11 +977,12 @@ function RecordVendorInvoiceModal({ onClose, poId }) {
 
   const submit = () => {
     if (!po) { toast('Pick a received Vendor PO'); return; }
-    if (!invNo.trim()) { toast('Enter the vendor invoice number'); return; }
+    // Invoice number is optional — auto-number if left blank.
+    const finalNo = invNo.trim() || `VINV/FY26/${String(1 + state.vendor_invoices.length).padStart(4, '0')}`;
     // Auto-book clean matches; only out-of-tolerance invoices stop for review.
     const vendorName = getVendor(po.vendor_id)?.name || 'vendor';
     const vi = {
-      id: 'vi-' + Date.now(), vendor_invoice_no: invNo.trim(), po_id: po.id, grn_id: grn ? grn.id : null,
+      id: 'vi-' + Date.now(), vendor_invoice_no: finalNo, po_id: po.id, grn_id: grn ? grn.id : null,
       vendor_id: po.vendor_id, date, amount: Number(amount) || 0,
       status: within ? 'Booked' : 'Pending 3-Way Match',
       tolerance: within ? 'within' : 'outside',
@@ -1005,7 +1006,7 @@ function RecordVendorInvoiceModal({ onClose, poId }) {
     <Modal title="Record vendor invoice" onClose={onClose} footer={
       <>
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={!po || !invNo.trim()} onClick={submit}>Record &amp; run match</button>
+        <button className="btn btn-primary" disabled={!po} onClick={submit}>Record &amp; run match</button>
       </>
     }>
       {eligible.length === 0 && !poId ? (
@@ -1022,7 +1023,7 @@ function RecordVendorInvoiceModal({ onClose, poId }) {
             </select>
           </div>
           <div className="field-row mt-2">
-            <div className="field"><label className="field-label">Vendor invoice no. *</label><input className="input mono" placeholder="e.g. INV-2026-0456" value={invNo} onChange={e => setInvNo(e.target.value)}/></div>
+            <div className="field"><label className="field-label">Vendor invoice no.</label><input className="input mono" placeholder="optional — auto-numbered if blank" value={invNo} onChange={e => setInvNo(e.target.value)}/></div>
             <div className="field"><label className="field-label">Invoice date</label><input type="date" className="input mono" value={date} onChange={e => setDate(e.target.value)}/></div>
           </div>
           <div className="field mt-2">
