@@ -38,10 +38,7 @@ window.projectComparison = projectComparison;
 
 // ===== RFQ / Vendor Comparison page (auto engine) =====
 function RFQList() {
-  const { state, navigate, currentUser, getUser, getProduct, getVendor, getCustomer } = useStore();
-  const [showRFQ, setShowRFQ] = React.useState(false);
-  const role = getUser(currentUser)?.role;
-  const canFloat = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const { state, navigate, getProduct, getVendor, getCustomer } = useStore();
 
   // Auto-fetch every project that has sourcing and/or vendor POs.
   const ids = new Set();
@@ -56,10 +53,7 @@ function RFQList() {
       <div className="page-header">
         <div>
           <h1 className="page-title">RFQ / Vendor Comparison</h1>
-          <div className="page-sub">Automatic cross-vendor comparison across all projects · chosen vs cheapest, mapped per item</div>
-        </div>
-        <div className="page-actions">
-          {canFloat && <button className="btn" onClick={() => setShowRFQ(true)}><Icon name="plus" size={13}/>Float manual RFQ</button>}
+          <div className="page-sub">Automatic cross-vendor comparison across all projects · chosen vs cheapest, mapped per item · live from real PO + sourcing data</div>
         </div>
       </div>
 
@@ -111,15 +105,6 @@ function RFQList() {
           </div>
         );
       })}
-
-      {state.rfqs.length > 0 && (
-        <>
-          <div className="page-sub mt-3 mb-2" style={{ fontWeight: 600 }}>Manual RFQs</div>
-          {state.rfqs.map(rfq => <RFQCard key={rfq.id} rfq={rfq}/>)}
-        </>
-      )}
-
-      {showRFQ && <CreateRFQModal onClose={() => setShowRFQ(false)}/>}
     </div>
   );
 }

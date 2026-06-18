@@ -248,11 +248,11 @@ function InvoiceDetail({ soId }) {
             <div className="card-header"><h3 className="card-title">Internal BOM (hidden from customer)</h3></div>
             <div className="card-body small">
               <div className="muted mb-1">Components delivered against this invoice — not on PDF:</div>
-              {so.lines.flatMap(l => l.components).map((c, i) => {
+              {so.lines.flatMap(l => l.components.map(c => ({ c, bundle: l.bundle_qty || 1 }))).map(({ c, bundle }, i) => {
                 const p = getProduct(c.product_id);
                 return <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
                   <span className="small">{p.name}</span>
-                  <span className="mono small">{c.qty}</span>
+                  <span className="mono small">{c.qty * bundle}{bundle > 1 && <span className="muted"> ({c.qty}×{bundle})</span>}</span>
                 </div>;
               })}
             </div>
