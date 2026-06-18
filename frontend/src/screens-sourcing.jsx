@@ -53,12 +53,26 @@ function vendorSuggestions(product, vendors) {
 }
 
 // Compute the full margin match for an inquiry given the chosen vendor per item.
+// Candidate vendors for a sourcing: the shortlist Purchase added (quote_vendors)
+// if any, else all vendors (estimated comparison).
+function srcVendorIds(src, allVendors) {
+  const qv = (src && src.quote_vendors) || [];
+  return qv.length ? qv : allVendors.map(v => v.id);
+}
+// Unit price for a vendor on a product: the quote Purchase entered if present,
+// else the deterministic estimate.
+function srcUnitPrice(src, vid, product) {
+  const pr = (src && src.prices) ? src.prices[product.id] : null;
+  if (pr && pr[vid] != null) return pr[vid];
+  return vendorUnitPrice(vid, product);
+}
+
 function computeMargin(src, picks, getProduct) {
   const comps = srcComponentList(src);
   const perItem = comps.map(c => {
     const p = getProduct(c.product_id) || { id: c.product_id, name: c.product_id, buy: 0 };
     const vendorId = picks[c.product_id];
-    const unit = vendorId ? vendorUnitPrice(vendorId, p) : (p.buy || 0);
+    const unit = vendorId ? srcUnitPrice(src, vendorId, p) : (p.buy || 0);
     const base = p.buy || 0;
     return {
       product_id: c.product_id, qty: c.qty, vendor_id: vendorId || null,
@@ -343,24 +357,30 @@ function SourcingNew() {
 // ---- detail: vendor comparison + margin match (Purchase) + convert (Sales) --
 
 function SourcingDetail({ srcId }) {
-  const { state, navigate, mutate, getCustomer, getProduct, getCategory, getVendor, getUser, currentUser } = useStore();
+  const { state, navigate, mutate, getCustomer, getProduct, getCategory, getVendor, getUser, currentUser, addVendor } = useStore();
   const toast = useToast();
   const src = (state.sourcings || []).find(x => x.id === srcId);
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canSource = ['Purchase', 'Org Admin'].includes(role);
   const canConvert = ['Sales', 'Pre-sales', 'Org Admin'].includes(role);
   const [showConvert, setShowConvert] = React.useState(false);
+  const [showAddVendor, setShowAddVendor] = React.useState(false);
 
   const comps = src ? srcComponentList(src) : [];
-  // Local vendor picks — default to the previously-saved picks, else the
-  // cheapest vendor per item.
+  // Local vendor picks — default to the previously-saved picks, else the cheapest
+  // candidate vendor (shortlist quotes if added, else estimates).
   const [picks, setPicks] = React.useState(() => {
     if (!src) return {};
     const init = { ...(src.picks || {}) };
+    const ids = srcVendorIds(src, state.vendors);
     srcComponentList(src).forEach(c => {
       if (!init[c.product_id]) {
         const p = getProduct(c.product_id);
-        if (p) { const sug = vendorSuggestions(p, state.vendors); if (sug[0]) init[c.product_id] = sug[0].vendor.id; }
+        if (p && ids.length) {
+          let best = null;
+          ids.forEach(vid => { const pr = srcUnitPrice(src, vid, p); if (best === null || pr < best.pr) best = { vid, pr }; });
+          if (best) init[c.product_id] = best.vid;
+        }
       }
     });
     return init;
@@ -371,18 +391,30 @@ function SourcingDetail({ srcId }) {
   const cust = getCustomer(src.customer_id);
   const margin = computeMargin(src, picks, getProduct);
   const locked = src.status === 'Converted';
+  const hasQuotes = (src.quote_vendors || []).length > 0;
+
+  // Per-item vendor options from the candidate set, priced by entered quote
+  // (or estimate), cheapest first.
+  const candIds = srcVendorIds(src, state.vendors);
+  const suggFor = (p) => candIds.map(vid => {
+    const v = getVendor(vid) || { id: vid, name: vid };
+    const price = srcUnitPrice(src, vid, p);
+    const base = p.buy || 0;
+    return { vendor: v, price, benefitPct: base ? ((base - price) / base) * 100 : 0 };
+  }).sort((a, b) => a.price - b.price);
 
   const persist = (patch, audit, msg) => {
     mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, ...patch } : x) }), audit);
     if (msg) toast(msg, 'success');
   };
 
+  // Preserve entered quotes; fill estimates only where a candidate has none.
   const buildPrices = () => {
-    const out = {};
+    const out = JSON.parse(JSON.stringify(src.prices || {}));
     comps.forEach(c => {
       const p = getProduct(c.product_id); if (!p) return;
-      out[c.product_id] = {};
-      state.vendors.forEach(v => { out[c.product_id][v.id] = vendorUnitPrice(v.id, p); });
+      out[c.product_id] = out[c.product_id] || {};
+      candIds.forEach(vid => { if (out[c.product_id][vid] == null) out[c.product_id][vid] = srcUnitPrice(src, vid, p); });
     });
     return out;
   };
@@ -412,6 +444,7 @@ function SourcingDetail({ srcId }) {
           <div className="page-sub">{cust ? cust.name : '—'}{src.ref ? ` · Ref ${src.ref}` : ''} · floated {fmtDate(src.date)}</div>
         </div>
         <div className="page-actions">
+          {canSource && !locked && <button className="btn btn-primary" onClick={() => setShowAddVendor(true)}><Icon name="plus" size={13}/>Add vendor &amp; quote</button>}
           {canSource && !locked && <button className="btn" onClick={saveQuotation}><Icon name="save" size={13}/>Save vendor quotation</button>}
           {canSource && !locked && <button className="btn btn-primary" onClick={sendToSales}><Icon name="mail" size={13}/>Send to Sales</button>}
           {canConvert && !locked && (src.status === 'Sent to Sales' || src.status === 'Sourced') && (
@@ -448,7 +481,7 @@ function SourcingDetail({ srcId }) {
       <div className="card mb-2">
         <div className="card-header">
           <h3 className="card-title">Vendor comparison — per item</h3>
-          <div className="tiny muted">Suggested by best price · benefit % vs our baseline cost</div>
+          <div className="tiny muted">{hasQuotes ? `Comparing ${(src.quote_vendors || []).length} quoted vendor(s) · best price suggested ★` : 'Estimated across all vendors — use “Add vendor & quote” to enter real quotes'}</div>
         </div>
         <div className="card-body flush">
           <table className="t">
@@ -458,7 +491,7 @@ function SourcingDetail({ srcId }) {
             <tbody>
               {comps.map(c => {
                 const p = getProduct(c.product_id) || { id: c.product_id, name: c.product_id, code: c.product_id, buy: 0 };
-                const sugg = vendorSuggestions(p, state.vendors);
+                const sugg = suggFor(p);
                 const chosen = picks[c.product_id];
                 const chosenSug = sugg.find(s => s.vendor.id === chosen);
                 return (
@@ -528,7 +561,108 @@ function SourcingDetail({ srcId }) {
       </div>
 
       {showConvert && <ConvertToSOModal src={src} margin={margin} onClose={() => setShowConvert(false)}/>}
+      {showAddVendor && <AddVendorQuoteModal src={src} comps={comps} onClose={() => setShowAddVendor(false)}/>}
     </div>
+  );
+}
+
+// ---- add a vendor (master or custom) + per-line-item quote -----------------
+
+function AddVendorQuoteModal({ src, comps, onClose }) {
+  const { state, mutate, getProduct, getVendor, addVendor } = useStore();
+  const toast = useToast();
+  const already = new Set(src.quote_vendors || []);
+  const available = state.vendors.filter(v => !already.has(v.id));
+  const [mode, setMode] = React.useState(available[0] ? available[0].id : '__custom');
+  const [customName, setCustomName] = React.useState('');
+  const [customCity, setCustomCity] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  const [prices, setPrices] = React.useState(() => {
+    const init = {}; comps.forEach(c => { const p = getProduct(c.product_id); init[c.product_id] = p ? (p.buy || 0) : 0; });
+    return init;
+  });
+  const setPrice = (pid, v) => setPrices(s => ({ ...s, [pid]: v }));
+  const total = comps.reduce((s, c) => s + (Number(prices[c.product_id]) || 0) * c.qty, 0);
+
+  const submit = async () => {
+    if (saving) return;
+    setSaving(true);
+    let vid = mode, label = '';
+    if (mode === '__custom') {
+      if (!customName.trim()) { toast('Enter the custom vendor name'); setSaving(false); return; }
+      const res = await addVendor({ name: customName.trim(), city: customCity.trim() || '—' });
+      if (!res || !res.ok) { toast((res && res.error) || 'Could not add vendor'); setSaving(false); return; }
+      vid = res.vendor.id; label = customName.trim();
+    } else {
+      label = getVendor(vid)?.name || 'Vendor';
+    }
+    mutate(s => ({
+      ...s,
+      sourcings: (s.sourcings || []).map(x => {
+        if (x.id !== src.id) return x;
+        const np = JSON.parse(JSON.stringify(x.prices || {}));
+        comps.forEach(c => { np[c.product_id] = np[c.product_id] || {}; np[c.product_id][vid] = Number(prices[c.product_id]) || 0; });
+        return { ...x, prices: np, quote_vendors: Array.from(new Set([...(x.quote_vendors || []), vid])) };
+      }),
+    }), { action: 'add-vendor-quote', entity: 'Sourcing', entity_id: src.id });
+    toast(`${label} quote added`, 'success');
+    setSaving(false);
+    onClose();
+  };
+
+  return (
+    <Modal title="Add vendor & quote" onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Adding…' : `Add vendor · ${inr(total)}`}</button>
+      </>
+    }>
+      <div className="field-row">
+        <div className="field">
+          <label className="field-label">Vendor *</label>
+          <select className="select" value={mode} onChange={e => setMode(e.target.value)}>
+            {available.map(v => <option key={v.id} value={v.id}>{v.name}{v.city ? ` · ${v.city}` : ''}</option>)}
+            <option value="__custom">+ Add custom vendor…</option>
+          </select>
+        </div>
+        {mode === '__custom' && (
+          <div className="field">
+            <label className="field-label">Custom vendor name *</label>
+            <input className="input" placeholder="e.g. Sai Traders" value={customName} onChange={e => setCustomName(e.target.value)} autoFocus/>
+          </div>
+        )}
+        {mode === '__custom' && (
+          <div className="field">
+            <label className="field-label">City</label>
+            <input className="input" placeholder="optional" value={customCity} onChange={e => setCustomCity(e.target.value)}/>
+          </div>
+        )}
+      </div>
+      <div className="field mt-2">
+        <label className="field-label">This vendor's quote per item</label>
+        <div className="card"><div className="card-body flush">
+          <table className="t">
+            <thead><tr><th>Item</th><th className="num">Req qty</th><th className="num">Baseline</th><th className="num">Vendor rate ₹</th><th className="num">Line</th></tr></thead>
+            <tbody>
+              {comps.map(c => {
+                const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id, buy: 0 };
+                return (
+                  <tr key={c.product_id}>
+                    <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
+                    <td className="num">{c.qty}</td>
+                    <td className="num small muted">{inr(p.buy || 0)}</td>
+                    <td className="num"><input type="number" min="0" className="input mono" value={prices[c.product_id]} onChange={e => setPrice(c.product_id, e.target.value)} style={{ width: 100, textAlign: 'right', height: 26 }}/></td>
+                    <td className="num mono">{inr((Number(prices[c.product_id]) || 0) * c.qty)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot><tr><td colSpan="4" className="right small">Vendor quote total</td><td className="num mono"><strong>{inr(total)}</strong></td></tr></tfoot>
+          </table>
+        </div></div>
+      </div>
+      <div className="tiny muted mt-2">Add more vendors the same way — each appears as an option on every line item, and the cheapest is auto-suggested (★). You then pick per item as usual.</div>
+    </Modal>
   );
 }
 
