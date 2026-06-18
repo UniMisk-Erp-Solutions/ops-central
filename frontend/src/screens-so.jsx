@@ -409,6 +409,7 @@ function SalesOrderNew() {
                                       <input type="number" className="input mono" value={c.qty} min="0"
                                              onChange={e => updateComponent(l.id, c.product_id, { qty: parseInt(e.target.value) || 0 })}
                                              style={{ width: 70, textAlign: 'right', height: 24 }}/>
+                                      {l.bundle_qty > 1 && <div className="tiny" style={{ color: 'var(--accent)', fontWeight: 600 }}>= {c.qty * l.bundle_qty} total</div>}
                                       {c.override && <div className="tiny" style={{ color: 'var(--warning)' }}>was {c.original_qty}</div>}
                                     </td>
                                     <td className="num small muted">@ {inr(p.buy)}</td>
@@ -898,9 +899,9 @@ function SalesOrderDetail({ soId }) {
                         return (
                           <tr key={c.product_id} className="subrow">
                             <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}{transferredIn[c.product_id] ? <span className="badge info" style={{ marginLeft: 4 }} title="Received via cross-SO transfer">+{transferredIn[c.product_id]} transferred in</span> : null}</td>
-                            <td className="num">{c.qty} {p.uom}</td>
+                            <td className="num">{c.qty * l.bundle_qty} {p.uom}{l.bundle_qty > 1 && <div className="tiny muted">{c.qty} × {l.bundle_qty}</div>}</td>
                             <td className="num muted">@{inr(p.buy)}</td>
-                            <td className="num muted">{inr(p.buy * c.qty)}</td>
+                            <td className="num muted">{inr(p.buy * c.qty * l.bundle_qty)}</td>
                           </tr>
                         );
                       })}
@@ -1199,7 +1200,7 @@ function EditSOModal({ so, role, onClose }) {
                           <tr key={c.product_id} className="subrow">
                             <td></td>
                             <td><div style={{ fontSize: 12 }}>{p.name}</div><div className="tiny muted mono">{p.code}</div></td>
-                            <td className="num"><input type="number" className="input mono" min="0" value={c.qty} onChange={e => updateComp(l.id, c.product_id, { qty: parseInt(e.target.value) || 0 })} style={{ width: 64, textAlign: 'right', height: 24 }}/>{c.override && <div className="tiny" style={{ color: 'var(--warning)' }}>was {c.original_qty}</div>}</td>
+                            <td className="num"><input type="number" className="input mono" min="0" value={c.qty} onChange={e => updateComp(l.id, c.product_id, { qty: parseInt(e.target.value) || 0 })} style={{ width: 64, textAlign: 'right', height: 24 }}/>{l.bundle_qty > 1 && <div className="tiny" style={{ color: 'var(--accent)', fontWeight: 600 }}>= {c.qty * l.bundle_qty} total</div>}{c.override && <div className="tiny" style={{ color: 'var(--warning)' }}>was {c.original_qty}</div>}</td>
                             <td colSpan="2" className="num small muted">@ {inr(p.buy || 0)}</td>
                             <td><button className="btn btn-ghost btn-sm" onClick={() => removeComp(l.id, c.product_id)}><Icon name="x" size={11}/></button></td>
                           </tr>
