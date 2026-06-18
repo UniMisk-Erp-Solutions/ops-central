@@ -295,7 +295,8 @@ function buildTasks(state, mutate, navigate, toast) {
   // 6. SOs ready to dispatch → Billing to raise invoice
   state.sales_orders.filter(s => s.status === 'Ready to Dispatch').forEach(so => {
     const cust = state.customers.find(c => c.id === so.customer_id);
-    const value = so.lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0) * 1.18;
+    const billedSub = so.lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0) - (so.bill_adjustments || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    const value = Math.max(0, billedSub) * 1.18;
     tasks.push({
       id: `task-inv-${so.id}`,
       role: 'Billing',

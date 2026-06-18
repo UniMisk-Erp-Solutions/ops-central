@@ -621,6 +621,13 @@ function GRNNew() {
       id: 'grn-' + Date.now(), grn_no: grnNo, po_id: po.id, date: grnDate, lr, received_by: 'Stores', status: 'Posted',
       items: norm.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null, to_pool: it.to_pool || 0 })),
     };
+    // Removed items also auto-reduce the customer bill by their SELL value, so the
+    // client is never billed for what they didn't receive (reflected on invoice + EWB).
+    const adjustments = norm.filter(it => (it.to_pool || 0) > 0).map(it => {
+      const p = getProduct(it.product_id);
+      return { product_id: it.product_id, qty: it.to_pool, amount: Math.round((p ? (p.sell || 0) : 0) * it.to_pool), reason: 'Removed at GRN — not supplied to customer', grn_id: grn.id, date: grnDate };
+    });
+    const billCut = adjustments.reduce((s, a) => s + a.amount, 0);
     // Auto-stamp the PO e-Bill on receipt (no manual step) and save it on the PO.
     const ebillSeq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
     const ebill = po.ebill && po.ebill.generated ? po.ebill : {
@@ -632,14 +639,18 @@ function GRNNew() {
       ...s,
       grns: [grn, ...s.grns],
       vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received', ebill } : p),
+      sales_orders: (po.so_id && adjustments.length)
+        ? s.sales_orders.map(x => x.id === po.so_id ? { ...x, bill_adjustments: [...(x.bill_adjustments || []), ...adjustments] } : x)
+        : s.sales_orders,
       notifications: [
         { id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · received + e-Bill ${ebill.no} auto-saved → record vendor invoice`, date: TODAY, read: false, role: 'Billing' },
         ...(surplusUnits ? [{ id: 'n-pool-' + Date.now(), kind: 'transfer', text: `${surplusUnits} surplus unit(s) auto-moved to Master Pool from ${po.po_no}${so ? ' (' + so.so_no + ')' : ''}`, date: TODAY, read: false, role: 'Stores' }] : []),
+        ...(billCut ? [{ id: 'n-bill-' + Date.now(), kind: 'so', text: `${so ? so.so_no : po.po_no}: customer bill auto-reduced by ${inrK(billCut)} (items not supplied)`, date: TODAY, read: false, role: 'Billing' }] : []),
       ],
     }), { action: 'create', entity: 'GRN', entity_id: grn.id });
     // Surplus auto-flows to the Master Surplus Pool (real insert, no manual entry).
     if (surplus.length) await addToPool(surplus);
-    toast(`${grnNo} posted · ${po.po_no} received${surplusUnits ? ` · ${surplusUnits} → Master Pool` : ''} · e-Bill auto-generated`, 'success');
+    toast(`${grnNo} posted · ${po.po_no} received${surplusUnits ? ` · ${surplusUnits} → Master Pool` : ''}${billCut ? ` · bill −${inrK(billCut)}` : ''}`, 'success');
     navigate(`vendor-pos/${po.id}`);
   };
 

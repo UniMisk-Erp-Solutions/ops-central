@@ -620,7 +620,7 @@ function SalesOrderNew() {
 
 // ===== SO Detail =====
 function SalesOrderDetail({ soId }) {
-  const { state, navigate, mutate, getSO, getCustomer, getUser, getCategory, getProduct, soSubtotal, currentUser } = useStore();
+  const { state, navigate, mutate, getSO, getCustomer, getUser, getCategory, getProduct, soSubtotal, soBillAdjustment, soBilledSubtotal, currentUser } = useStore();
   const toast = useToast();
   const so = getSO(soId);
   const [tab, setTab] = React.useState('overview');
@@ -642,7 +642,9 @@ function SalesOrderDetail({ soId }) {
 
   const cust = getCustomer(so.customer_id);
   const pm = getUser(so.pm);
-  const subtotal = soSubtotal(so);
+  const orderedSubtotal = soSubtotal(so);
+  const billAdj = soBillAdjustment(so);
+  const subtotal = soBilledSubtotal(so);   // billed = ordered − items removed at GRN
   const grand = subtotal * 1.18;
 
   const linkedPOs = state.vendor_pos.filter(p => p.so_id === so.id);
@@ -926,7 +928,9 @@ function SalesOrderDetail({ soId }) {
               <div className="card-header"><h3 className="card-title">Totals</h3></div>
               <div className="card-body">
                 <div className="dl">
-                  <dt>Subtotal</dt><dd className="num mono right">{inr(subtotal)}</dd>
+                  <dt>{billAdj > 0 ? 'Ordered' : 'Subtotal'}</dt><dd className="num mono right">{inr(orderedSubtotal)}</dd>
+                  {billAdj > 0 && <><dt style={{ color: 'var(--danger)' }}>Less: not supplied</dt><dd className="num mono right" style={{ color: 'var(--danger)' }}>−{inr(billAdj)}</dd></>}
+                  {billAdj > 0 && <><dt>Billed subtotal</dt><dd className="num mono right"><strong>{inr(subtotal)}</strong></dd></>}
                   {sameState ? (<>
                     <dt>CGST 9%</dt><dd className="num mono right">{inr(subtotal*0.09)}</dd>
                     <dt>SGST 9%</dt><dd className="num mono right">{inr(subtotal*0.09)}</dd>

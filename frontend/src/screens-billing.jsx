@@ -68,12 +68,14 @@ function InvoiceList() {
 }
 
 function InvoiceDetail({ soId }) {
-  const { state, navigate, getSO, getCustomer, getCategory, getProduct, soSubtotal } = useStore();
+  const { state, navigate, getSO, getCustomer, getCategory, getProduct, soSubtotal, soBillAdjustment, soBilledSubtotal } = useStore();
   const so = getSO(soId);
   if (!so || !so.invoice_no) return <div className="page"><div className="empty">Invoice not found</div></div>;
   const c = getCustomer(so.customer_id);
   const sameState = c.state === state.org.state;
-  const subtotal = soSubtotal(so);
+  const orderedSubtotal = soSubtotal(so);
+  const billAdj = soBillAdjustment(so);
+  const subtotal = soBilledSubtotal(so);   // billed = ordered − items removed at GRN
   const cgst = sameState ? subtotal * 0.09 : 0;
   const sgst = sameState ? subtotal * 0.09 : 0;
   const igst = sameState ? 0 : subtotal * 0.18;
@@ -184,7 +186,9 @@ function InvoiceDetail({ soId }) {
 
           <table className="totals">
             <tbody>
-              <tr><td>Subtotal</td><td className="num mono right">{inr(subtotal)}</td></tr>
+              {billAdj > 0 && <tr><td>Ordered value</td><td className="num mono right">{inr(orderedSubtotal)}</td></tr>}
+              {billAdj > 0 && <tr><td style={{ color: 'var(--danger)' }}>Less: items not supplied</td><td className="num mono right" style={{ color: 'var(--danger)' }}>−{inr(billAdj)}</td></tr>}
+              <tr><td>{billAdj > 0 ? 'Net subtotal' : 'Subtotal'}</td><td className="num mono right">{inr(subtotal)}</td></tr>
               {sameState ? (
                 <>
                   <tr><td>CGST @ 9%</td><td className="num mono right">{inr(cgst)}</td></tr>

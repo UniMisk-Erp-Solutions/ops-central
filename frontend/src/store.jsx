@@ -239,8 +239,11 @@ function StoreProvider({ children }) {
 
   // Computed: SO line subtotal
   const soSubtotal = (so) => so.lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0);
+  // Items removed at GRN (not supplied) auto-reduce the customer bill.
+  const soBillAdjustment = (so) => (so.bill_adjustments || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const soBilledSubtotal = (so) => Math.max(0, soSubtotal(so) - soBillAdjustment(so));
   const soTotalWithGST = (so) => {
-    const sub = soSubtotal(so);
+    const sub = soBilledSubtotal(so);
     const gst = sub * 0.18;
     return sub + gst;
   };
@@ -438,7 +441,7 @@ function StoreProvider({ children }) {
     roleFilter, setRoleFilter,
     currentUser, setCurrentUser,
     getCustomer, getVendor, getProduct, getCategory, getUser, getSO,
-    soSubtotal, soTotalWithGST,
+    soSubtotal, soBillAdjustment, soBilledSubtotal, soTotalWithGST,
   };
 
   return <Store.Provider value={ctx}>{children}</Store.Provider>;
