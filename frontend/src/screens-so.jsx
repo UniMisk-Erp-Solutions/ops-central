@@ -121,8 +121,32 @@ function SalesOrdersList() {
 }
 
 // ===== SO Create =====
+// Algorithm 2 — smart Master-Surplus-Pool reuse engine. Suggests pool items that
+// are RELEVANT to this order (i.e. the product is part of the SO's BOM) and in
+// stock, sized to what's needed, FIFO by receipt date. Irrelevant pool stock is
+// never shown for this SO.
+function poolSuggestionsForSO(state, lines, getProduct) {
+  const need = {};
+  (lines || []).forEach(l => (l.components || []).forEach(c => { need[c.product_id] = (need[c.product_id] || 0) + (c.qty || 0) * (l.bundle_qty || 1); }));
+  const byProd = {};
+  (state.pool || []).forEach(p => {
+    const b = (byProd[p.product_id] = byProd[p.product_id] || { qty: 0, srcs: [] });
+    b.qty += Number(p.qty) || 0; b.srcs.push({ id: p.id, qty: Number(p.qty) || 0, source_so: p.source_so, date: p.received_date });
+  });
+  const out = [];
+  Object.keys(need).forEach(pid => {
+    const pool = byProd[pid];
+    if (pool && pool.qty > 0 && need[pid] > 0) {
+      pool.srcs.sort((a, b) => (a.date || '').localeCompare(b.date || ''));   // FIFO
+      out.push({ product_id: pid, product: getProduct(pid), needed: need[pid], available: pool.qty, suggestUse: Math.min(need[pid], pool.qty), srcs: pool.srcs });
+    }
+  });
+  out.sort((a, b) => (b.suggestUse * ((b.product && b.product.buy) || 0)) - (a.suggestUse * ((a.product && a.product.buy) || 0)));
+  return out;
+}
+
 function SalesOrderNew() {
-  const { state, navigate, mutate, getCustomer, getProduct, getCategory } = useStore();
+  const { state, navigate, mutate, getCustomer, getProduct, getCategory, consumeFromPool } = useStore();
   const toast = useToast();
 
   const [customer, setCustomer] = React.useState('');
@@ -139,6 +163,7 @@ function SalesOrderNew() {
   const [notes, setNotes] = React.useState('');
   const [lines, setLines] = React.useState([]);
   const [expandedLines, setExpandedLines] = React.useState({});
+  const [poolUse, setPoolUse] = React.useState({});   // product_id -> qty to reuse from pool
 
   // Admin-defined custom SO fields (Customisation → Sales Order form).
   const customFields = (state.config.so_form_fields || []).filter(f => f.custom);
@@ -208,25 +233,39 @@ function SalesOrderNew() {
   const customOk = customFields.every(f => !f.required || (extra[f.key] !== undefined && extra[f.key] !== ''));
   const canSubmit = customer && poRef && lines.length > 0 && customOk;
 
-  const handleSubmit = () => {
+  // Pool reuse suggestions for the current lines; effective use = min(picked, needed, available).
+  const poolSugg = poolSuggestionsForSO(state, lines, getProduct);
+  const useQtyFor = (s) => Math.max(0, Math.min(poolUse[s.product_id] != null ? Number(poolUse[s.product_id]) : s.suggestUse, s.needed, s.available));
+  const poolSavings = poolSugg.reduce((sum, s) => sum + useQtyFor(s) * ((s.product && s.product.buy) || 0), 0);
+
+  const handleSubmit = async () => {
+    // Build pool allocations + FIFO consume list from the chosen reuse quantities.
+    const pool_alloc = []; const consume = [];
+    poolSugg.forEach(s => {
+      let q = useQtyFor(s);
+      if (q <= 0) return;
+      pool_alloc.push({ product_id: s.product_id, qty: q, name: s.product ? s.product.name : s.product_id });
+      for (const src of s.srcs) { if (q <= 0) break; const take = Math.min(q, src.qty); if (take > 0) { consume.push({ id: src.id, qty: take }); q -= take; } }
+    });
     const newSO = {
       id: 'so-' + Date.now(),
       so_no: `SO/FY26/${String(17 + state.sales_orders.length).padStart(4, '0')}`,
       customer_id: customer, customer_po: poRef, date, expected, priority, order_type: orderType,
       pm, ship_to: cust.address, payment_terms: paymentTerms, status: 'Pending Approval',
-      lines, notes, extra,
+      lines, notes, extra, pool_alloc,
     };
     mutate(s => ({
       ...s,
       sales_orders: [newSO, ...s.sales_orders],
       notifications: [
-        { id: 'n-so-' + Date.now(), kind: 'so', text: `${newSO.so_no} submitted for approval by Sales · ${cust.name}`, date: TODAY, read: false, role: 'Project Manager' },
+        { id: 'n-so-' + Date.now(), kind: 'so', text: `${newSO.so_no} submitted for approval by Sales · ${cust.name}${pool_alloc.length ? ` · ${pool_alloc.length} item(s) reused from Master Pool` : ''}`, date: TODAY, read: false, role: 'Project Manager' },
         ...s.notifications,
       ],
     }), {
       action: 'create', entity: 'SalesOrder', entity_id: newSO.id, user_id: 'u-sales',
     });
-    toast(`${newSO.so_no} submitted · awaiting PM approval`, 'success');
+    if (consume.length) await consumeFromPool(consume);   // decrement pool so the same stock isn't reused twice
+    toast(`${newSO.so_no} submitted · awaiting PM approval${pool_alloc.length ? ' · pool stock allocated' : ''}`, 'success');
     navigate(`sales-orders/${newSO.id}`);
   };
 
@@ -444,6 +483,35 @@ function SalesOrderNew() {
               )}
             </div>
           </div>
+
+          {poolSugg.length > 0 && (
+            <div className="card" style={{ borderLeft: '3px solid var(--success)' }}>
+              <div className="card-header">
+                <div>
+                  <h3 className="card-title">♻ Reuse from Master Surplus Pool</h3>
+                  <div className="tiny muted">Relevant to this order's components · auto-suggested · reduces fresh procurement</div>
+                </div>
+                {poolSavings > 0 && <span className="badge success">saves ~{inr(poolSavings)}</span>}
+              </div>
+              <div className="card-body flush">
+                <table className="t">
+                  <thead><tr><th>Item</th><th className="num">Needed</th><th className="num">In pool</th><th className="num">Use</th><th className="num">Saves</th></tr></thead>
+                  <tbody>
+                    {poolSugg.map(s => (
+                      <tr key={s.product_id}>
+                        <td>{s.product ? s.product.name : s.product_id}<div className="tiny muted mono">{s.product ? s.product.code : ''}</div></td>
+                        <td className="num">{s.needed}</td>
+                        <td className="num">{s.available}</td>
+                        <td className="num"><input type="number" min="0" max={Math.min(s.needed, s.available)} className="input mono" value={poolUse[s.product_id] != null ? poolUse[s.product_id] : s.suggestUse} onChange={e => setPoolUse(m => ({ ...m, [s.product_id]: e.target.value }))} style={{ width: 64, textAlign: 'right', height: 24 }}/></td>
+                        <td className="num mono">{inr(useQtyFor(s) * ((s.product && s.product.buy) || 0))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="tiny muted" style={{ padding: '8px 14px' }}>Chosen quantities are allocated from the pool on submit — pool stock is decremented and procurement skips these. Irrelevant pool items are hidden.</div>
+            </div>
+          )}
 
           <div className="card">
             <div className="form-section">
@@ -812,6 +880,22 @@ function SalesOrderDetail({ soId }) {
                 </div>
               </div>
             </div>
+            {(so.pool_alloc || []).length > 0 && (
+              <div className="card" style={{ borderLeft: '3px solid var(--success)' }}>
+                <div className="card-header"><h3 className="card-title">♻ Reused from Master Surplus Pool</h3></div>
+                <div className="card-body flush">
+                  <table className="t">
+                    <thead><tr><th>Item</th><th className="num">Qty from pool</th></tr></thead>
+                    <tbody>
+                      {(so.pool_alloc || []).map((a, i) => (
+                        <tr key={i}><td>{a.name || (getProduct(a.product_id) || {}).name || a.product_id}</td><td className="num"><strong>{a.qty}</strong></td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="tiny muted" style={{ padding: '6px 14px' }}>These were taken from existing surplus stock — procurement does not re-buy them.</div>
+                </div>
+              </div>
+            )}
             {linkedPOs.length > 0 && (
               <div className="card">
                 <div className="card-header"><h3 className="card-title">Linked Vendor POs</h3></div>

@@ -384,6 +384,46 @@ function StoreProvider({ children }) {
     return { ok: true, customer: row };
   }, []);
 
+  // ===== Master Surplus Pool writes (pool uses a DB identity PK, so we insert
+  // explicitly rather than via the diff-sync) =====
+  const addToPool = React.useCallback(async (rows) => {
+    const clean = (rows || []).filter(r => (Number(r.qty) || 0) > 0).map(r => ({
+      product_id: r.product_id, qty: Number(r.qty),
+      source_so: r.source_so || null,
+      received_date: r.received_date || new Date().toISOString().slice(0, 10),
+    }));
+    if (!clean.length) return { ok: true, items: [] };
+    if (window.OPC_SB) {
+      const { data, error } = await window.OPC_SB.from('pool').insert(clean).select('*');
+      if (error) { console.error('[OPC] addToPool', error.message); return { ok: false, error: error.message }; }
+      setState(prev => ({ ...prev, pool: [...(data || []), ...prev.pool] }));
+      return { ok: true, items: data };
+    }
+    const temp = clean.map((r, i) => ({ id: 'pool-' + Date.now() + '-' + i, ...r }));
+    setState(prev => ({ ...prev, pool: [...temp, ...prev.pool] }));
+    return { ok: true, items: temp };
+  }, []);
+
+  // allocs: [{ id, qty }] — reduce each pool row by qty; delete when it hits 0.
+  const consumeFromPool = React.useCallback(async (allocs) => {
+    if (!allocs || !allocs.length) return { ok: true };
+    const cur = stateRef.current.pool || [];
+    const updates = []; const deletes = [];
+    const nextPool = cur.map(p => {
+      const a = allocs.find(x => String(x.id) === String(p.id));
+      if (!a) return p;
+      const nq = (Number(p.qty) || 0) - (Number(a.qty) || 0);
+      if (nq <= 0) { deletes.push(p.id); return null; }
+      updates.push({ id: p.id, qty: nq }); return { ...p, qty: nq };
+    }).filter(Boolean);
+    setState(prev => ({ ...prev, pool: nextPool }));
+    if (window.OPC_SB) {
+      for (const u of updates) { const { error } = await window.OPC_SB.from('pool').update({ qty: u.qty }).eq('id', u.id); if (error) console.error('[OPC] pool update', error.message); }
+      if (deletes.length) { const { error } = await window.OPC_SB.from('pool').delete().in('id', deletes); if (error) console.error('[OPC] pool delete', error.message); }
+    }
+    return { ok: true };
+  }, []);
+
   const resetData = () => {
     localStorage.removeItem(STORAGE_KEY);
     window.location.reload();
@@ -392,7 +432,7 @@ function StoreProvider({ children }) {
   const ctx = {
     state, setState, mutate, resetData, saveConfig,
     login, logout, signupAdmin, createUser, setUserActive, removeUser,
-    addVendor, addCustomer,
+    addVendor, addCustomer, addToPool, consumeFromPool,
     impersonate, stopImpersonating, realUserId, authReady,
     route, navigate,
     roleFilter, setRoleFilter,

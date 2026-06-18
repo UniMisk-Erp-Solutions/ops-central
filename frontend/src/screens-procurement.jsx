@@ -576,7 +576,7 @@ function GRNDetail({ grnId }) {
 }
 
 function GRNNew() {
-  const { navigate, state, mutate, getVendor, getProduct, getSO } = useStore();
+  const { navigate, state, mutate, getVendor, getProduct, getSO, addToPool } = useStore();
   const toast = useToast();
   // Receivable = POs not yet fully received.
   const receivable = state.vendor_pos.filter(p => p.status !== 'Material Received');
@@ -589,7 +589,7 @@ function GRNNew() {
   const [lr, setLr] = React.useState('DELHIVERY-D88234');
   const [grnDate, setGrnDate] = React.useState(TODAY);
   React.useEffect(() => {
-    setItems(po ? po.items.map(it => ({ ...it, received: it.qty, accepted: it.qty, rejected: 0, reason: '' })) : []);
+    setItems(po ? po.items.map(it => ({ ...it, received: it.qty, accepted: it.qty, rejected: 0, reason: '', to_pool: 0 })) : []);
   }, [poId]);
 
   if (state.vendor_pos.length === 0) return (
@@ -608,13 +608,18 @@ function GRNNew() {
   const v = po ? getVendor(po.vendor_id) : null;
   const so = po ? getSO(po.so_id) : null;
 
-  const post = () => {
+  const post = async () => {
     if (!po) { toast('Pick a Vendor PO to receive against'); return; }
     if (items.some(it => it.rejected > 0 && !it.reason)) { toast('Add a reason for each rejected line'); return; }
+    // Normalise: accepted into this SO = received − rejected − not-needed(to pool).
+    const norm = items.map(it => ({ ...it, accepted: Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0)) }));
+    const surplus = norm.filter(it => (it.to_pool || 0) > 0)
+      .map(it => ({ product_id: it.product_id, qty: it.to_pool, source_so: po.so_id, received_date: grnDate }));
+    const surplusUnits = surplus.reduce((s, x) => s + x.qty, 0);
     const grnNo = `GRN/FY26/${String(28 + state.grns.length).padStart(4, '0')}`;
     const grn = {
       id: 'grn-' + Date.now(), grn_no: grnNo, po_id: po.id, date: grnDate, lr, received_by: 'Stores', status: 'Posted',
-      items: items.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null })),
+      items: norm.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null, to_pool: it.to_pool || 0 })),
     };
     // Auto-stamp the PO e-Bill on receipt (no manual step) and save it on the PO.
     const ebillSeq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
@@ -627,9 +632,14 @@ function GRNNew() {
       ...s,
       grns: [grn, ...s.grns],
       vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received', ebill } : p),
-      notifications: [{ id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · received + e-Bill ${ebill.no} auto-saved → record vendor invoice`, date: TODAY, read: false, role: 'Billing' }, ...s.notifications],
+      notifications: [
+        { id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · received + e-Bill ${ebill.no} auto-saved → record vendor invoice`, date: TODAY, read: false, role: 'Billing' },
+        ...(surplusUnits ? [{ id: 'n-pool-' + Date.now(), kind: 'transfer', text: `${surplusUnits} surplus unit(s) auto-moved to Master Pool from ${po.po_no}${so ? ' (' + so.so_no + ')' : ''}`, date: TODAY, read: false, role: 'Stores' }] : []),
+      ],
     }), { action: 'create', entity: 'GRN', entity_id: grn.id });
-    toast(`${grnNo} posted · ${po.po_no} received · e-Bill auto-generated`, 'success');
+    // Surplus auto-flows to the Master Surplus Pool (real insert, no manual entry).
+    if (surplus.length) await addToPool(surplus);
+    toast(`${grnNo} posted · ${po.po_no} received${surplusUnits ? ` · ${surplusUnits} → Master Pool` : ''} · e-Bill auto-generated`, 'success');
     navigate(`vendor-pos/${po.id}`);
   };
 
@@ -670,26 +680,33 @@ function GRNNew() {
             <div className="card-header"><h3 className="card-title">Receipt Lines</h3></div>
             <div className="card-body flush">
               <table className="t">
-                <thead><tr><th>Item</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Accepted</th><th className="num">Rejected</th><th>Reject reason</th></tr></thead>
+                <thead><tr><th>Item</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Accepted</th><th className="num">Rejected</th><th className="num">Not needed → Pool</th><th>Reject reason</th></tr></thead>
                 <tbody>
                   {items.map((it, i) => {
                     const p = getProduct(it.product_id);
+                    const acc = Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0));
                     return (
                       <tr key={i}>
                         <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
                         <td className="num">{it.qty}</td>
                         <td className="num">
-                          <input type="number" className="input mono" value={it.received}
-                                 onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, received: v, accepted: v - it.rejected}; setItems(next); }}
-                                 style={{ width: 70, textAlign: 'right' }}/>
+                          <input type="number" className="input mono" min="0" value={it.received}
+                                 onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, received: v, accepted: Math.max(0, v - it.rejected - (it.to_pool||0))}; setItems(next); }}
+                                 style={{ width: 64, textAlign: 'right' }}/>
                         </td>
                         <td className="num">
-                          <input type="number" className="input mono" value={it.accepted} readOnly style={{ width: 70, textAlign: 'right', background: 'var(--bg-subtle)' }}/>
+                          <input type="number" className="input mono" value={acc} readOnly style={{ width: 64, textAlign: 'right', background: 'var(--bg-subtle)' }}/>
                         </td>
                         <td className="num">
-                          <input type="number" className="input mono" value={it.rejected}
-                                 onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, rejected: v, accepted: it.received - v}; setItems(next); }}
+                          <input type="number" className="input mono" min="0" value={it.rejected}
+                                 onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, rejected: v, accepted: Math.max(0, it.received - v - (it.to_pool||0))}; setItems(next); }}
+                                 style={{ width: 64, textAlign: 'right' }}/>
+                        </td>
+                        <td className="num">
+                          <input type="number" className="input mono" min="0" value={it.to_pool || 0}
+                                 onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, to_pool: v, accepted: Math.max(0, it.received - it.rejected - v)}; setItems(next); }}
                                  style={{ width: 70, textAlign: 'right' }}/>
+                          {(it.to_pool||0) > 0 && <div className="tiny" style={{ color: 'var(--accent)' }}>→ Master Pool</div>}
                         </td>
                         <td><input className="input" placeholder={it.rejected > 0 ? 'Reason required' : ''} disabled={!it.rejected} value={it.reason || ''} onChange={e => { const next = [...items]; next[i] = { ...it, reason: e.target.value }; setItems(next); }}/></td>
                       </tr>
@@ -1020,6 +1037,9 @@ function soReqComponents(so) {
   (so.lines || []).forEach(l => (l.components || []).forEach(c => {
     m[c.product_id] = (m[c.product_id] || 0) + (c.qty || 0) * (l.bundle_qty || 1);
   }));
+  // Subtract anything fulfilled from the Master Surplus Pool so we never re-buy it.
+  (so.pool_alloc || []).forEach(a => { if (m[a.product_id] != null) m[a.product_id] = m[a.product_id] - (Number(a.qty) || 0); });
+  Object.keys(m).forEach(k => { if (m[k] <= 0) delete m[k]; });
   return m;
 }
 

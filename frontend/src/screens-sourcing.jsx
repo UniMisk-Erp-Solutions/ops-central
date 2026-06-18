@@ -67,6 +67,27 @@ function srcUnitPrice(src, vid, product) {
   return vendorUnitPrice(vid, product);
 }
 
+// Algorithm 1 — smart price suggestion for a repeat vendor+product from ALL
+// history (issued Vendor POs + recorded sourcing quotes), recency-weighted so
+// the latest deals dominate. Returns { price, n, last } or null if no history.
+// This only SUGGESTS (prefills an editable field) — it never auto-commits.
+function suggestVendorPrice(state, vendorId, productId) {
+  const pts = [];
+  (state.vendor_pos || []).forEach(po => {
+    if (po.vendor_id !== vendorId) return;
+    (po.items || []).forEach(it => { if (it.product_id === productId && Number(it.rate) > 0) pts.push({ price: Number(it.rate), date: po.date || '' }); });
+  });
+  (state.sourcings || []).forEach(s => {
+    const pr = (s.prices || {})[productId];
+    if (pr && pr[vendorId] != null && Number(pr[vendorId]) > 0) pts.push({ price: Number(pr[vendorId]), date: s.date || '' });
+  });
+  if (!pts.length) return null;
+  pts.sort((a, b) => (b.date || '').localeCompare(a.date || ''));     // newest first
+  let wsum = 0, w = 0;
+  pts.forEach((p, i) => { const weight = Math.pow(0.6, i); wsum += p.price * weight; w += weight; });   // exp recency decay
+  return { price: Math.round(wsum / w), n: pts.length, last: pts[0].price };
+}
+
 function computeMargin(src, picks, getProduct) {
   const comps = srcComponentList(src);
   const perItem = comps.map(c => {
@@ -581,6 +602,18 @@ function AddVendorQuoteModal({ src, comps, onClose }) {
     const init = {}; comps.forEach(c => { const p = getProduct(c.product_id); init[c.product_id] = p ? (p.buy || 0) : 0; });
     return init;
   });
+  // Suggest (prefill) prices from this vendor's history when a real vendor is
+  // chosen — editable, never auto-committed. Custom vendors → baseline.
+  React.useEffect(() => {
+    const next = {};
+    comps.forEach(c => {
+      const p = getProduct(c.product_id);
+      let v = p ? (p.buy || 0) : 0;
+      if (mode !== '__custom') { const sug = suggestVendorPrice(state, mode, c.product_id); if (sug) v = sug.price; }
+      next[c.product_id] = v;
+    });
+    setPrices(next);
+  }, [mode]);
   const setPrice = (pid, v) => setPrices(s => ({ ...s, [pid]: v }));
   const total = comps.reduce((s, c) => s + (Number(prices[c.product_id]) || 0) * c.qty, 0);
 
@@ -646,12 +679,16 @@ function AddVendorQuoteModal({ src, comps, onClose }) {
             <tbody>
               {comps.map(c => {
                 const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id, buy: 0 };
+                const sug = mode !== '__custom' ? suggestVendorPrice(state, mode, c.product_id) : null;
                 return (
                   <tr key={c.product_id}>
                     <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
                     <td className="num">{c.qty}</td>
                     <td className="num small muted">{inr(p.buy || 0)}</td>
-                    <td className="num"><input type="number" min="0" className="input mono" value={prices[c.product_id]} onChange={e => setPrice(c.product_id, e.target.value)} style={{ width: 100, textAlign: 'right', height: 26 }}/></td>
+                    <td className="num">
+                      <input type="number" min="0" className="input mono" value={prices[c.product_id]} onChange={e => setPrice(c.product_id, e.target.value)} style={{ width: 100, textAlign: 'right', height: 26 }}/>
+                      {sug && <div className="tiny" style={{ color: 'var(--accent)' }} title={`Recency-weighted from ${sug.n} past quote(s); last ${inr(sug.last)}`}>≈ {inr(sug.price)} · {sug.n} past</div>}
+                    </td>
                     <td className="num mono">{inr((Number(prices[c.product_id]) || 0) * c.qty)}</td>
                   </tr>
                 );
