@@ -178,25 +178,24 @@ function SalesOrderNew() {
   const updateLine = (id, patch) => setLines(lines.map(l => l.id === id ? { ...l, ...patch } : l));
   const removeLine = (id) => setLines(lines.filter(l => l.id !== id));
 
+  // Per-bundle sell price derived from the components (qty × product sell).
+  const compSell = (components) => components.reduce((s, c) => { const p = getProduct(c.product_id); return s + (p ? p.sell : 0) * (c.qty || 0); }, 0);
+  // Rebuild a line with new components AND its recomputed unit price → totals live.
+  const withComps = (l, components) => ({ ...l, components, unit_price: compSell(components) });
+
   const updateComponent = (lineId, prodId, patch) => {
-    setLines(lines.map(l => l.id !== lineId ? l : {
-      ...l,
-      components: l.components.map(c => c.product_id !== prodId ? c : { ...c, ...patch, override: patch.qty !== undefined ? patch.qty !== c.original_qty : c.override })
-    }));
+    setLines(lines.map(l => l.id !== lineId ? l : withComps(l,
+      l.components.map(c => c.product_id !== prodId ? c : { ...c, ...patch, override: patch.qty !== undefined ? patch.qty !== c.original_qty : c.override }))));
   };
 
   const addComponent = (lineId, prodId) => {
-    setLines(lines.map(l => l.id !== lineId ? l : {
-      ...l,
-      components: [...l.components, { product_id: prodId, qty: 1, override: true, original_qty: 0 }]
-    }));
+    setLines(lines.map(l => l.id !== lineId ? l : withComps(l,
+      [...l.components, { product_id: prodId, qty: 1, override: true, original_qty: 0 }])));
   };
 
   const removeComponent = (lineId, prodId) => {
-    setLines(lines.map(l => l.id !== lineId ? l : {
-      ...l,
-      components: l.components.filter(c => c.product_id !== prodId)
-    }));
+    setLines(lines.map(l => l.id !== lineId ? l : withComps(l,
+      l.components.filter(c => c.product_id !== prodId))));
   };
 
   const subtotal = lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0);
@@ -414,7 +413,7 @@ function SalesOrderNew() {
                                     </td>
                                     <td className="num small muted">@ {inr(p.buy)}</td>
                                     <td></td>
-                                    <td className="num small muted">{inr(p.buy * c.qty)}</td>
+                                    <td className="num small muted">{inr(p.buy * c.qty * l.bundle_qty)}</td>
                                     <td>
                                       <button className="btn btn-ghost btn-sm" onClick={() => removeComponent(l.id, c.product_id)}>
                                         <Icon name="x" size={11}/>
@@ -1122,11 +1121,12 @@ function EditSOModal({ so, role, onClose }) {
   };
   const updateLine = (id, patch) => setLines(ls => ls.map(l => l.id === id ? { ...l, ...patch } : l));
   const removeLine = (id) => setLines(ls => ls.filter(l => l.id !== id));
-  const updateComp = (lid, pid, patch) => setLines(ls => ls.map(l => l.id !== lid ? l : {
-    ...l, components: l.components.map(c => c.product_id !== pid ? c : { ...c, ...patch, override: patch.qty !== undefined ? patch.qty !== c.original_qty : c.override }),
-  }));
-  const addComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : { ...l, components: [...l.components, { product_id: pid, qty: 1, override: true, original_qty: 0 }] }));
-  const removeComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : { ...l, components: l.components.filter(c => c.product_id !== pid) }));
+  const compSell = (components) => components.reduce((s, c) => { const p = getProduct(c.product_id); return s + (p ? p.sell : 0) * (c.qty || 0); }, 0);
+  const withComps = (l, components) => ({ ...l, components, unit_price: compSell(components) });
+  const updateComp = (lid, pid, patch) => setLines(ls => ls.map(l => l.id !== lid ? l : withComps(l,
+    l.components.map(c => c.product_id !== pid ? c : { ...c, ...patch, override: patch.qty !== undefined ? patch.qty !== c.original_qty : c.override }))));
+  const addComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : withComps(l, [...l.components, { product_id: pid, qty: 1, override: true, original_qty: 0 }])));
+  const removeComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : withComps(l, l.components.filter(c => c.product_id !== pid))));
 
   const subtotal = lines.reduce((s, l) => s + l.bundle_qty * l.unit_price, 0);
 

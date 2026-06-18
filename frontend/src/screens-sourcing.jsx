@@ -167,11 +167,12 @@ function SourcingNew() {
   };
   const updateLine = (id, patch) => setLines(ls => ls.map(l => l.id === id ? { ...l, ...patch } : l));
   const removeLine = (id) => setLines(ls => ls.filter(l => l.id !== id));
-  const updateComp = (lid, pid, patch) => setLines(ls => ls.map(l => l.id !== lid ? l : {
-    ...l, components: l.components.map(c => c.product_id !== pid ? c : { ...c, ...patch, override: patch.qty !== undefined ? patch.qty !== c.original_qty : c.override }),
-  }));
-  const addComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : { ...l, components: [...l.components, { product_id: pid, qty: 1, override: true, original_qty: 0 }] }));
-  const removeComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : { ...l, components: l.components.filter(c => c.product_id !== pid) }));
+  const compSell = (components) => components.reduce((s, c) => { const p = getProduct(c.product_id); return s + (p ? p.sell : 0) * (c.qty || 0); }, 0);
+  const withComps = (l, components) => ({ ...l, components, unit_price: compSell(components) });
+  const updateComp = (lid, pid, patch) => setLines(ls => ls.map(l => l.id !== lid ? l : withComps(l,
+    l.components.map(c => c.product_id !== pid ? c : { ...c, ...patch, override: patch.qty !== undefined ? patch.qty !== c.original_qty : c.override }))));
+  const addComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : withComps(l, [...l.components, { product_id: pid, qty: 1, override: true, original_qty: 0 }])));
+  const removeComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : withComps(l, l.components.filter(c => c.product_id !== pid))));
 
   const cust = customer ? getCustomer(customer) : null;
   const sell = lines.reduce((s, l) => s + l.bundle_qty * l.unit_price, 0);
