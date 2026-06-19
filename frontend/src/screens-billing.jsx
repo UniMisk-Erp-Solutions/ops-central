@@ -424,61 +424,99 @@ function soReceivedQty(so, state) {
   return acc;
 }
 
-// Per-line fulfilment: how many complete bundles the received material supports
-// (greedy component allocation), vs already-invoiced, → invoiceable now.
+// Component-level invoiced ledger (works for both bundle- and component-mode
+// invoices, so the two reconcile exactly against received material).
+function soInvoicedComp(so) {
+  const inv = {};
+  (so.invoices || []).forEach(i => Object.entries(i.comp_consumed || {}).forEach(([pid, q]) => { inv[pid] = (inv[pid] || 0) + (Number(q) || 0); }));
+  return inv;
+}
+
+// Per-component: received vs invoiced vs invoiceable (for component-level billing).
+function soComponentState(so, state, getProduct) {
+  const recv = soReceivedQty(so, state);
+  const invd = soInvoicedComp(so);
+  return Object.keys(recv).filter(pid => (recv[pid] || 0) > 0).map(pid => {
+    const p = getProduct ? getProduct(pid) : null;
+    const received = recv[pid] || 0, invoiced = invd[pid] || 0;
+    return { product_id: pid, product: p, received, invoiced, invoiceable: Math.max(0, received - invoiced), sell: p ? (p.sell || 0) : 0 };
+  });
+}
+
+// Per-line fulfilment: complete bundles the *not-yet-invoiced* received components
+// support (greedy allocation) → invoiceable bundles now.
 function soInvoiceState(so, state) {
-  const avail = { ...soReceivedQty(so, state) };
-  const invoiced = {};
-  (so.invoices || []).forEach(inv => (inv.lines || []).forEach(l => { invoiced[l.line_id] = (invoiced[l.line_id] || 0) + (l.qty || 0); }));
+  const recv = soReceivedQty(so, state);
+  const invd = soInvoicedComp(so);
+  const avail = {};
+  Object.keys(recv).forEach(pid => { avail[pid] = (recv[pid] || 0) - (invd[pid] || 0); });
   return (so.lines || []).map(l => {
     let completable = l.bundle_qty || 0;
     (l.components || []).forEach(c => { const per = c.qty || 0; if (per > 0) completable = Math.min(completable, Math.floor((avail[c.product_id] || 0) / per)); });
     completable = Math.max(0, Math.min(completable, l.bundle_qty || 0));
     (l.components || []).forEach(c => { avail[c.product_id] = (avail[c.product_id] || 0) - completable * (c.qty || 0); });
-    const inv = invoiced[l.id] || 0;
-    return { line_id: l.id, category_id: l.category_id, ordered: l.bundle_qty || 0, unit_price: l.unit_price || 0, fulfilled: completable, invoiced: inv, invoiceableNow: Math.max(0, completable - inv) };
+    return { line_id: l.id, category_id: l.category_id, ordered: l.bundle_qty || 0, unit_price: l.unit_price || 0, components: l.components || [], invoiceableNow: completable };
   });
 }
 
-// Build (but don't commit) the next invoice for an SO. mode: 'partial' (received
-// & not-yet-invoiced bundles) or 'final' (entire remaining balance).
-function buildInvoice(so, state, mode, currentUser, getUser) {
-  // If a single legacy invoice was already raised via the direct path, treat the
-  // SO as fully invoiced (don't double-bill).
-  if ((so.invoices || []).length === 0 && so.invoice_no) return null;
-  const st = soInvoiceState(so, state);
-  const billLines = st.map(x => ({ ...x, qty: mode === 'final' ? (x.ordered - x.invoiced) : x.invoiceableNow })).filter(x => x.qty > 0);
-  if (!billLines.length && mode !== 'final') return null;
-  let subtotal = billLines.reduce((a, x) => a + x.qty * x.unit_price, 0);
+// Build (don't commit) the next invoice. opts.mode: 'bundle' | 'component' | 'final'.
+// opts.selections optionally caps qty per line (bundle) or per product (component);
+// default = everything invoiceable. Records comp_consumed for the ledger.
+function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
+  if ((so.invoices || []).length === 0 && so.invoice_no) return null;   // legacy direct invoice → done
+  const mode = (opts && opts.mode) || 'bundle';
+  const sel = opts && opts.selections;
   const invoicedSub = (so.invoices || []).reduce((a, i) => a + (i.subtotal || 0), 0);
   const remainingBilled = Math.max(0, _soBilled(so) - invoicedSub);
-  subtotal = mode === 'final' ? remainingBilled : Math.min(subtotal, remainingBilled);
+  if (remainingBilled <= 0.5) return null;
+
+  const lines = []; const comp = {}; let subtotal = 0;
+  if (mode === 'component') {
+    soComponentState(so, state, getProduct).forEach(r => {
+      const want = sel ? (Number(sel[r.product_id]) || 0) : r.invoiceable;
+      const qty = Math.max(0, Math.min(want, r.invoiceable));
+      if (qty > 0) { lines.push({ kind: 'component', ref_id: r.product_id, label: r.product ? r.product.name : r.product_id, qty, unit_price: r.sell, amount: qty * r.sell }); comp[r.product_id] = (comp[r.product_id] || 0) + qty; subtotal += qty * r.sell; }
+    });
+  } else if (mode === 'final') {
+    soComponentState(so, state, getProduct).forEach(r => { if (r.invoiceable > 0) comp[r.product_id] = (comp[r.product_id] || 0) + r.invoiceable; });
+    subtotal = remainingBilled;
+    lines.push({ kind: 'balance', ref_id: 'balance', label: 'Balance of order', qty: 1, unit_price: Math.round(subtotal), amount: Math.round(subtotal) });
+  } else { // bundle
+    soInvoiceState(so, state).forEach(x => {
+      const want = sel ? (Number(sel[x.line_id]) || 0) : x.invoiceableNow;
+      const qty = Math.max(0, Math.min(want, x.invoiceableNow));
+      if (qty > 0) {
+        lines.push({ kind: 'bundle', ref_id: x.line_id, category_id: x.category_id, qty, unit_price: x.unit_price, amount: qty * x.unit_price });
+        (x.components || []).forEach(c => { comp[c.product_id] = (comp[c.product_id] || 0) + (c.qty || 0) * qty; });
+        subtotal += qty * x.unit_price;
+      }
+    });
+  }
   if (subtotal <= 0.5) return null;
-  subtotal = Math.round(subtotal);
+  subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
   const total = Math.round(subtotal * 1.18);
+  const fully = (remainingBilled - subtotal) <= 0.5;
   const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
   const invoice = {
     id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5),
     no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY,
-    type: mode === 'final' ? 'Final' : 'Partial',
-    lines: billLines.map(x => ({ line_id: x.line_id, category_id: x.category_id, qty: x.qty, unit_price: x.unit_price, amount: x.qty * x.unit_price })),
+    type: fully ? 'Final' : 'Partial', mode, lines, comp_consumed: comp,
     subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
-  const fully = (_soBilled(so) - invoices.reduce((a, i) => a + (i.subtotal || 0), 0)) <= 0.5;
   const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: invoices.reduce((a, i) => a + (i.total || 0), 0), status: fully ? 'Invoiced' : so.status };
   return { so: nextSO, invoice, fully };
 }
 
 // Commit an invoice (computed against the latest state inside the updater).
-function raiseSOInvoice(soId, mode, ctx, opts) {
-  const { mutate, toast, currentUser, getUser } = ctx; opts = opts || {};
+function raiseSOInvoice(soId, opts, ctx, uiOpts) {
+  const { mutate, toast, currentUser, getUser, getProduct } = ctx; uiOpts = uiOpts || {};
   let made = null;
   mutate(s => {
     const so = (s.sales_orders || []).find(x => x.id === soId);
     if (!so) return s;
-    const built = buildInvoice(so, s, mode, currentUser, getUser);
+    const built = buildInvoice(so, s, opts || { mode: 'bundle' }, currentUser, getUser, getProduct);
     if (!built) return s;
     made = built;
     return {
@@ -488,23 +526,31 @@ function raiseSOInvoice(soId, mode, ctx, opts) {
     };
   }, { action: 'invoice', entity: 'SalesOrder', entity_id: soId });
   if (made) { if (toast) toast(`${made.invoice.no} (${made.invoice.type}) · ${inrK(made.invoice.total)}${made.fully ? ' · fully invoiced' : ''}`, 'success'); }
-  else if (toast && !opts.silent) toast(mode === 'final' ? 'Nothing left to invoice' : 'No received items ready to invoice yet');
+  else if (toast && !uiOpts.silent) toast((opts && opts.mode === 'final') ? 'Nothing left to invoice' : 'Nothing received & un-invoiced for that selection');
   return made;
 }
 
-// SO detail → Invoicing tab: live fulfilment + one-click partial / final invoices.
+// SO detail → Invoicing tab: live fulfilment + partial/final invoices, billed by
+// BUNDLE or by COMPONENT (user's choice). Both reconcile via the component ledger.
 function SOInvoicingTab({ so }) {
-  const { state, mutate, currentUser, getUser, getCategory, soBilledSubtotal, soBillAdjustment } = useStore();
+  const { state, mutate, currentUser, getUser, getCategory, getProduct, soBilledSubtotal, soBillAdjustment } = useStore();
   const toast = useToast();
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canInvoice = ['Purchase', 'Billing', 'Collections', 'Org Admin'].includes(role);
+  const [mode, setMode] = React.useState('bundle');
+  const [bundleSel, setBundleSel] = React.useState({});
+  const [compSel, setCompSel] = React.useState({});
+  const ctx = { mutate, toast, currentUser, getUser, getProduct };
+
   const st = soInvoiceState(so, state);
+  const comps = soComponentState(so, state, getProduct);
   const invoices = so.invoices || [];
   const billed = soBilledSubtotal(so);
-  const legacyInvoiced = invoices.length === 0 && so.invoice_no;   // raised via the direct path
+  const legacyInvoiced = invoices.length === 0 && so.invoice_no;
   const invoicedSub = legacyInvoiced ? billed : invoices.reduce((a, i) => a + (i.subtotal || 0), 0);
   const remaining = legacyInvoiced ? 0 : Math.max(0, billed - invoicedSub);
-  const invoiceableUnits = st.reduce((a, x) => a + x.invoiceableNow, 0);
+  const invoiceableBundles = st.reduce((a, x) => a + x.invoiceableNow, 0);
+  const invoiceableComps = comps.reduce((a, x) => a + x.invoiceable, 0);
 
   return (
     <div className="stack">
@@ -514,33 +560,55 @@ function SOInvoicingTab({ so }) {
         <div className="card" style={{ borderColor: remaining > 0 ? 'oklch(0.85 0.09 75)' : 'oklch(0.85 0.06 155)' }}><div className="card-body" style={{ textAlign: 'center', background: remaining > 0 ? 'var(--warning-bg)' : 'var(--success-bg)' }}><div className="tiny muted">Balance to invoice</div><div style={{ fontSize: 18, fontWeight: 700 }} className="mono">{inr(remaining)}</div></div></div>
       </div>
 
-      {canInvoice && remaining > 0.5 && (
-        <div className="card"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div className="grow"><strong className="small">Raise invoice</strong><div className="tiny muted">{invoiceableUnits > 0 ? `${invoiceableUnits} bundle(s) received & ready` : 'No new received bundles yet'} · choose partial (received only) or final (whole balance).</div></div>
-          <button className="btn" disabled={invoiceableUnits === 0} onClick={() => raiseSOInvoice(so.id, 'partial', { mutate, toast, currentUser, getUser })}><Icon name="receipt" size={13}/>Partial invoice</button>
-          <button className="btn btn-primary" onClick={() => raiseSOInvoice(so.id, 'final', { mutate, toast, currentUser, getUser })}><Icon name="receipt" size={13}/>Final / full invoice</button>
-        </div></div>
-      )}
+      {legacyInvoiced && <div className="card"><div className="card-body small muted">This SO was invoiced via a single full invoice ({so.invoice_no}). Partial invoicing is closed.</div></div>}
 
-      <div className="card">
-        <div className="card-header"><h3 className="card-title">Fulfilment by line</h3><div className="tiny muted">received → invoiceable, per bundle</div></div>
-        <div className="card-body flush">
-          <table className="t">
-            <thead><tr><th>Bundle</th><th className="num">Ordered</th><th className="num">Received (bundles)</th><th className="num">Invoiced</th><th className="num">Invoiceable now</th></tr></thead>
-            <tbody>
-              {st.map(x => { const cat = getCategory(x.category_id) || { name: x.category_id }; return (
-                <tr key={x.line_id}>
-                  <td>{cat.name}</td>
-                  <td className="num">{x.ordered}</td>
-                  <td className="num">{x.fulfilled}</td>
-                  <td className="num">{x.invoiced}</td>
-                  <td className="num">{x.invoiceableNow > 0 ? <strong style={{ color: 'var(--accent)' }}>{x.invoiceableNow}</strong> : <span className="muted">0</span>}</td>
-                </tr>
-              ); })}
-            </tbody>
-          </table>
+      {canInvoice && remaining > 0.5 && (
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title">Raise invoice</h3>
+            <div className="tabs" style={{ border: 'none' }}>
+              <button className={`tab ${mode === 'bundle' ? 'active' : ''}`} onClick={() => setMode('bundle')}>By bundle</button>
+              <button className={`tab ${mode === 'component' ? 'active' : ''}`} onClick={() => setMode('component')}>By component</button>
+            </div>
+          </div>
+          <div className="card-body flush">
+            {mode === 'bundle' ? (
+              <table className="t">
+                <thead><tr><th>Bundle</th><th className="num">Ordered</th><th className="num">Invoiceable now</th><th className="num">Invoice qty</th><th className="num">Amount</th></tr></thead>
+                <tbody>
+                  {st.map(x => { const cat = getCategory(x.category_id) || { name: x.category_id }; const q = bundleSel[x.line_id] != null ? bundleSel[x.line_id] : x.invoiceableNow; return (
+                    <tr key={x.line_id}>
+                      <td>{cat.name}</td><td className="num">{x.ordered}</td>
+                      <td className="num">{x.invoiceableNow}</td>
+                      <td className="num"><input type="number" min="0" max={x.invoiceableNow} className="input mono" value={q} onChange={e => setBundleSel(m => ({ ...m, [x.line_id]: e.target.value }))} style={{ width: 64, textAlign: 'right', height: 24 }}/></td>
+                      <td className="num mono">{inr(Math.max(0, Math.min(Number(q) || 0, x.invoiceableNow)) * x.unit_price)}</td>
+                    </tr>
+                  ); })}
+                </tbody>
+              </table>
+            ) : (
+              <table className="t">
+                <thead><tr><th>Component</th><th className="num">Received</th><th className="num">Invoiced</th><th className="num">Invoiceable</th><th className="num">Invoice qty</th><th className="num">Amount</th></tr></thead>
+                <tbody>
+                  {comps.map(r => { const q = compSel[r.product_id] != null ? compSel[r.product_id] : r.invoiceable; return (
+                    <tr key={r.product_id}>
+                      <td>{r.product ? r.product.name : r.product_id}<div className="tiny muted mono">@ {inr(r.sell)}</div></td>
+                      <td className="num">{r.received}</td><td className="num">{r.invoiced}</td><td className="num">{r.invoiceable}</td>
+                      <td className="num"><input type="number" min="0" max={r.invoiceable} className="input mono" value={q} onChange={e => setCompSel(m => ({ ...m, [r.product_id]: e.target.value }))} style={{ width: 64, textAlign: 'right', height: 24 }}/></td>
+                      <td className="num mono">{inr(Math.max(0, Math.min(Number(q) || 0, r.invoiceable)) * r.sell)}</td>
+                    </tr>
+                  ); })}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: '1px solid var(--border)' }}>
+            <div className="grow tiny muted">{mode === 'bundle' ? `${invoiceableBundles} bundle(s) ready` : `${invoiceableComps} component unit(s) ready`} · partial bills your selection; final bills the whole balance.</div>
+            <button className="btn" disabled={mode === 'bundle' ? invoiceableBundles === 0 : invoiceableComps === 0} onClick={() => { raiseSOInvoice(so.id, { mode, selections: mode === 'bundle' ? bundleSel : compSel }, ctx); setBundleSel({}); setCompSel({}); }}><Icon name="receipt" size={13}/>Create partial invoice</button>
+            <button className="btn btn-primary" onClick={() => raiseSOInvoice(so.id, { mode: 'final' }, ctx)}><Icon name="receipt" size={13}/>Final / full invoice</button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="card">
         <div className="card-header"><h3 className="card-title">Invoices raised</h3></div>

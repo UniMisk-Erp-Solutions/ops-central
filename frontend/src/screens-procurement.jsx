@@ -589,7 +589,7 @@ function GRNNew() {
   const [lr, setLr] = React.useState('DELHIVERY-D88234');
   const [grnDate, setGrnDate] = React.useState(TODAY);
   React.useEffect(() => {
-    setItems(po ? po.items.map(it => ({ ...it, received: it.qty, accepted: it.qty, rejected: 0, reason: '', to_pool: 0 })) : []);
+    setItems(po ? po.items.map(it => ({ ...it, recv: true, received: it.qty, accepted: it.qty, rejected: 0, reason: '', to_pool: 0 })) : []);
   }, [poId]);
 
   if (state.vendor_pos.length === 0) return (
@@ -652,7 +652,7 @@ function GRNNew() {
     if (surplus.length) await addToPool(surplus);
     // Auto-raise a PARTIAL invoice for whatever bundles are now fully received
     // (real-time, no human input). Silent if nothing is invoiceable yet.
-    if (po.so_id && window.raiseSOInvoice) window.raiseSOInvoice(po.so_id, 'partial', { mutate, toast, currentUser, getUser }, { silent: true });
+    if (po.so_id && window.raiseSOInvoice) window.raiseSOInvoice(po.so_id, { mode: 'bundle' }, { mutate, toast, currentUser, getUser, getProduct }, { silent: true });
     toast(`${grnNo} posted · ${po.po_no} received${surplusUnits ? ` · ${surplusUnits} → Master Pool` : ''}${billCut ? ` · bill −${inrK(billCut)}` : ''}`, 'success');
     navigate(`vendor-pos/${po.id}`);
   };
@@ -694,17 +694,19 @@ function GRNNew() {
             <div className="card-header"><h3 className="card-title">Receipt Lines</h3></div>
             <div className="card-body flush">
               <table className="t">
-                <thead><tr><th>Item</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Accepted</th><th className="num">Rejected</th><th className="num">Not needed → Pool</th><th>Reject reason</th></tr></thead>
+                <thead><tr><th style={{ width: 30 }}>Recv</th><th>Item</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Accepted</th><th className="num">Rejected</th><th className="num">Not needed → Pool</th><th>Reject reason</th></tr></thead>
                 <tbody>
                   {items.map((it, i) => {
                     const p = getProduct(it.product_id);
-                    const acc = Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0));
+                    const acc = it.recv ? Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0)) : 0;
+                    const off = !it.recv;
                     return (
-                      <tr key={i}>
+                      <tr key={i} style={{ opacity: off ? 0.5 : 1 }}>
+                        <td><input type="checkbox" checked={!!it.recv} onChange={e => { const on = e.target.checked; const next=[...items]; next[i] = on ? {...it, recv:true, received: it.qty, accepted: it.qty, rejected:0, to_pool:0} : {...it, recv:false, received:0, accepted:0, rejected:0, to_pool:0}; setItems(next); }}/></td>
                         <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
                         <td className="num">{it.qty}</td>
                         <td className="num">
-                          <input type="number" className="input mono" min="0" value={it.received}
+                          <input type="number" className="input mono" min="0" value={it.received} disabled={off}
                                  onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, received: v, accepted: Math.max(0, v - it.rejected - (it.to_pool||0))}; setItems(next); }}
                                  style={{ width: 64, textAlign: 'right' }}/>
                         </td>
@@ -712,17 +714,17 @@ function GRNNew() {
                           <input type="number" className="input mono" value={acc} readOnly style={{ width: 64, textAlign: 'right', background: 'var(--bg-subtle)' }}/>
                         </td>
                         <td className="num">
-                          <input type="number" className="input mono" min="0" value={it.rejected}
+                          <input type="number" className="input mono" min="0" value={it.rejected} disabled={off}
                                  onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, rejected: v, accepted: Math.max(0, it.received - v - (it.to_pool||0))}; setItems(next); }}
                                  style={{ width: 64, textAlign: 'right' }}/>
                         </td>
                         <td className="num">
-                          <input type="number" className="input mono" min="0" value={it.to_pool || 0}
+                          <input type="number" className="input mono" min="0" value={it.to_pool || 0} disabled={off}
                                  onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, to_pool: v, accepted: Math.max(0, it.received - it.rejected - v)}; setItems(next); }}
                                  style={{ width: 70, textAlign: 'right' }}/>
                           {(it.to_pool||0) > 0 && <div className="tiny" style={{ color: 'var(--accent)' }}>→ Master Pool</div>}
                         </td>
-                        <td><input className="input" placeholder={it.rejected > 0 ? 'Reason required' : ''} disabled={!it.rejected} value={it.reason || ''} onChange={e => { const next = [...items]; next[i] = { ...it, reason: e.target.value }; setItems(next); }}/></td>
+                        <td><input className="input" placeholder={it.rejected > 0 ? 'Reason required' : ''} disabled={off || !it.rejected} value={it.reason || ''} onChange={e => { const next = [...items]; next[i] = { ...it, reason: e.target.value }; setItems(next); }}/></td>
                       </tr>
                     );
                   })}
