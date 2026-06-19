@@ -410,6 +410,171 @@ function CollectionsDashboard() {
   );
 }
 
+// ===== Partial / Final invoicing engine =====
+// Pure helpers (usable inside a mutate updater with the latest state).
+function _soSub(so) { return (so.lines || []).reduce((a, l) => a + (l.bundle_qty || 0) * (l.unit_price || 0), 0); }
+function _soBilled(so) { return Math.max(0, _soSub(so) - (so.bill_adjustments || []).reduce((a, x) => a + (Number(x.amount) || 0), 0)); }
+
+// Accepted material received against this SO (GRNs of its POs) + pool stock in hand.
+function soReceivedQty(so, state) {
+  const acc = {};
+  const poIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
+  (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => { acc[it.product_id] = (acc[it.product_id] || 0) + (it.accepted || 0); }); });
+  (so.pool_alloc || []).forEach(a => { acc[a.product_id] = (acc[a.product_id] || 0) + (Number(a.qty) || 0); });
+  return acc;
+}
+
+// Per-line fulfilment: how many complete bundles the received material supports
+// (greedy component allocation), vs already-invoiced, → invoiceable now.
+function soInvoiceState(so, state) {
+  const avail = { ...soReceivedQty(so, state) };
+  const invoiced = {};
+  (so.invoices || []).forEach(inv => (inv.lines || []).forEach(l => { invoiced[l.line_id] = (invoiced[l.line_id] || 0) + (l.qty || 0); }));
+  return (so.lines || []).map(l => {
+    let completable = l.bundle_qty || 0;
+    (l.components || []).forEach(c => { const per = c.qty || 0; if (per > 0) completable = Math.min(completable, Math.floor((avail[c.product_id] || 0) / per)); });
+    completable = Math.max(0, Math.min(completable, l.bundle_qty || 0));
+    (l.components || []).forEach(c => { avail[c.product_id] = (avail[c.product_id] || 0) - completable * (c.qty || 0); });
+    const inv = invoiced[l.id] || 0;
+    return { line_id: l.id, category_id: l.category_id, ordered: l.bundle_qty || 0, unit_price: l.unit_price || 0, fulfilled: completable, invoiced: inv, invoiceableNow: Math.max(0, completable - inv) };
+  });
+}
+
+// Build (but don't commit) the next invoice for an SO. mode: 'partial' (received
+// & not-yet-invoiced bundles) or 'final' (entire remaining balance).
+function buildInvoice(so, state, mode, currentUser, getUser) {
+  // If a single legacy invoice was already raised via the direct path, treat the
+  // SO as fully invoiced (don't double-bill).
+  if ((so.invoices || []).length === 0 && so.invoice_no) return null;
+  const st = soInvoiceState(so, state);
+  const billLines = st.map(x => ({ ...x, qty: mode === 'final' ? (x.ordered - x.invoiced) : x.invoiceableNow })).filter(x => x.qty > 0);
+  if (!billLines.length && mode !== 'final') return null;
+  let subtotal = billLines.reduce((a, x) => a + x.qty * x.unit_price, 0);
+  const invoicedSub = (so.invoices || []).reduce((a, i) => a + (i.subtotal || 0), 0);
+  const remainingBilled = Math.max(0, _soBilled(so) - invoicedSub);
+  subtotal = mode === 'final' ? remainingBilled : Math.min(subtotal, remainingBilled);
+  if (subtotal <= 0.5) return null;
+  subtotal = Math.round(subtotal);
+  const total = Math.round(subtotal * 1.18);
+  const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
+  const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
+  const invoice = {
+    id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5),
+    no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY,
+    type: mode === 'final' ? 'Final' : 'Partial',
+    lines: billLines.map(x => ({ line_id: x.line_id, category_id: x.category_id, qty: x.qty, unit_price: x.unit_price, amount: x.qty * x.unit_price })),
+    subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
+  };
+  const invoices = [...(so.invoices || []), invoice];
+  const fully = (_soBilled(so) - invoices.reduce((a, i) => a + (i.subtotal || 0), 0)) <= 0.5;
+  const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: invoices.reduce((a, i) => a + (i.total || 0), 0), status: fully ? 'Invoiced' : so.status };
+  return { so: nextSO, invoice, fully };
+}
+
+// Commit an invoice (computed against the latest state inside the updater).
+function raiseSOInvoice(soId, mode, ctx, opts) {
+  const { mutate, toast, currentUser, getUser } = ctx; opts = opts || {};
+  let made = null;
+  mutate(s => {
+    const so = (s.sales_orders || []).find(x => x.id === soId);
+    if (!so) return s;
+    const built = buildInvoice(so, s, mode, currentUser, getUser);
+    if (!built) return s;
+    made = built;
+    return {
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === soId ? built.so : x),
+      notifications: [{ id: 'n-inv-' + Date.now(), kind: 'invoice', text: `${built.invoice.no} (${built.invoice.type}) for ${so.so_no} · ${inrK(built.invoice.total)}${built.fully ? ' · fully invoiced' : ''}`, date: TODAY, read: false, role: 'Collections' }, ...s.notifications],
+    };
+  }, { action: 'invoice', entity: 'SalesOrder', entity_id: soId });
+  if (made) { if (toast) toast(`${made.invoice.no} (${made.invoice.type}) · ${inrK(made.invoice.total)}${made.fully ? ' · fully invoiced' : ''}`, 'success'); }
+  else if (toast && !opts.silent) toast(mode === 'final' ? 'Nothing left to invoice' : 'No received items ready to invoice yet');
+  return made;
+}
+
+// SO detail → Invoicing tab: live fulfilment + one-click partial / final invoices.
+function SOInvoicingTab({ so }) {
+  const { state, mutate, currentUser, getUser, getCategory, soBilledSubtotal, soBillAdjustment } = useStore();
+  const toast = useToast();
+  const role = currentUser ? getUser(currentUser)?.role : '';
+  const canInvoice = ['Purchase', 'Billing', 'Collections', 'Org Admin'].includes(role);
+  const st = soInvoiceState(so, state);
+  const invoices = so.invoices || [];
+  const billed = soBilledSubtotal(so);
+  const legacyInvoiced = invoices.length === 0 && so.invoice_no;   // raised via the direct path
+  const invoicedSub = legacyInvoiced ? billed : invoices.reduce((a, i) => a + (i.subtotal || 0), 0);
+  const remaining = legacyInvoiced ? 0 : Math.max(0, billed - invoicedSub);
+  const invoiceableUnits = st.reduce((a, x) => a + x.invoiceableNow, 0);
+
+  return (
+    <div className="stack">
+      <div className="mb-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Billed value</div><div style={{ fontSize: 18, fontWeight: 700 }} className="mono">{inr(billed)}</div>{soBillAdjustment(so) > 0 && <div className="tiny muted">after −{inr(soBillAdjustment(so))} removed</div>}</div></div>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Invoiced so far</div><div style={{ fontSize: 18, fontWeight: 700 }} className="mono">{inr(invoicedSub)}</div><div className="tiny muted">{invoices.length} invoice(s)</div></div></div>
+        <div className="card" style={{ borderColor: remaining > 0 ? 'oklch(0.85 0.09 75)' : 'oklch(0.85 0.06 155)' }}><div className="card-body" style={{ textAlign: 'center', background: remaining > 0 ? 'var(--warning-bg)' : 'var(--success-bg)' }}><div className="tiny muted">Balance to invoice</div><div style={{ fontSize: 18, fontWeight: 700 }} className="mono">{inr(remaining)}</div></div></div>
+      </div>
+
+      {canInvoice && remaining > 0.5 && (
+        <div className="card"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div className="grow"><strong className="small">Raise invoice</strong><div className="tiny muted">{invoiceableUnits > 0 ? `${invoiceableUnits} bundle(s) received & ready` : 'No new received bundles yet'} · choose partial (received only) or final (whole balance).</div></div>
+          <button className="btn" disabled={invoiceableUnits === 0} onClick={() => raiseSOInvoice(so.id, 'partial', { mutate, toast, currentUser, getUser })}><Icon name="receipt" size={13}/>Partial invoice</button>
+          <button className="btn btn-primary" onClick={() => raiseSOInvoice(so.id, 'final', { mutate, toast, currentUser, getUser })}><Icon name="receipt" size={13}/>Final / full invoice</button>
+        </div></div>
+      )}
+
+      <div className="card">
+        <div className="card-header"><h3 className="card-title">Fulfilment by line</h3><div className="tiny muted">received → invoiceable, per bundle</div></div>
+        <div className="card-body flush">
+          <table className="t">
+            <thead><tr><th>Bundle</th><th className="num">Ordered</th><th className="num">Received (bundles)</th><th className="num">Invoiced</th><th className="num">Invoiceable now</th></tr></thead>
+            <tbody>
+              {st.map(x => { const cat = getCategory(x.category_id) || { name: x.category_id }; return (
+                <tr key={x.line_id}>
+                  <td>{cat.name}</td>
+                  <td className="num">{x.ordered}</td>
+                  <td className="num">{x.fulfilled}</td>
+                  <td className="num">{x.invoiced}</td>
+                  <td className="num">{x.invoiceableNow > 0 ? <strong style={{ color: 'var(--accent)' }}>{x.invoiceableNow}</strong> : <span className="muted">0</span>}</td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><h3 className="card-title">Invoices raised</h3></div>
+        <div className="card-body flush">
+          {invoices.length === 0 && legacyInvoiced ? (
+            <table className="t"><thead><tr><th>Invoice</th><th>Type</th><th>Date</th><th className="num">Total</th></tr></thead>
+              <tbody><tr><td className="mono">{so.invoice_no}</td><td><span className="badge success dot">Full</span></td><td className="mono small">{fmtDate(so.invoice_date)}</td><td className="num"><strong>{inr(so.invoice_amount)}</strong></td></tr></tbody>
+            </table>
+          ) : invoices.length === 0 ? <div className="empty">No invoices yet. Partial invoices auto-appear as material is received; or raise one above.</div> : (
+            <table className="t">
+              <thead><tr><th>Invoice</th><th>Type</th><th>Date</th><th className="num">Subtotal</th><th className="num">Total</th></tr></thead>
+              <tbody>
+                {invoices.map(inv => (
+                  <tr key={inv.id}>
+                    <td className="mono">{inv.no}</td>
+                    <td>{inv.type === 'Final' ? <span className="badge success dot">Final</span> : <span className="badge accent dot">Partial</span>}</td>
+                    <td className="mono small">{fmtDate(inv.date)}</td>
+                    <td className="num">{inr(inv.subtotal)}</td>
+                    <td className="num"><strong>{inr(inv.total)}</strong></td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot><tr><td colSpan="4" className="right small">Total invoiced</td><td className="num mono"><strong>{inr(invoices.reduce((a, i) => a + i.total, 0))}</strong></td></tr></tfoot>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+window.soInvoiceState = soInvoiceState;
+window.raiseSOInvoice = raiseSOInvoice;
+window.SOInvoicingTab = SOInvoicingTab;
 window.InvoiceList = InvoiceList;
 window.InvoiceDetail = InvoiceDetail;
 window.CollectionsDashboard = CollectionsDashboard;

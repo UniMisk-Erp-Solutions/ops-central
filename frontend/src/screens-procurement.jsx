@@ -576,7 +576,7 @@ function GRNDetail({ grnId }) {
 }
 
 function GRNNew() {
-  const { navigate, state, mutate, getVendor, getProduct, getSO, addToPool } = useStore();
+  const { navigate, state, mutate, getVendor, getProduct, getSO, addToPool, currentUser, getUser } = useStore();
   const toast = useToast();
   // Receivable = POs not yet fully received.
   const receivable = state.vendor_pos.filter(p => p.status !== 'Material Received');
@@ -650,6 +650,9 @@ function GRNNew() {
     }), { action: 'create', entity: 'GRN', entity_id: grn.id });
     // Surplus auto-flows to the Master Surplus Pool (real insert, no manual entry).
     if (surplus.length) await addToPool(surplus);
+    // Auto-raise a PARTIAL invoice for whatever bundles are now fully received
+    // (real-time, no human input). Silent if nothing is invoiceable yet.
+    if (po.so_id && window.raiseSOInvoice) window.raiseSOInvoice(po.so_id, 'partial', { mutate, toast, currentUser, getUser }, { silent: true });
     toast(`${grnNo} posted · ${po.po_no} received${surplusUnits ? ` · ${surplusUnits} → Master Pool` : ''}${billCut ? ` · bill −${inrK(billCut)}` : ''}`, 'success');
     navigate(`vendor-pos/${po.id}`);
   };
