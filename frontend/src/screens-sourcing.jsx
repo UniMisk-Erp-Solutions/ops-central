@@ -349,7 +349,7 @@ function SourcingNew() {
                                   <tr key={c.product_id} className="subrow">
                                     <td></td>
                                     <td><div style={{ fontSize: 12 }}>{p.name}</div><div className="tiny muted mono">{p.code}</div></td>
-                                    <td className="num"><input type="number" className="input mono" min="0" value={c.qty} onChange={e => updateComp(l.id, c.product_id, { qty: parseInt(e.target.value) || 0 })} style={{ width: 64, textAlign: 'right', height: 24 }}/>{l.bundle_qty > 1 && <div className="tiny" style={{ color: 'var(--accent)', fontWeight: 600 }}>= {c.qty * l.bundle_qty} total</div>}{c.override && <div className="tiny" style={{ color: 'var(--warning)' }}>was {c.original_qty}</div>}</td>
+                                    <td className="num"><input type="number" className="input mono" min="0" value={Math.round((c.qty || 0) * (l.bundle_qty || 1))} onChange={e => { const t = parseInt(e.target.value) || 0; const b = l.bundle_qty || 1; updateComp(l.id, c.product_id, { qty: t / b }); }} style={{ width: 72, textAlign: 'right', height: 24 }}/>{l.bundle_qty > 1 && <div className="tiny muted">{(c.qty || 0)}/bundle</div>}{c.override && <div className="tiny" style={{ color: 'var(--warning)' }}>was {Math.round((c.original_qty || 0) * (l.bundle_qty || 1))}</div>}</td>
                                     <td colSpan="2" className="num small muted">baseline @ {inr(p.buy || 0)}</td>
                                     <td><button className="btn btn-ghost btn-sm" onClick={() => removeComp(l.id, c.product_id)}><Icon name="x" size={11}/></button></td>
                                   </tr>
