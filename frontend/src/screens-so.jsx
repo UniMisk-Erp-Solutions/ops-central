@@ -809,6 +809,7 @@ function SalesOrderDetail({ soId }) {
           { id: 'overview', label: 'Overview' },
           { id: 'lines', label: 'Line Items + BOM', count: so.lines.length },
           { id: 'procurement', label: 'Procurement', count: linkedPOs.length },
+          { id: 'vendor-pos', label: 'Vendor POs', count: linkedPOs.length },
           { id: 'invoicing', label: 'Invoicing', count: (so.invoices || []).length },
           { id: 'godown', label: 'Virtual Godown' },
           { id: 'documents', label: 'Documents' },
@@ -1004,6 +1005,8 @@ function SalesOrderDetail({ soId }) {
       )}
 
       {tab === 'procurement' && <ProcurementTab so={so}/>}
+
+      {tab === 'vendor-pos' && <SOVendorPOsTab so={so}/>}
 
       {tab === 'invoicing' && <SOInvoicingTab so={so}/>}
 

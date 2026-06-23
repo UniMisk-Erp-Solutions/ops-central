@@ -109,6 +109,161 @@ function RFQList() {
   );
 }
 
+// Our (sell) value of a PO's items — for per-vendor margin.
+function poOurValue(po, getProduct) {
+  return (po.items || []).reduce((s, it) => { const p = getProduct(it.product_id); return s + (p ? (p.sell || 0) : 0) * (it.qty || 0); }, 0);
+}
+
+// ===== Per-SO Vendor POs tab — every vendor mapped to ONE SO, with margins,
+// item tracking (ordered → received → remaining) and payable status, in one
+// place. Read-only consolidation; actions reuse the existing GRN / 3-way flow. =====
+function SOVendorPOsTab({ so }) {
+  const { state, navigate, getVendor, getProduct, soSubtotal, currentUser, getUser } = useStore();
+  const [vF, setVF] = React.useState('');
+  const [sF, setSF] = React.useState('');
+  const [q, setQ] = React.useState('');
+  const role = currentUser ? getUser(currentUser)?.role : '';
+  const canProcure = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+
+  const pos = state.vendor_pos.filter(p => p.so_id === so.id);
+  const grnsFor = (poId) => state.grns.filter(g => g.po_id === poId);
+  const viFor = (poId) => (state.vendor_invoices || []).filter(v => v.po_id === poId);
+
+  // Aggregate received / on-PO / required per product across this SO.
+  const receivedByProd = {}, onPOByProd = {};
+  pos.forEach(po => {
+    (po.items || []).forEach(it => { onPOByProd[it.product_id] = (onPOByProd[it.product_id] || 0) + (it.qty || 0); });
+    grnsFor(po.id).forEach(g => (g.items || []).forEach(it => { receivedByProd[it.product_id] = (receivedByProd[it.product_id] || 0) + (it.accepted || 0); }));
+  });
+  const required = soReqComponents(so);
+
+  // Grand totals — project profit margin = our sell value − vendor spend.
+  const vendorSpend = pos.reduce((s, p) => s + (p.amount || 0), 0);
+  const projectSell = soSubtotal(so);
+  const projectMargin = projectSell - vendorSpend;
+  const marginPct = projectSell > 0 ? (projectMargin / projectSell) * 100 : 0;
+  const payableBooked = pos.reduce((s, p) => s + viFor(p.id).filter(v => v.status === 'Booked').reduce((a, v) => a + (v.amount || 0), 0), 0);
+
+  const prodIds = Array.from(new Set([...Object.keys(required), ...Object.keys(onPOByProd), ...Object.keys(receivedByProd)]));
+  const track = prodIds.map(pid => {
+    const p = getProduct(pid);
+    const req = required[pid] || 0, onPO = onPOByProd[pid] || 0, recv = receivedByProd[pid] || 0;
+    return { pid, p, req, onPO, recv, remaining: Math.max(0, onPO - recv), shortfall: Math.max(0, req - onPO) };
+  }).filter(r => !q || (r.p && (r.p.name.toLowerCase().includes(q.toLowerCase()) || (r.p.code || '').toLowerCase().includes(q.toLowerCase()))));
+  const shortfalls = track.filter(r => r.shortfall > 0).length;
+  const awaiting = track.filter(r => r.remaining > 0).length;
+
+  const statuses = [...new Set(pos.map(p => p.status))];
+  const vRows = pos.filter(po => (!vF || po.vendor_id === vF) && (!sF || po.status === sF));
+
+  const poStatusBadge = (st) => st === 'Material Received' ? <span className="badge success dot">Received</span>
+    : st === 'Pending MD Approval' ? <span className="badge warning dot">MD</span>
+    : <span className="badge dot">{st}</span>;
+
+  if (pos.length === 0) return (
+    <div className="card"><div className="empty">
+      <div className="empty-title">No vendor POs for this order yet</div>
+      Approve the SO, then generate Vendor PO(s) from the inquiry (Procurement tab) — every vendor you raise appears here, mapped to this order.
+    </div></div>
+  );
+
+  return (
+    <div className="stack">
+      {/* Grand totals */}
+      <div className="mb-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Vendors</div><div style={{ fontSize: 18, fontWeight: 700 }}>{pos.length}</div></div></div>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Our value</div><div style={{ fontSize: 16, fontWeight: 700 }} className="mono">{inrK(projectSell)}</div></div></div>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Vendor spend</div><div style={{ fontSize: 16, fontWeight: 700 }} className="mono">{inrK(vendorSpend)}</div></div></div>
+        <div className="card" style={{ borderColor: projectMargin >= 0 ? 'oklch(0.85 0.06 155)' : 'oklch(0.86 0.08 25)' }}><div className="card-body" style={{ textAlign: 'center', background: projectMargin >= 0 ? 'var(--success-bg)' : 'var(--danger-bg)' }}><div className="tiny muted">Profit margin</div><div style={{ fontSize: 16, fontWeight: 700, color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }} className="mono">{inrK(projectMargin)}</div><div className="tiny" style={{ fontWeight: 600, color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }}>{marginPct >= 0 ? '+' : ''}{marginPct.toFixed(1)}%</div></div></div>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Payable booked</div><div style={{ fontSize: 16, fontWeight: 700 }} className="mono">{inrK(payableBooked)}</div></div></div>
+      </div>
+
+      {/* Engine summary */}
+      <div className="card"><div className="card-body small" style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <strong className="small">Tracking engine:</strong>
+        <span>{shortfalls === 0 ? <span style={{ color: 'var(--success)' }}>✓ all required items are on a PO</span> : <span style={{ color: 'var(--warning)' }}>⚠ {shortfalls} item(s) still need a vendor PO</span>}</span>
+        <span>·</span>
+        <span>{awaiting === 0 ? <span style={{ color: 'var(--success)' }}>✓ nothing awaiting receipt</span> : <span style={{ color: 'var(--accent)' }}>{awaiting} item(s) awaiting receipt (GRN)</span>}</span>
+      </div></div>
+
+      {/* Vendor mapping */}
+      <div className="card">
+        <div className="card-header">
+          <h3 className="card-title">Vendors on this order ({vRows.length})</h3>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <select className="select" style={{ height: 26, fontSize: 12 }} value={vF} onChange={e => setVF(e.target.value)}>
+              <option value="">All vendors</option>
+              {[...new Set(pos.map(p => p.vendor_id))].map(vid => { const v = getVendor(vid); return <option key={vid} value={vid}>{v ? v.name : vid}</option>; })}
+            </select>
+            <select className="select" style={{ height: 26, fontSize: 12 }} value={sF} onChange={e => setSF(e.target.value)}>
+              <option value="">All statuses</option>
+              {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="card-body flush">
+          <table className="t">
+            <thead><tr><th>Vendor · PO</th><th className="num">Cost</th><th className="num">Our value</th><th className="num">Margin</th><th className="num">Received</th><th>e-Bill</th><th>Payable</th><th></th></tr></thead>
+            <tbody>
+              {vRows.map(po => {
+                const v = getVendor(po.vendor_id);
+                const our = poOurValue(po, getProduct);
+                const m = our - (po.amount || 0); const mp = our > 0 ? (m / our) * 100 : 0;
+                const ordered = (po.items || []).reduce((a, it) => a + (it.qty || 0), 0);
+                const rec = grnsFor(po.id).reduce((a, g) => a + (g.items || []).reduce((b, it) => b + (it.accepted || 0), 0), 0);
+                const recPct = ordered > 0 ? Math.round(rec / ordered * 100) : 0;
+                const vis = viFor(po.id); const booked = vis.filter(x => x.status === 'Booked').length;
+                return (
+                  <tr key={po.id} onClick={() => navigate(`vendor-pos/${po.id}`)} style={{ cursor: 'pointer' }}>
+                    <td><strong>{v ? v.name : po.vendor_id}</strong><div className="tiny muted mono">{po.po_no}</div></td>
+                    <td className="num mono">{inr(po.amount)}</td>
+                    <td className="num mono">{inr(our)}</td>
+                    <td className="num mono" style={{ color: m >= 0 ? 'var(--success)' : 'var(--danger)' }}>{inr(m)}<div className="tiny">{mp >= 0 ? '+' : ''}{mp.toFixed(1)}%</div></td>
+                    <td className="num">{recPct}%</td>
+                    <td>{po.ebill && po.ebill.generated ? <span className="badge success dot">e-Bill</span> : <span className="badge dot">—</span>}</td>
+                    <td>{vis.length === 0 ? <span className="muted tiny">awaiting</span> : booked ? <span className="badge success dot">{booked} booked</span> : <span className="badge warning dot">{vis.length} pending</span>}</td>
+                    <td>{poStatusBadge(po.status)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot><tr><td className="right small">Totals</td><td className="num mono"><strong>{inr(vendorSpend)}</strong></td><td className="num mono">{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0))}</td><td className="num mono" style={{ color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0) - vendorSpend)}</strong></td><td colSpan="4"></td></tr></tfoot>
+          </table>
+        </div>
+        {canProcure && <div className="card-body" style={{ borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}><button className="btn btn-sm" onClick={() => navigate('grn/new')}><Icon name="package" size={12}/>Receive material (GRN)</button><button className="btn btn-sm" onClick={() => navigate('three-way')}><Icon name="check" size={12}/>Vendor invoices / 3-way</button></div>}
+      </div>
+
+      {/* Item tracking */}
+      <div className="card">
+        <div className="card-header">
+          <h3 className="card-title">Item tracking</h3>
+          <input className="input search" placeholder="Search item…" value={q} onChange={e => setQ(e.target.value)} style={{ height: 26, width: 200 }}/>
+        </div>
+        <div className="card-body flush">
+          <table className="t">
+            <thead><tr><th>Item</th><th className="num">Required</th><th className="num">On PO</th><th className="num">Received</th><th className="num">Remaining</th><th>Status</th></tr></thead>
+            <tbody>
+              {track.map(r => (
+                <tr key={r.pid}>
+                  <td>{r.p ? r.p.name : r.pid}<div className="tiny muted mono">{r.p ? r.p.code : ''}</div></td>
+                  <td className="num">{r.req}</td>
+                  <td className="num">{r.onPO}{r.shortfall > 0 && <div className="tiny" style={{ color: 'var(--warning)' }}>short {r.shortfall}</div>}</td>
+                  <td className="num">{r.recv}</td>
+                  <td className="num">{r.remaining > 0 ? <strong style={{ color: 'var(--accent)' }}>{r.remaining}</strong> : <span className="muted">0</span>}</td>
+                  <td>{r.shortfall > 0 ? <span className="badge warning dot">Add PO</span> : r.remaining > 0 ? <span className="badge accent dot">Awaiting</span> : <span className="badge success dot">Complete</span>}</td>
+                </tr>
+              ))}
+              {track.length === 0 && <tr><td colSpan="6"><div className="empty">No items match.</div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+window.SOVendorPOsTab = SOVendorPOsTab;
+
 // ===== Vendor PO List ===== (payables side — kept separate from client billing)
 function VendorPOList() {
   const { state, navigate, getVendor, getSO, getCustomer, currentUser, getUser } = useStore();
@@ -635,15 +790,25 @@ function GRNNew() {
       irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(),
       date: grnDate, amount: Math.round((po.amount || 0) * 1.18), generated: true, auto: true,
     };
+    // Auto vendor (payable) invoice for the value received in THIS GRN — booked
+    // automatically (amount derives from PO rates, so it matches within tolerance).
+    const rateOf = {}; (po.items || []).forEach(it => { rateOf[it.product_id] = it.rate; });
+    const recvValue = norm.reduce((s, it) => s + (it.accepted || 0) * (rateOf[it.product_id] || 0), 0);
+    const autoVI = recvValue > 0 ? {
+      id: 'vi-' + Date.now(), vendor_invoice_no: `VINV/FY26/${String(1 + (state.vendor_invoices || []).length).padStart(4, '0')}`,
+      po_id: po.id, grn_id: grn.id, vendor_id: po.vendor_id, date: grnDate, amount: Math.round(recvValue), status: 'Booked', tolerance: 'within',
+    } : null;
     mutate(s => ({
       ...s,
       grns: [grn, ...s.grns],
       vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received', ebill } : p),
+      vendor_invoices: autoVI ? [autoVI, ...s.vendor_invoices] : s.vendor_invoices,
       sales_orders: (po.so_id && adjustments.length)
         ? s.sales_orders.map(x => x.id === po.so_id ? { ...x, bill_adjustments: [...(x.bill_adjustments || []), ...adjustments] } : x)
         : s.sales_orders,
       notifications: [
-        { id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · received + e-Bill ${ebill.no} auto-saved → record vendor invoice`, date: TODAY, read: false, role: 'Billing' },
+        { id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · received + e-Bill ${ebill.no} auto-saved`, date: TODAY, read: false, role: 'Billing' },
+        ...(autoVI ? [{ id: 'n-payv-' + Date.now(), kind: 'match', text: `${autoVI.vendor_invoice_no} auto-booked · ${inrK(autoVI.amount)} payable to ${getVendor(po.vendor_id)?.name || 'vendor'} (${po.po_no})`, date: TODAY, read: false, role: 'Billing' }] : []),
         ...(surplusUnits ? [{ id: 'n-pool-' + Date.now(), kind: 'transfer', text: `${surplusUnits} surplus unit(s) auto-moved to Master Pool from ${po.po_no}${so ? ' (' + so.so_no + ')' : ''}`, date: TODAY, read: false, role: 'Stores' }] : []),
         ...(billCut ? [{ id: 'n-bill-' + Date.now(), kind: 'so', text: `${so ? so.so_no : po.po_no}: customer bill auto-reduced by ${inrK(billCut)} (items not supplied)`, date: TODAY, read: false, role: 'Billing' }] : []),
       ],
