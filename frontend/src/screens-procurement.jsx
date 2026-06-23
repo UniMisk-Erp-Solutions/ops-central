@@ -1335,17 +1335,26 @@ function soReqComponents(so) {
 // cheapest vendor / baseline so nothing is left unsourced.
 function vendorPOGroups(state, so, sourcing, getProduct) {
   const req = soReqComponents(so);
+  const alloc = (sourcing && sourcing.alloc) || {};
   const picks = (sourcing && sourcing.picks) || {};
   const prices = (sourcing && sourcing.prices) || {};
+  const rateFor = (vid, p, pid) => (prices[pid] && prices[pid][vid] != null) ? prices[pid][vid] : (window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : (p ? p.buy : 0));
   const groups = {};
   Object.entries(req).forEach(([pid, qty]) => {
     const p = getProduct(pid);
-    let vid = picks[pid];
-    if (!vid && p && window.vendorSuggestions) { const sug = window.vendorSuggestions(p, state.vendors); if (sug[0]) vid = sug[0].vendor.id; }
-    if (!vid) return;
-    let rate = prices[pid] && prices[pid][vid];
-    if (rate === undefined || rate === null) rate = window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : (p ? p.buy : 0);
-    (groups[vid] = groups[vid] || []).push({ product_id: pid, qty, rate });
+    const rows = (alloc[pid] || []).filter(r => (Number(r.qty) || 0) > 0);
+    if (rows.length) {                       // multi-vendor split allocation (clamped to required)
+      let remaining = qty;
+      rows.forEach(r => {
+        const take = Math.min(Number(r.qty) || 0, remaining); if (take <= 0) return; remaining -= take;
+        (groups[r.vendor_id] = groups[r.vendor_id] || []).push({ product_id: pid, qty: take, rate: (Number(r.rate) || rateFor(r.vendor_id, p, pid)) });
+      });
+    } else {                                 // single chosen vendor (or cheapest)
+      let vid = picks[pid];
+      if (!vid && p && window.vendorSuggestions) { const sug = window.vendorSuggestions(p, state.vendors); if (sug[0]) vid = sug[0].vendor.id; }
+      if (!vid) return;
+      (groups[vid] = groups[vid] || []).push({ product_id: pid, qty, rate: rateFor(vid, p, pid) });
+    }
   });
   return Object.entries(groups).map(([vendor_id, items]) => ({
     vendor_id, items, amount: items.reduce((s, i) => s + i.qty * i.rate, 0),

@@ -90,14 +90,25 @@ function suggestVendorPrice(state, vendorId, productId) {
 
 function computeMargin(src, picks, getProduct) {
   const comps = srcComponentList(src);
+  const alloc = src.alloc || {};
   const perItem = comps.map(c => {
     const p = getProduct(c.product_id) || { id: c.product_id, name: c.product_id, buy: 0 };
-    const vendorId = picks[c.product_id];
-    const unit = vendorId ? srcUnitPrice(src, vendorId, p) : (p.buy || 0);
+    const rows = (alloc[c.product_id] || []).filter(r => (Number(r.qty) || 0) > 0);
+    let unit, lineBuy, vendorId;
+    if (rows.length) {                       // multi-vendor split allocation
+      lineBuy = rows.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.rate) || 0), 0);
+      const tq = rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+      unit = tq > 0 ? lineBuy / tq : 0;
+      vendorId = rows.length === 1 ? rows[0].vendor_id : '__split';
+    } else {                                 // fallback: single chosen vendor
+      vendorId = picks[c.product_id];
+      unit = vendorId ? srcUnitPrice(src, vendorId, p) : (p.buy || 0);
+      lineBuy = unit * c.qty;
+    }
     const base = p.buy || 0;
     return {
       product_id: c.product_id, qty: c.qty, vendor_id: vendorId || null,
-      unit, lineBuy: unit * c.qty, baseline: base,
+      unit, lineBuy, baseline: base,
       benefitPct: base ? ((base - unit) / base) * 100 : 0,
     };
   });
@@ -116,6 +127,22 @@ function computeMargin(src, picks, getProduct) {
 }
 
 function pct1(n) { return (n >= 0 ? '+' : '') + (n || 0).toFixed(1) + '%'; }
+
+// Per-vendor roll-up of a sourcing's multi-vendor allocation.
+function srcVendorSummary(src, getProduct) {
+  const alloc = src.alloc || {};
+  const byV = {};
+  Object.entries(alloc).forEach(([pid, rows]) => {
+    const p = getProduct(pid); const sell = p ? (p.sell || 0) : 0;
+    (rows || []).forEach(r => {
+      const qty = Number(r.qty) || 0; if (qty <= 0 || !r.vendor_id) return;
+      const v = byV[r.vendor_id] = byV[r.vendor_id] || { vendor_id: r.vendor_id, items: 0, qty: 0, cost: 0, our: 0 };
+      v.items += 1; v.qty += qty; v.cost += qty * (Number(r.rate) || 0); v.our += qty * sell;
+    });
+  });
+  return Object.values(byV).map(v => ({ ...v, margin: v.our - v.cost, marginPct: v.our > 0 ? (v.our - v.cost) / v.our * 100 : 0 }));
+}
+function srcHasAlloc(src) { return Object.values(src.alloc || {}).some(rows => (rows || []).some(r => (Number(r.qty) || 0) > 0)); }
 
 // ---- list ------------------------------------------------------------------
 
@@ -222,7 +249,7 @@ function SourcingNew() {
       client_req_price: clientReqPrice === '' ? null : Number(clientReqPrice),
       our_price: ourPrice === '' ? null : Number(ourPrice),
       notes: notes || null, created_by: currentUser || null,
-      lines, picks: {}, prices: {}, margin: {}, converted_so_id: null,
+      lines, picks: {}, prices: {}, alloc: {}, margin: {}, converted_so_id: null,
     };
     mutate(s => ({
       ...s,
@@ -386,6 +413,7 @@ function SourcingDetail({ srcId }) {
   const canConvert = ['Sales', 'Pre-sales', 'Org Admin'].includes(role);
   const [showConvert, setShowConvert] = React.useState(false);
   const [showAddVendor, setShowAddVendor] = React.useState(false);
+  const [showAllocate, setShowAllocate] = React.useState(false);
 
   const comps = src ? srcComponentList(src) : [];
   // Local vendor picks — default to the previously-saved picks, else the cheapest
@@ -466,6 +494,7 @@ function SourcingDetail({ srcId }) {
         </div>
         <div className="page-actions">
           {canSource && !locked && <button className="btn btn-primary" onClick={() => setShowAddVendor(true)}><Icon name="plus" size={13}/>Add vendor &amp; quote</button>}
+          {canSource && !locked && <button className="btn" onClick={() => setShowAllocate(true)}><Icon name="arrowLeftRight" size={13}/>Allocate across vendors</button>}
           {canSource && !locked && <button className="btn" onClick={saveQuotation}><Icon name="save" size={13}/>Save vendor quotation</button>}
           {canSource && !locked && <button className="btn btn-primary" onClick={sendToSales}><Icon name="mail" size={13}/>Send to Sales</button>}
           {canConvert && !locked && (src.status === 'Sent to Sales' || src.status === 'Sourced') && (
@@ -497,6 +526,26 @@ function SourcingDetail({ srcId }) {
           <div className="small" style={{ fontWeight: 600, color: margin.marginPct >= 0 ? 'var(--success)' : 'var(--danger)' }}>{pct1(margin.marginPct)} margin</div>
         </div></div>
       </div>
+
+      {/* Multi-vendor allocation summary (per-vendor margin + grand total) */}
+      {srcHasAlloc(src) && (() => {
+        const sum = srcVendorSummary(src, getProduct);
+        const tot = sum.reduce((a, v) => ({ cost: a.cost + v.cost, our: a.our + v.our, qty: a.qty + v.qty }), { cost: 0, our: 0, qty: 0 });
+        return (
+          <div className="card mb-2">
+            <div className="card-header"><h3 className="card-title">Vendor allocation — split across {sum.length} vendor(s)</h3>{canSource && !locked && <button className="btn btn-sm" onClick={() => setShowAllocate(true)}><Icon name="edit" size={12}/>Edit allocation</button>}</div>
+            <div className="card-body flush"><table className="t">
+              <thead><tr><th>Vendor</th><th className="num">Items</th><th className="num">Qty</th><th className="num">Cost</th><th className="num">Our value</th><th className="num">Margin</th></tr></thead>
+              <tbody>
+                {sum.map(v => { const ven = getVendor(v.vendor_id); return (
+                  <tr key={v.vendor_id}><td>{ven ? ven.name : v.vendor_id}</td><td className="num">{v.items}</td><td className="num">{v.qty}</td><td className="num mono">{inr(v.cost)}</td><td className="num mono">{inr(v.our)}</td><td className="num mono" style={{ color: v.margin >= 0 ? 'var(--success)' : 'var(--danger)' }}>{inr(v.margin)}<div className="tiny">{pct1(v.marginPct)}</div></td></tr>
+                ); })}
+              </tbody>
+              <tfoot><tr><td className="right small">Grand total</td><td></td><td className="num">{tot.qty}</td><td className="num mono"><strong>{inr(tot.cost)}</strong></td><td className="num mono">{inr(tot.our)}</td><td className="num mono" style={{ color: (tot.our - tot.cost) >= 0 ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(tot.our - tot.cost)}</strong><div className="tiny">{tot.our > 0 ? pct1((tot.our - tot.cost) / tot.our * 100) : '+0.0%'}</div></td></tr></tfoot>
+            </table></div>
+          </div>
+        );
+      })()}
 
       {/* Per-item vendor comparison */}
       <div className="card mb-2">
@@ -583,6 +632,7 @@ function SourcingDetail({ srcId }) {
 
       {showConvert && <ConvertToSOModal src={src} margin={margin} onClose={() => setShowConvert(false)}/>}
       {showAddVendor && <AddVendorQuoteModal src={src} comps={comps} onClose={() => setShowAddVendor(false)}/>}
+      {showAllocate && <AllocateVendorsModal src={src} onClose={() => setShowAllocate(false)}/>}
     </div>
   );
 }
@@ -793,6 +843,83 @@ function ConvertToSOModal({ src, margin, onClose }) {
   );
 }
 
+// ---- allocate item quantities across multiple quoted vendors (sourcing) ------
+function AllocateVendorsModal({ src, onClose }) {
+  const { state, mutate, getProduct, getVendor } = useStore();
+  const toast = useToast();
+  const comps = srcComponentList(src);
+  const candIds = src.quote_vendors || [];
+  const rateOf = (vid, p) => (src.prices && src.prices[p.id] && src.prices[p.id][vid] != null) ? Number(src.prices[p.id][vid]) : (window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : (p ? (p.buy || 0) : 0));
+  const cheapest = (p) => { let best = null; candIds.forEach(vid => { const r = rateOf(vid, p); if (best === null || r < best.r) best = { vid, r }; }); return best; };
+  const [alloc, setAlloc] = React.useState(() => {
+    const a = {};
+    comps.forEach(c => {
+      const ex = (src.alloc && src.alloc[c.product_id]) || null;
+      if (ex && ex.length) { a[c.product_id] = ex.map(r => ({ ...r })); return; }
+      const p = getProduct(c.product_id); const ch = cheapest(p);
+      a[c.product_id] = [{ vendor_id: ch ? ch.vid : (candIds[0] || ''), qty: c.qty, rate: ch ? ch.r : 0 }];
+    });
+    return a;
+  });
+  const setRow = (pid, ri, patch) => setAlloc(a => ({ ...a, [pid]: a[pid].map((r, i) => i === ri ? { ...r, ...patch } : r) }));
+  const addRow = (pid) => { const p = getProduct(pid); const ch = cheapest(p); setAlloc(a => ({ ...a, [pid]: [...(a[pid] || []), { vendor_id: ch ? ch.vid : (candIds[0] || ''), qty: 0, rate: ch ? ch.r : 0 }] })); };
+  const removeRow = (pid, ri) => setAlloc(a => ({ ...a, [pid]: a[pid].filter((_, i) => i !== ri) }));
+  const autoCheapest = (c) => { const p = getProduct(c.product_id); const rows = alloc[c.product_id] || []; const rem = c.qty - rows.reduce((s, r) => s + (Number(r.qty) || 0), 0); if (rem <= 0) return; const ch = cheapest(p); setAlloc(a => ({ ...a, [c.product_id]: [...(a[c.product_id] || []), { vendor_id: ch ? ch.vid : (candIds[0] || ''), qty: rem, rate: ch ? ch.r : 0 }] })); };
+
+  const save = () => {
+    const clean = {};
+    Object.entries(alloc).forEach(([pid, rows]) => { const rr = (rows || []).filter(r => (Number(r.qty) || 0) > 0 && r.vendor_id).map(r => ({ vendor_id: r.vendor_id, qty: Number(r.qty) || 0, rate: Number(r.rate) || 0 })); if (rr.length) clean[pid] = rr; });
+    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, alloc: clean } : x) }), { action: 'allocate', entity: 'Sourcing', entity_id: src.id });
+    toast('Vendor allocation saved', 'success');
+    onClose();
+  };
+
+  if (!candIds.length) return (
+    <Modal title="Allocate across vendors" onClose={onClose} footer={<button className="btn" onClick={onClose}>Close</button>}>
+      <div className="empty"><div className="empty-title">Add vendors first</div>Use “Add vendor &amp; quote” to add vendors with prices, then split quantities here.</div>
+    </Modal>
+  );
+
+  return (
+    <Modal title={`Allocate quantities across vendors — ${src.src_no}`} onClose={onClose} size="lg" footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={save}>Save allocation</button></>}>
+      <div className="tiny muted mb-2" style={{ padding: 10, background: 'var(--accent-bg)', borderRadius: 4 }}>Split each item's quantity across your quoted vendors. Margin is live (our sell − vendor rate). “Auto-fill cheapest” assigns the remaining quantity to the cheapest vendor. This flows straight into the Vendor POs — no re-entry.</div>
+      {comps.map(c => {
+        const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id, sell: 0, buy: 0 };
+        const our = p.sell || 0;
+        const rows = alloc[c.product_id] || [];
+        const remain = c.qty - rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+        return (
+          <div className="card mb-2" key={c.product_id}>
+            <div className="card-header">
+              <div><strong>{p.name}</strong><div className="tiny muted mono">{p.code} · need {c.qty} · our {inr(our)}</div></div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <span className={`badge ${remain === 0 ? 'success' : remain < 0 ? 'danger' : 'warning'} dot`}>{remain === 0 ? 'balanced' : remain < 0 ? `over ${-remain}` : `${remain} left`}</span>
+                {remain > 0 && <button className="btn btn-sm" onClick={() => autoCheapest(c)}>Auto-fill cheapest</button>}
+              </div>
+            </div>
+            <div className="card-body flush"><table className="t">
+              <thead><tr><th>Vendor</th><th className="num">Qty</th><th className="num">Rate ₹</th><th className="num">Margin</th><th className="num">Line cost</th><th style={{ width: 28 }}></th></tr></thead>
+              <tbody>{rows.map((r, ri) => { const q = Number(r.qty) || 0; const rate = Number(r.rate) || 0; const mLine = (our - rate) * q; const mPct = our > 0 ? ((our - rate) / our * 100) : 0; return (
+                <tr key={ri}>
+                  <td><select className="select" value={r.vendor_id} onChange={e => setRow(c.product_id, ri, { vendor_id: e.target.value, rate: rateOf(e.target.value, p) })} style={{ height: 26, fontSize: 12 }}>{candIds.map(vid => { const v = getVendor(vid); return <option key={vid} value={vid}>{v ? v.name : vid}</option>; })}</select></td>
+                  <td className="num"><input type="number" min="0" className="input mono" value={r.qty} onChange={e => setRow(c.product_id, ri, { qty: e.target.value })} style={{ width: 80, textAlign: 'right', height: 26 }}/></td>
+                  <td className="num"><input type="number" min="0" className="input mono" value={r.rate} onChange={e => setRow(c.product_id, ri, { rate: e.target.value })} style={{ width: 90, textAlign: 'right', height: 26 }}/></td>
+                  <td className="num mono" style={{ color: mLine >= 0 ? 'var(--success)' : 'var(--danger)' }}>{inr(mLine)}<div className="tiny">{pct1(mPct)}</div></td>
+                  <td className="num mono">{inr(q * rate)}</td>
+                  <td>{rows.length > 1 && <button className="btn btn-ghost btn-sm" onClick={() => removeRow(c.product_id, ri)}><Icon name="x" size={11}/></button>}</td>
+                </tr>
+              ); })}</tbody>
+            </table>
+            <div style={{ padding: '6px 14px' }}><button className="btn btn-sm" onClick={() => addRow(c.product_id)}><Icon name="plus" size={11}/>Add vendor</button></div>
+            </div>
+          </div>
+        );
+      })}
+    </Modal>
+  );
+}
+
+window.AllocateVendorsModal = AllocateVendorsModal;
 window.SourcingList = SourcingList;
 window.SourcingNew = SourcingNew;
 window.SourcingDetail = SourcingDetail;
