@@ -232,6 +232,37 @@ function buildTasks(state, mutate, navigate, toast) {
     }
   });
 
+  // 3b. Vendor POs over the threshold → MD approval
+  (state.vendor_pos || []).filter(p => p.status === 'Pending MD Approval').forEach(po => {
+    const vendor = state.vendors.find(v => v.id === po.vendor_id);
+    const so = state.sales_orders.find(s => s.id === po.so_id);
+    tasks.push({
+      id: `task-po-md-${po.id}`,
+      role: 'Managing Director',
+      kind: 'Vendor PO Approval',
+      ref: po.po_no,
+      refId: po.id,
+      by: state.users.find(u => u.role === 'Purchase')?.name || 'Purchase',
+      amount: po.amount,
+      detail: `${vendor?.name || ''} · ${so?.so_no || ''} · over approval threshold`,
+      gate: '> ₹5L · MD approval',
+      icon: 'cart',
+      navigateTo: `vendor-pos/${po.id}`,
+      approve: () => {
+        mutate(s => ({
+          ...s,
+          vendor_pos: s.vendor_pos.map(x => x.id === po.id ? { ...x, status: 'Issued' } : x),
+          notifications: [{ id: 'n-pomd-' + Date.now(), kind: 'po', text: `${po.po_no} approved by MD · ready to receive`, date: window.TODAY, read: false, role: 'Purchase' }, ...s.notifications],
+        }));
+        toast(`${po.po_no} approved`, 'success');
+      },
+      reject: () => {
+        mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(x => x.id === po.id ? { ...x, status: 'Rejected' } : x) }));
+        toast(`${po.po_no} rejected`);
+      },
+    });
+  });
+
   // 4. Cross-SO Transfer Requests → source SO's PM
   state.transfer_requests.filter(t => t.status === 'Pending').forEach(tr => {
     const fromSO = state.sales_orders.find(s => s.id === tr.from_so);

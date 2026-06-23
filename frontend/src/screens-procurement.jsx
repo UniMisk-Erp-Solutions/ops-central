@@ -127,7 +127,12 @@ function SOVendorPOsTab({ so }) {
   const [receivePo, setReceivePo] = React.useState(null);
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canProcure = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const canApprove = ['Managing Director', 'Org Admin'].includes(role);
   const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
+  const setPoStatus = (po, status, msg) => {
+    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status } : p), notifications: [{ id: 'n-poapp-' + Date.now(), kind: 'po', text: `${po.po_no} ${status === 'Issued' ? 'approved by MD · ready to receive' : status === 'Rejected' ? 'rejected by MD' : 'put on hold by MD'}`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-status', entity: 'VendorPO', entity_id: po.id });
+    toast(msg, status === 'Rejected' ? '' : 'success');
+  };
 
   const pos = state.vendor_pos.filter(p => p.so_id === so.id);
   const grnsFor = (poId) => state.grns.filter(g => g.po_id === poId);
@@ -161,7 +166,9 @@ function SOVendorPOsTab({ so }) {
   const vRows = pos.filter(po => (!vF || po.vendor_id === vF) && (!sF || po.status === sF));
 
   const poStatusBadge = (st) => st === 'Material Received' ? <span className="badge success dot">Received</span>
-    : st === 'Pending MD Approval' ? <span className="badge warning dot">MD</span>
+    : st === 'Pending MD Approval' ? <span className="badge warning dot">MD approval</span>
+    : st === 'Rejected' ? <span className="badge danger dot">Rejected</span>
+    : st === 'On Hold' ? <span className="badge warning dot">On hold</span>
     : <span className="badge dot">{st}</span>;
 
   // Before POs exist: show the PLANNED vendors from the inquiry allocation so the
@@ -245,7 +252,23 @@ function SOVendorPOsTab({ so }) {
                     <td>{po.ebill && po.ebill.generated ? <span className="badge success dot">e-Bill</span> : <span className="badge dot">—</span>}</td>
                     <td>{vis.length === 0 ? <span className="muted tiny">awaiting</span> : booked ? <span className="badge success dot">{booked} booked</span> : <span className="badge warning dot">{vis.length} pending</span>}</td>
                     <td>{poStatusBadge(po.status)}</td>
-                    <td onClick={e => e.stopPropagation()}>{canProcure && rec < ordered ? <button className="btn btn-sm btn-primary" onClick={() => setReceivePo(po)}><Icon name="package" size={11}/>Receive</button> : rec >= ordered && ordered > 0 ? <span className="badge success dot">Received</span> : null}</td>
+                    <td onClick={e => e.stopPropagation()}>
+                      {po.status === 'Pending MD Approval'
+                        ? (canApprove
+                            ? <div style={{ display: 'flex', gap: 4 }}>
+                                <button className="btn btn-sm btn-primary" onClick={() => setPoStatus(po, 'Issued', `${po.po_no} approved`)}>Approve</button>
+                                <button className="btn btn-sm" onClick={() => setPoStatus(po, 'On Hold', `${po.po_no} on hold`)}>Hold</button>
+                                <button className="btn btn-sm btn-danger" onClick={() => setPoStatus(po, 'Rejected', `${po.po_no} rejected`)}>Reject</button>
+                              </div>
+                            : <span className="badge warning dot">awaiting MD</span>)
+                        : po.status === 'On Hold'
+                          ? (canApprove ? <button className="btn btn-sm btn-primary" onClick={() => setPoStatus(po, 'Issued', `${po.po_no} resumed`)}>Resume</button> : <span className="muted tiny">on hold</span>)
+                          : po.status === 'Rejected'
+                            ? <span className="muted tiny">rejected</span>
+                            : canProcure && rec < ordered
+                              ? <button className="btn btn-sm btn-primary" onClick={() => setReceivePo(po)}><Icon name="package" size={11}/>Receive</button>
+                              : rec >= ordered && ordered > 0 ? <span className="badge success dot">Received</span> : null}
+                    </td>
                   </tr>
                 );
               })}
@@ -502,10 +525,17 @@ function VendorPOList() {
 }
 
 function VendorPODetail({ poId }) {
-  const { state, navigate, mutate, getVendor, getSO, getCustomer, getProduct } = useStore();
+  const { state, navigate, mutate, getVendor, getSO, getCustomer, getProduct, currentUser, getUser } = useStore();
   const toast = useToast();
   const po = state.vendor_pos.find(p => p.id === poId);
   if (!po) return <div className="page"><div className="empty">PO not found</div></div>;
+  const role = currentUser ? getUser(currentUser)?.role : '';
+  const canApprovePO = ['Managing Director', 'Org Admin'].includes(role);
+  const blocked = ['Pending MD Approval', 'Rejected', 'On Hold'].includes(po.status);
+  const setPoStatus = (status, msg) => {
+    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status } : p), notifications: [{ id: 'n-poapp-' + Date.now(), kind: 'po', text: `${po.po_no} ${status === 'Issued' ? 'approved · ready to receive' : status === 'Rejected' ? 'rejected' : 'on hold'} by MD`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-status', entity: 'VendorPO', entity_id: po.id });
+    toast(msg, status === 'Rejected' ? '' : 'success');
+  };
   const v = getVendor(po.vendor_id);
   const so = getSO(po.so_id);
   const cust = so ? getCustomer(so.customer_id) : null;
@@ -557,17 +587,25 @@ function VendorPODetail({ poId }) {
           <div className="page-sub">Payable to <strong>{v.name}</strong> · For project <span className="mono">{so?.so_no}</span>{cust ? ` · ${cust.name}` : ''}</div>
         </div>
         <div className="page-actions">
+          {po.status === 'Pending MD Approval' && canApprovePO && <>
+            <button className="btn btn-primary" onClick={() => setPoStatus('Issued', `${po.po_no} approved`)}><Icon name="check" size={13}/>Approve</button>
+            <button className="btn" onClick={() => setPoStatus('On Hold', `${po.po_no} on hold`)}><Icon name="alert" size={13}/>Hold</button>
+            <button className="btn btn-danger" onClick={() => setPoStatus('Rejected', `${po.po_no} rejected`)}>Reject</button>
+          </>}
+          {po.status === 'On Hold' && canApprovePO && <button className="btn btn-primary" onClick={() => setPoStatus('Issued', `${po.po_no} resumed`)}><Icon name="repeat" size={13}/>Resume</button>}
           {ebilled
             ? <button className="btn" onClick={() => window.print()}><Icon name="print" size={13}/>Print e-Bill</button>
-            : <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>}
+            : !blocked && <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>}
           <button className="btn"><Icon name="mail" size={13}/>Resend to vendor</button>
-          {po.status !== 'Material Received'
+          {!blocked && (po.status !== 'Material Received'
             ? <button className="btn btn-primary" onClick={() => navigate('grn')}><Icon name="package" size={13}/>Create GRN</button>
             : !vInv
               ? <button className="btn btn-primary" onClick={() => setShowVI(true)}><Icon name="receipt" size={13}/>Record vendor invoice</button>
-              : <button className="btn" onClick={() => navigate(`three-way/${vInv.id}`)}><Icon name="check" size={13}/>View 3-way match</button>}
+              : <button className="btn" onClick={() => navigate(`three-way/${vInv.id}`)}><Icon name="check" size={13}/>View 3-way match</button>)}
         </div>
       </div>
+      {po.status === 'Pending MD Approval' && <div className="mb-2" style={{ padding: '10px 12px', background: 'var(--warning-bg)', border: '1px solid oklch(0.85 0.09 75)', borderRadius: 'var(--radius)', display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}><Icon name="alert" size={14} color="var(--warning)"/><span><strong>Awaiting MD approval</strong> · this PO is over the approval threshold ({inr(grand)}). Receiving is blocked until approved.{!canApprovePO && ' Only the Managing Director / Org Admin can approve.'}</span></div>}
+      {po.status === 'Rejected' && <div className="mb-2" style={{ padding: '10px 12px', background: 'var(--danger-bg)', borderRadius: 'var(--radius)', fontSize: 12.5 }}><Icon name="alert" size={14} color="var(--danger)"/> <strong>Rejected by MD.</strong> Re-create a PO via the Vendor POs tab if needed.</div>}
       {showVI && <RecordVendorInvoiceModal poId={po.id} onClose={() => setShowVI(false)}/>}
 
       <div className="card mb-2"><div className="card-body" style={{ padding: '10px 14px' }}>
@@ -953,7 +991,8 @@ function GRNNew() {
   const { navigate, state, mutate, getVendor, getProduct, getSO, addToPool, currentUser, getUser } = useStore();
   const toast = useToast();
   // Receivable = POs not yet fully received.
-  const receivable = state.vendor_pos.filter(p => p.status !== 'Material Received');
+  const blockedPo = (st) => ['Pending MD Approval', 'Rejected', 'On Hold'].includes(st);
+  const receivable = state.vendor_pos.filter(p => p.status !== 'Material Received' && !blockedPo(p.status));
   const [poId, setPoId] = React.useState(() => {
     const d = state.vendor_pos.find(p => p.status === 'In Transit') || receivable[0] || state.vendor_pos[0];
     return d ? d.id : '';
@@ -1012,7 +1051,7 @@ function GRNNew() {
         <div className="field" style={{ minWidth: 280 }}>
           <label className="field-label">Receive against Vendor PO</label>
           <select className="select" value={poId} onChange={e => setPoId(e.target.value)}>
-            {state.vendor_pos.map(p => { const vv = getVendor(p.vendor_id); const ss = getSO(p.so_id); return (
+            {state.vendor_pos.filter(p => !blockedPo(p.status)).map(p => { const vv = getVendor(p.vendor_id); const ss = getSO(p.so_id); return (
               <option key={p.id} value={p.id}>{p.po_no} · {vv?.name} · {ss?.so_no || '—'} · {p.status}</option>
             ); })}
           </select>
