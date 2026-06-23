@@ -243,22 +243,22 @@ function buildTasks(state, mutate, navigate, toast) {
       ref: po.po_no,
       refId: po.id,
       by: state.users.find(u => u.role === 'Purchase')?.name || 'Purchase',
-      amount: po.amount,
-      detail: `${vendor?.name || ''} · ${so?.so_no || ''} · over approval threshold`,
-      gate: '> ₹5L · MD approval',
+      amount: po.pending_change ? po.pending_change.amount : po.amount,
+      detail: po.pending_change ? `Vendor change → ${state.vendors.find(v => v.id === po.pending_change.vendor_id)?.name || ''} · ${so?.so_no || ''} · cheaper by ${window.inrK ? window.inrK(po.pending_change.old_amount - po.pending_change.amount) : ''}` : `${vendor?.name || ''} · ${so?.so_no || ''} · over approval threshold`,
+      gate: po.pending_change ? 'Vendor change · MD approval' : '> ₹5L · MD approval',
       icon: 'cart',
       navigateTo: `vendor-pos/${po.id}`,
       approve: () => {
         mutate(s => ({
           ...s,
-          vendor_pos: s.vendor_pos.map(x => x.id === po.id ? { ...x, status: 'Issued' } : x),
-          notifications: [{ id: 'n-pomd-' + Date.now(), kind: 'po', text: `${po.po_no} approved by MD · ready to receive`, date: window.TODAY, read: false, role: 'Purchase' }, ...s.notifications],
+          vendor_pos: s.vendor_pos.map(x => x.id === po.id ? (window.applyPOReview ? window.applyPOReview(x, true) : { ...x, status: 'Issued' }) : x),
+          notifications: [{ id: 'n-pomd-' + Date.now(), kind: 'po', text: `${po.po_no} ${po.pending_change ? 'vendor change approved' : 'approved'} by MD · ready to receive`, date: window.TODAY, read: false, role: 'Purchase' }, ...s.notifications],
         }));
         toast(`${po.po_no} approved`, 'success');
       },
       reject: () => {
-        mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(x => x.id === po.id ? { ...x, status: 'Rejected' } : x) }));
-        toast(`${po.po_no} rejected`);
+        mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(x => x.id === po.id ? (window.applyPOReview ? window.applyPOReview(x, false) : { ...x, status: 'Rejected' }) : x) }));
+        toast(`${po.po_no} ${po.pending_change ? 'change declined' : 'rejected'}`);
       },
     });
   });

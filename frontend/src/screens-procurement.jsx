@@ -114,6 +114,74 @@ function poOurValue(po, getProduct) {
   return (po.items || []).reduce((s, it) => { const p = getProduct(it.product_id); return s + (p ? (p.sell || 0) : 0) * (it.qty || 0); }, 0);
 }
 
+// Resolve an MD review of a PO. If a vendor-change is pending, approve swaps the
+// vendor/items/amount in automatically; reject discards it (old vendor kept). For
+// a plain over-threshold PO: approve → Issued, reject → Rejected.
+function applyPOReview(po, approve) {
+  if (po.pending_change) {
+    if (approve) { const c = po.pending_change; return { ...po, vendor_id: c.vendor_id, items: c.items, amount: c.amount, status: 'Issued', pending_change: null }; }
+    return { ...po, status: 'Issued', pending_change: null };
+  }
+  return { ...po, status: approve ? 'Issued' : 'Rejected' };
+}
+window.applyPOReview = applyPOReview;
+
+// Purchase proposes switching a PO to a CHEAPER vendor → goes to MD for approval.
+function ChangeVendorModal({ po, onClose }) {
+  const { state, mutate, getVendor, getProduct, currentUser } = useStore();
+  const toast = useToast();
+  const sourcing = window.soSourcing ? window.soSourcing(state, po.so_id) : null;
+  const candIds = ((sourcing && (sourcing.quote_vendors || []).length) ? sourcing.quote_vendors : state.vendors.map(v => v.id)).filter(vid => vid !== po.vendor_id);
+  const rateOf = (vid, p) => (sourcing && sourcing.prices && sourcing.prices[p.id] && sourcing.prices[p.id][vid] != null) ? Number(sourcing.prices[p.id][vid]) : (window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : (p ? (p.buy || 0) : 0));
+  const [vid, setVid] = React.useState(candIds[0] || '');
+  const [rates, setRates] = React.useState({});
+  React.useEffect(() => { const r = {}; (po.items || []).forEach(it => { const p = getProduct(it.product_id); r[it.product_id] = vid ? rateOf(vid, p) : it.rate; }); setRates(r); }, [vid]);
+  const newAmount = (po.items || []).reduce((s, it) => s + (it.qty || 0) * (Number(rates[it.product_id]) || 0), 0);
+  const cheaper = newAmount > 0 && newAmount < po.amount;
+
+  const submit = () => {
+    if (!vid) { toast('Pick a new vendor'); return; }
+    if (!cheaper) { toast('The new vendor total must be LESS than the current PO'); return; }
+    const items = (po.items || []).map(it => ({ product_id: it.product_id, qty: it.qty, rate: Number(rates[it.product_id]) || 0 }));
+    const change = { vendor_id: vid, items, amount: Math.round(newAmount), old_vendor_id: po.vendor_id, old_amount: po.amount, requested_by: currentUser || null, date: TODAY };
+    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, pending_change: change, status: 'Pending MD Approval' } : p), notifications: [{ id: 'n-vchg-' + Date.now(), kind: 'po', text: `${po.po_no}: vendor change → ${getVendor(vid)?.name} (${inrK(newAmount)} < ${inrK(po.amount)}) — awaiting MD approval`, date: TODAY, read: false, role: 'Managing Director' }, ...s.notifications] }), { action: 'vendor-change', entity: 'VendorPO', entity_id: po.id });
+    toast('Vendor change sent to MD for approval', 'success');
+    onClose();
+  };
+
+  return (
+    <Modal title={`Change vendor — ${po.po_no}`} onClose={onClose} size="lg" footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!cheaper} onClick={submit}>Send to MD · {inr(newAmount)}</button></>}>
+      {candIds.length === 0 ? (
+        <div className="empty">No alternative vendors available for this order.</div>
+      ) : (
+        <>
+          <div className="field-row mb-2">
+            <div className="field"><label className="field-label">Current vendor</label><div className="input mono" style={{ background: 'var(--bg-subtle)' }}>{getVendor(po.vendor_id)?.name} · {inr(po.amount)}</div></div>
+            <div className="field"><label className="field-label">New vendor *</label><select className="select" value={vid} onChange={e => setVid(e.target.value)}>{candIds.map(id => { const v = getVendor(id); return <option key={id} value={id}>{v ? v.name : id}</option>; })}</select></div>
+          </div>
+          <table className="t">
+            <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Old rate</th><th className="num">New rate ₹</th><th className="num">Line</th></tr></thead>
+            <tbody>
+              {(po.items || []).map(it => { const p = getProduct(it.product_id) || { name: it.product_id }; return (
+                <tr key={it.product_id}>
+                  <td>{p.name}</td><td className="num">{it.qty}</td><td className="num small muted">{inr(it.rate)}</td>
+                  <td className="num"><input type="number" min="0" className="input mono" value={rates[it.product_id] != null ? rates[it.product_id] : ''} onChange={e => setRates(r => ({ ...r, [it.product_id]: e.target.value }))} style={{ width: 90, textAlign: 'right', height: 26 }}/></td>
+                  <td className="num mono">{inr((it.qty || 0) * (Number(rates[it.product_id]) || 0))}</td>
+                </tr>
+              ); })}
+            </tbody>
+            <tfoot><tr><td colSpan="4" className="right small">New total</td><td className="num mono" style={{ color: cheaper ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(newAmount)}</strong></td></tr></tfoot>
+          </table>
+          <div className="mt-2" style={{ padding: 10, borderRadius: 4, background: cheaper ? 'var(--success-bg)' : 'var(--danger-bg)', fontSize: 12.5 }}>
+            {cheaper ? `Saves ${inr(po.amount - newAmount)} vs the current vendor — allowed.` : `Must be lower than the current PO (${inr(po.amount)}). A more expensive switch isn't allowed.`}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+window.ChangeVendorModal = ChangeVendorModal;
+
 // ===== Per-SO Vendor POs tab — every vendor mapped to ONE SO, with margins,
 // item tracking (ordered → received → remaining) and payable status, in one
 // place. Read-only consolidation; actions reuse the existing GRN / 3-way flow. =====
@@ -130,8 +198,13 @@ function SOVendorPOsTab({ so }) {
   const canApprove = ['Managing Director', 'Org Admin'].includes(role);
   const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
   const setPoStatus = (po, status, msg) => {
-    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status } : p), notifications: [{ id: 'n-poapp-' + Date.now(), kind: 'po', text: `${po.po_no} ${status === 'Issued' ? 'approved by MD · ready to receive' : status === 'Rejected' ? 'rejected by MD' : 'put on hold by MD'}`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-status', entity: 'VendorPO', entity_id: po.id });
+    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status } : p), notifications: [{ id: 'n-poapp-' + Date.now(), kind: 'po', text: `${po.po_no} ${status === 'Issued' ? 'resumed' : status === 'Rejected' ? 'rejected by MD' : 'put on hold by MD'}`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-status', entity: 'VendorPO', entity_id: po.id });
     toast(msg, status === 'Rejected' ? '' : 'success');
+  };
+  const reviewPo = (po, approve) => {
+    const changed = !!po.pending_change;
+    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? applyPOReview(p, approve) : p), notifications: [{ id: 'n-porev-' + Date.now(), kind: 'po', text: `${po.po_no} ${approve ? (changed ? 'vendor change approved → ' + (getVendor(po.pending_change.vendor_id)?.name || '') : 'approved') : (changed ? 'vendor change declined' : 'rejected')} by MD`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-review', entity: 'VendorPO', entity_id: po.id });
+    toast(approve ? `${po.po_no} approved` : `${po.po_no} ${changed ? 'change declined' : 'rejected'}`, approve ? 'success' : '');
   };
 
   const pos = state.vendor_pos.filter(p => p.so_id === so.id);
@@ -255,12 +328,13 @@ function SOVendorPOsTab({ so }) {
                     <td onClick={e => e.stopPropagation()}>
                       {po.status === 'Pending MD Approval'
                         ? (canApprove
-                            ? <div style={{ display: 'flex', gap: 4 }}>
-                                <button className="btn btn-sm btn-primary" onClick={() => setPoStatus(po, 'Issued', `${po.po_no} approved`)}>Approve</button>
-                                <button className="btn btn-sm" onClick={() => setPoStatus(po, 'On Hold', `${po.po_no} on hold`)}>Hold</button>
-                                <button className="btn btn-sm btn-danger" onClick={() => setPoStatus(po, 'Rejected', `${po.po_no} rejected`)}>Reject</button>
+                            ? <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                {po.pending_change && <div className="tiny" style={{ width: '100%', textAlign: 'right', color: 'var(--accent)' }}>→ {getVendor(po.pending_change.vendor_id)?.name} ({inrK(po.pending_change.amount)})</div>}
+                                <button className="btn btn-sm btn-primary" onClick={() => reviewPo(po, true)}>Approve</button>
+                                {!po.pending_change && <button className="btn btn-sm" onClick={() => setPoStatus(po, 'On Hold', `${po.po_no} on hold`)}>Hold</button>}
+                                <button className="btn btn-sm btn-danger" onClick={() => reviewPo(po, false)}>Reject</button>
                               </div>
-                            : <span className="badge warning dot">awaiting MD</span>)
+                            : <span className="badge warning dot">awaiting MD{po.pending_change ? ' · vendor change' : ''}</span>)
                         : po.status === 'On Hold'
                           ? (canApprove ? <button className="btn btn-sm btn-primary" onClick={() => setPoStatus(po, 'Issued', `${po.po_no} resumed`)}>Resume</button> : <span className="muted tiny">on hold</span>)
                           : po.status === 'Rejected'
@@ -531,10 +605,16 @@ function VendorPODetail({ poId }) {
   if (!po) return <div className="page"><div className="empty">PO not found</div></div>;
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canApprovePO = ['Managing Director', 'Org Admin'].includes(role);
+  const canProcurePO = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
   const blocked = ['Pending MD Approval', 'Rejected', 'On Hold'].includes(po.status);
   const setPoStatus = (status, msg) => {
-    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status } : p), notifications: [{ id: 'n-poapp-' + Date.now(), kind: 'po', text: `${po.po_no} ${status === 'Issued' ? 'approved · ready to receive' : status === 'Rejected' ? 'rejected' : 'on hold'} by MD`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-status', entity: 'VendorPO', entity_id: po.id });
+    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status } : p), notifications: [{ id: 'n-poapp-' + Date.now(), kind: 'po', text: `${po.po_no} ${status === 'Issued' ? 'resumed' : status === 'Rejected' ? 'rejected' : 'on hold'} by MD`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-status', entity: 'VendorPO', entity_id: po.id });
     toast(msg, status === 'Rejected' ? '' : 'success');
+  };
+  const reviewPo = (approve) => {
+    const changed = !!po.pending_change;
+    mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? applyPOReview(p, approve) : p), notifications: [{ id: 'n-porev-' + Date.now(), kind: 'po', text: `${po.po_no} ${approve ? (changed ? 'vendor change approved' : 'approved · ready to receive') : (changed ? 'vendor change declined' : 'rejected')} by MD`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-review', entity: 'VendorPO', entity_id: po.id });
+    toast(approve ? `${po.po_no} approved` : `${po.po_no} ${changed ? 'change declined' : 'rejected'}`, approve ? 'success' : '');
   };
   const v = getVendor(po.vendor_id);
   const so = getSO(po.so_id);
@@ -545,6 +625,7 @@ function VendorPODetail({ poId }) {
   const grand = subtotal + gst;
   const ebilled = po.ebill && po.ebill.generated;
   const [showVI, setShowVI] = React.useState(false);
+  const [showChange, setShowChange] = React.useState(false);
 
   // Sibling POs for the same project (SO) — the vendors selected for this order.
   const siblings = state.vendor_pos.filter(p => p.so_id === po.so_id);
@@ -588,11 +669,12 @@ function VendorPODetail({ poId }) {
         </div>
         <div className="page-actions">
           {po.status === 'Pending MD Approval' && canApprovePO && <>
-            <button className="btn btn-primary" onClick={() => setPoStatus('Issued', `${po.po_no} approved`)}><Icon name="check" size={13}/>Approve</button>
-            <button className="btn" onClick={() => setPoStatus('On Hold', `${po.po_no} on hold`)}><Icon name="alert" size={13}/>Hold</button>
-            <button className="btn btn-danger" onClick={() => setPoStatus('Rejected', `${po.po_no} rejected`)}>Reject</button>
+            <button className="btn btn-primary" onClick={() => reviewPo(true)}><Icon name="check" size={13}/>{po.pending_change ? 'Approve change' : 'Approve'}</button>
+            {!po.pending_change && <button className="btn" onClick={() => setPoStatus('On Hold', `${po.po_no} on hold`)}><Icon name="alert" size={13}/>Hold</button>}
+            <button className="btn btn-danger" onClick={() => reviewPo(false)}>Reject</button>
           </>}
           {po.status === 'On Hold' && canApprovePO && <button className="btn btn-primary" onClick={() => setPoStatus('Issued', `${po.po_no} resumed`)}><Icon name="repeat" size={13}/>Resume</button>}
+          {canProcurePO && ['Issued', 'In Transit'].includes(po.status) && !po.pending_change && !grn && <button className="btn" onClick={() => setShowChange(true)}><Icon name="arrowLeftRight" size={13}/>Change vendor</button>}
           {ebilled
             ? <button className="btn" onClick={() => window.print()}><Icon name="print" size={13}/>Print e-Bill</button>
             : !blocked && <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>}
@@ -604,9 +686,12 @@ function VendorPODetail({ poId }) {
               : <button className="btn" onClick={() => navigate(`three-way/${vInv.id}`)}><Icon name="check" size={13}/>View 3-way match</button>)}
         </div>
       </div>
-      {po.status === 'Pending MD Approval' && <div className="mb-2" style={{ padding: '10px 12px', background: 'var(--warning-bg)', border: '1px solid oklch(0.85 0.09 75)', borderRadius: 'var(--radius)', display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}><Icon name="alert" size={14} color="var(--warning)"/><span><strong>Awaiting MD approval</strong> · this PO is over the approval threshold ({inr(grand)}). Receiving is blocked until approved.{!canApprovePO && ' Only the Managing Director / Org Admin can approve.'}</span></div>}
+      {po.status === 'Pending MD Approval' && <div className="mb-2" style={{ padding: '10px 12px', background: 'var(--warning-bg)', border: '1px solid oklch(0.85 0.09 75)', borderRadius: 'var(--radius)', display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}><Icon name="alert" size={14} color="var(--warning)"/><span>{po.pending_change
+        ? <><strong>Vendor change awaiting MD approval</strong> · switch to <strong>{getVendor(po.pending_change.vendor_id)?.name}</strong> at {inr(po.pending_change.amount)} (was {inr(po.pending_change.old_amount)}, saves {inr(po.pending_change.old_amount - po.pending_change.amount)}). On approval the vendor swaps in automatically and the flow continues.</>
+        : <><strong>Awaiting MD approval</strong> · this PO is over the approval threshold ({inr(grand)}). Receiving is blocked until approved.</>}{!canApprovePO && ' Only the Managing Director / Org Admin can approve.'}</span></div>}
       {po.status === 'Rejected' && <div className="mb-2" style={{ padding: '10px 12px', background: 'var(--danger-bg)', borderRadius: 'var(--radius)', fontSize: 12.5 }}><Icon name="alert" size={14} color="var(--danger)"/> <strong>Rejected by MD.</strong> Re-create a PO via the Vendor POs tab if needed.</div>}
       {showVI && <RecordVendorInvoiceModal poId={po.id} onClose={() => setShowVI(false)}/>}
+      {showChange && <ChangeVendorModal po={po} onClose={() => setShowChange(false)}/>}
 
       <div className="card mb-2"><div className="card-body" style={{ padding: '10px 14px' }}>
         <div className="h-timeline">
