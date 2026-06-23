@@ -118,13 +118,16 @@ function poOurValue(po, getProduct) {
 // item tracking (ordered → received → remaining) and payable status, in one
 // place. Read-only consolidation; actions reuse the existing GRN / 3-way flow. =====
 function SOVendorPOsTab({ so }) {
-  const { state, navigate, getVendor, getProduct, soSubtotal, currentUser, getUser } = useStore();
+  const { state, navigate, mutate, getVendor, getProduct, soSubtotal, currentUser, getUser } = useStore();
+  const toast = useToast();
   const [vF, setVF] = React.useState('');
   const [sF, setSF] = React.useState('');
   const [q, setQ] = React.useState('');
   const [showSplit, setShowSplit] = React.useState(false);
+  const [receivePo, setReceivePo] = React.useState(null);
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canProcure = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
 
   const pos = state.vendor_pos.filter(p => p.so_id === so.id);
   const grnsFor = (poId) => state.grns.filter(g => g.po_id === poId);
@@ -161,12 +164,30 @@ function SOVendorPOsTab({ so }) {
     : st === 'Pending MD Approval' ? <span className="badge warning dot">MD</span>
     : <span className="badge dot">{st}</span>;
 
-  if (pos.length === 0) return (
-    <div className="card"><div className="empty">
-      <div className="empty-title">No vendor POs for this order yet</div>
-      Approve the SO, then generate Vendor PO(s) from the inquiry (Procurement tab) — every vendor you raise appears here, mapped to this order.
-    </div></div>
-  );
+  // Before POs exist: show the PLANNED vendors from the inquiry allocation so the
+  // SO already lists its vendors, with one-click generate.
+  if (pos.length === 0) {
+    const planned = sourcing && window.vendorPOGroups ? window.vendorPOGroups(state, so, sourcing, getProduct) : [];
+    if (planned.length === 0) return (
+      <div className="card"><div className="empty">
+        <div className="empty-title">No vendors yet</div>
+        Vendors come from the inquiry. Add them in Sourcing (Add vendor &amp; quote → Allocate across vendors); they'll appear here and POs auto-generate when you click Start Procurement.
+      </div></div>
+    );
+    return (
+      <div className="stack">
+        <div className="card"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div className="grow"><strong className="small">Planned vendors from inquiry {sourcing.src_no}</strong><div className="tiny muted">{planned.length} vendor(s) · POs auto-generate on “Start Procurement”, or generate now.</div></div>
+          {canProcure && <button className="btn btn-primary" onClick={() => window.generateVendorPOsFromSourcing(so, sourcing, { state, mutate, toast, navigate, getProduct })}><Icon name="cart" size={13}/>Generate {planned.length} Vendor PO(s)</button>}
+        </div></div>
+        <div className="card"><div className="card-body flush"><table className="t">
+          <thead><tr><th>Vendor (planned)</th><th className="num">Items</th><th className="num">Planned cost</th></tr></thead>
+          <tbody>{planned.map(g => { const v = getVendor(g.vendor_id); return <tr key={g.vendor_id}><td>{v ? v.name : g.vendor_id}</td><td className="num">{g.items.length}</td><td className="num mono">{inr(g.amount)}</td></tr>; })}</tbody>
+          <tfoot><tr><td className="right small">Planned total</td><td></td><td className="num mono"><strong>{inr(planned.reduce((s, g) => s + g.amount, 0))}</strong></td></tr></tfoot>
+        </table></div></div>
+      </div>
+    );
+  }
 
   return (
     <div className="stack">
@@ -204,7 +225,7 @@ function SOVendorPOsTab({ so }) {
         </div>
         <div className="card-body flush">
           <table className="t">
-            <thead><tr><th>Vendor · PO</th><th className="num">Cost</th><th className="num">Our value</th><th className="num">Margin</th><th className="num">Received</th><th>e-Bill</th><th>Payable</th><th></th></tr></thead>
+            <thead><tr><th>Vendor · PO</th><th className="num">Cost</th><th className="num">Our value</th><th className="num">Margin</th><th className="num">Received</th><th>e-Bill</th><th>Payable</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {vRows.map(po => {
                 const v = getVendor(po.vendor_id);
@@ -224,11 +245,12 @@ function SOVendorPOsTab({ so }) {
                     <td>{po.ebill && po.ebill.generated ? <span className="badge success dot">e-Bill</span> : <span className="badge dot">—</span>}</td>
                     <td>{vis.length === 0 ? <span className="muted tiny">awaiting</span> : booked ? <span className="badge success dot">{booked} booked</span> : <span className="badge warning dot">{vis.length} pending</span>}</td>
                     <td>{poStatusBadge(po.status)}</td>
+                    <td onClick={e => e.stopPropagation()}>{canProcure && rec < ordered ? <button className="btn btn-sm btn-primary" onClick={() => setReceivePo(po)}><Icon name="package" size={11}/>Receive</button> : rec >= ordered && ordered > 0 ? <span className="badge success dot">Received</span> : null}</td>
                   </tr>
                 );
               })}
             </tbody>
-            <tfoot><tr><td className="right small">Totals</td><td className="num mono"><strong>{inr(vendorSpend)}</strong></td><td className="num mono">{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0))}</td><td className="num mono" style={{ color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0) - vendorSpend)}</strong></td><td colSpan="4"></td></tr></tfoot>
+            <tfoot><tr><td className="right small">Totals</td><td className="num mono"><strong>{inr(vendorSpend)}</strong></td><td className="num mono">{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0))}</td><td className="num mono" style={{ color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0) - vendorSpend)}</strong></td><td colSpan="5"></td></tr></tfoot>
           </table>
         </div>
         {canProcure && <div className="card-body" style={{ borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}><button className="btn btn-sm btn-primary" onClick={() => setShowSplit(true)}><Icon name="arrowLeftRight" size={12}/>Split across vendors</button><button className="btn btn-sm" onClick={() => navigate('grn/new')}><Icon name="package" size={12}/>Receive material (GRN)</button><button className="btn btn-sm" onClick={() => navigate('three-way')}><Icon name="check" size={12}/>Vendor invoices / 3-way</button></div>}
@@ -261,6 +283,7 @@ function SOVendorPOsTab({ so }) {
       </div>
 
       {showSplit && <SplitAllocatorModal so={so} onClose={() => setShowSplit(false)}/>}
+      {receivePo && <ReceiveModal po={receivePo} onClose={() => setReceivePo(null)}/>}
     </div>
   );
 }
@@ -836,6 +859,96 @@ function GRNDetail({ grnId }) {
   );
 }
 
+// Shared receipt poster — used by the single-PO GRN screen AND the per-vendor
+// Receive modal. Creates the GRN, auto-stamps the PO e-Bill, auto-books the
+// vendor (payable) invoice for the received value, routes surplus to the Master
+// Pool, auto-reduces the client bill for removed items, and auto-raises the
+// client partial invoice. items: [{product_id, qty(ordered), received, rejected, reason, to_pool}].
+async function postReceiptForPO(po, items, meta, ctx) {
+  const { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser } = ctx;
+  const grnDate = (meta && meta.grnDate) || TODAY; const lr = (meta && meta.lr) || '';
+  const norm = items.map(it => ({ ...it, accepted: Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0)) }));
+  const surplus = norm.filter(it => (it.to_pool || 0) > 0).map(it => ({ product_id: it.product_id, qty: it.to_pool, source_so: po.so_id, received_date: grnDate }));
+  const surplusUnits = surplus.reduce((s, x) => s + x.qty, 0);
+  const grnNo = `GRN/FY26/${String(28 + state.grns.length).padStart(4, '0')}`;
+  const rnd = Math.random().toString(36).slice(2, 5);
+  const grn = {
+    id: 'grn-' + Date.now() + rnd, grn_no: grnNo, po_id: po.id, date: grnDate, lr, received_by: 'Stores', status: 'Posted',
+    items: norm.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null, to_pool: it.to_pool || 0 })),
+  };
+  const adjustments = norm.filter(it => (it.to_pool || 0) > 0).map(it => { const p = getProduct(it.product_id); return { product_id: it.product_id, qty: it.to_pool, amount: Math.round((p ? (p.sell || 0) : 0) * it.to_pool), reason: 'Removed at GRN — not supplied to customer', grn_id: grn.id, date: grnDate }; });
+  const billCut = adjustments.reduce((s, a) => s + a.amount, 0);
+  const ebillSeq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
+  const ebill = po.ebill && po.ebill.generated ? po.ebill : { no: `VPO-EB/FY26/${ebillSeq}`, irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(), date: grnDate, amount: Math.round((po.amount || 0) * 1.18), generated: true, auto: true };
+  const rateOf = {}; (po.items || []).forEach(it => { rateOf[it.product_id] = it.rate; });
+  const recvValue = norm.reduce((s, it) => s + (it.accepted || 0) * (rateOf[it.product_id] || 0), 0);
+  const autoVI = recvValue > 0 ? { id: 'vi-' + Date.now() + rnd, vendor_invoice_no: `VINV/FY26/${String(1 + (state.vendor_invoices || []).length).padStart(4, '0')}`, po_id: po.id, grn_id: grn.id, vendor_id: po.vendor_id, date: grnDate, amount: Math.round(recvValue), status: 'Booked', tolerance: 'within' } : null;
+  const so = state.sales_orders.find(x => x.id === po.so_id);
+  mutate(s => ({
+    ...s,
+    grns: [grn, ...s.grns],
+    vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received', ebill } : p),
+    vendor_invoices: autoVI ? [autoVI, ...s.vendor_invoices] : s.vendor_invoices,
+    sales_orders: (po.so_id && adjustments.length) ? s.sales_orders.map(x => x.id === po.so_id ? { ...x, bill_adjustments: [...(x.bill_adjustments || []), ...adjustments] } : x) : s.sales_orders,
+    notifications: [
+      { id: 'n-grn-' + Date.now() + rnd, kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · received + e-Bill auto-saved`, date: TODAY, read: false, role: 'Billing' },
+      ...(autoVI ? [{ id: 'n-payv-' + Date.now() + rnd, kind: 'match', text: `${autoVI.vendor_invoice_no} auto-booked · ${inrK(autoVI.amount)} payable to ${getVendor(po.vendor_id)?.name || 'vendor'} (${po.po_no})`, date: TODAY, read: false, role: 'Billing' }] : []),
+      ...(surplusUnits ? [{ id: 'n-pool-' + Date.now() + rnd, kind: 'transfer', text: `${surplusUnits} surplus unit(s) → Master Pool from ${po.po_no}`, date: TODAY, read: false, role: 'Stores' }] : []),
+      ...(billCut ? [{ id: 'n-bill-' + Date.now() + rnd, kind: 'so', text: `${so ? so.so_no : po.po_no}: customer bill auto-reduced by ${inrK(billCut)} (items not supplied)`, date: TODAY, read: false, role: 'Billing' }] : []),
+    ],
+  }), { action: 'create', entity: 'GRN', entity_id: grn.id });
+  if (surplus.length) await addToPool(surplus);
+  if (po.so_id && window.raiseSOInvoice) window.raiseSOInvoice(po.so_id, { mode: 'bundle' }, { mutate, toast: null, currentUser, getUser, getProduct }, { silent: true });
+  return { grn, surplusUnits, billCut };
+}
+window.postReceiptForPO = postReceiptForPO;
+
+// Per-vendor receive modal (used from the SO Vendor POs tab — scalable to many vendors).
+function ReceiveModal({ po, onClose }) {
+  const { state, mutate, addToPool, getProduct, getVendor, currentUser, getUser } = useStore();
+  const toast = useToast();
+  const v = getVendor(po.vendor_id);
+  const [items, setItems] = React.useState(po.items.map(it => ({ ...it, recv: true, received: it.qty, rejected: 0, reason: '', to_pool: 0 })));
+  const [lr, setLr] = React.useState('DELHIVERY-D88234');
+  const [grnDate, setGrnDate] = React.useState(TODAY);
+  const submit = async () => {
+    if (items.some(it => it.rejected > 0 && !it.reason)) { toast('Add a reason for each rejected line'); return; }
+    await postReceiptForPO(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
+    toast(`Receipt posted for ${po.po_no}`, 'success');
+    onClose();
+  };
+  return (
+    <Modal title={`Receive — ${po.po_no} · ${v ? v.name : ''}`} onClose={onClose} size="lg" footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={submit}><Icon name="check" size={13}/>Post receipt</button></>}>
+      <div className="field-row mb-2">
+        <div className="field"><label className="field-label">LR / tracking</label><input className="input mono" value={lr} onChange={e => setLr(e.target.value)}/></div>
+        <div className="field"><label className="field-label">Received date</label><input type="date" className="input mono" value={grnDate} onChange={e => setGrnDate(e.target.value)}/></div>
+      </div>
+      <table className="t">
+        <thead><tr><th style={{ width: 30 }}>Recv</th><th>Item</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Accepted</th><th className="num">Rejected</th><th className="num">→ Pool</th></tr></thead>
+        <tbody>
+          {items.map((it, i) => {
+            const p = getProduct(it.product_id) || { name: it.product_id, code: it.product_id };
+            const off = !it.recv; const acc = it.recv ? Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0)) : 0;
+            return (
+              <tr key={i} style={{ opacity: off ? 0.5 : 1 }}>
+                <td><input type="checkbox" checked={!!it.recv} onChange={e => { const on = e.target.checked; const n = [...items]; n[i] = on ? { ...it, recv: true, received: it.qty, rejected: 0, to_pool: 0 } : { ...it, recv: false, received: 0, rejected: 0, to_pool: 0 }; setItems(n); }}/></td>
+                <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
+                <td className="num">{it.qty}</td>
+                <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.received} onChange={e => { const n = [...items]; n[i] = { ...it, received: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 60, textAlign: 'right' }}/></td>
+                <td className="num"><input type="number" className="input mono" readOnly value={acc} style={{ width: 56, textAlign: 'right', background: 'var(--bg-subtle)' }}/></td>
+                <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.rejected} onChange={e => { const n = [...items]; n[i] = { ...it, rejected: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 56, textAlign: 'right' }}/></td>
+                <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.to_pool} onChange={e => { const n = [...items]; n[i] = { ...it, to_pool: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 56, textAlign: 'right' }}/></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="tiny muted mt-2">Posting auto-creates the GRN + e-Bill, books the vendor payable invoice for the received value, and raises the client partial invoice. Rejected/▸Pool quantities auto-route as configured.</div>
+    </Modal>
+  );
+}
+window.ReceiveModal = ReceiveModal;
+
 function GRNNew() {
   const { navigate, state, mutate, getVendor, getProduct, getSO, addToPool, currentUser, getUser } = useStore();
   const toast = useToast();
@@ -872,59 +985,8 @@ function GRNNew() {
   const post = async () => {
     if (!po) { toast('Pick a Vendor PO to receive against'); return; }
     if (items.some(it => it.rejected > 0 && !it.reason)) { toast('Add a reason for each rejected line'); return; }
-    // Normalise: accepted into this SO = received − rejected − not-needed(to pool).
-    const norm = items.map(it => ({ ...it, accepted: Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0)) }));
-    const surplus = norm.filter(it => (it.to_pool || 0) > 0)
-      .map(it => ({ product_id: it.product_id, qty: it.to_pool, source_so: po.so_id, received_date: grnDate }));
-    const surplusUnits = surplus.reduce((s, x) => s + x.qty, 0);
-    const grnNo = `GRN/FY26/${String(28 + state.grns.length).padStart(4, '0')}`;
-    const grn = {
-      id: 'grn-' + Date.now(), grn_no: grnNo, po_id: po.id, date: grnDate, lr, received_by: 'Stores', status: 'Posted',
-      items: norm.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null, to_pool: it.to_pool || 0 })),
-    };
-    // Removed items also auto-reduce the customer bill by their SELL value, so the
-    // client is never billed for what they didn't receive (reflected on invoice + EWB).
-    const adjustments = norm.filter(it => (it.to_pool || 0) > 0).map(it => {
-      const p = getProduct(it.product_id);
-      return { product_id: it.product_id, qty: it.to_pool, amount: Math.round((p ? (p.sell || 0) : 0) * it.to_pool), reason: 'Removed at GRN — not supplied to customer', grn_id: grn.id, date: grnDate };
-    });
-    const billCut = adjustments.reduce((s, a) => s + a.amount, 0);
-    // Auto-stamp the PO e-Bill on receipt (no manual step) and save it on the PO.
-    const ebillSeq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
-    const ebill = po.ebill && po.ebill.generated ? po.ebill : {
-      no: `VPO-EB/FY26/${ebillSeq}`,
-      irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(),
-      date: grnDate, amount: Math.round((po.amount || 0) * 1.18), generated: true, auto: true,
-    };
-    // Auto vendor (payable) invoice for the value received in THIS GRN — booked
-    // automatically (amount derives from PO rates, so it matches within tolerance).
-    const rateOf = {}; (po.items || []).forEach(it => { rateOf[it.product_id] = it.rate; });
-    const recvValue = norm.reduce((s, it) => s + (it.accepted || 0) * (rateOf[it.product_id] || 0), 0);
-    const autoVI = recvValue > 0 ? {
-      id: 'vi-' + Date.now(), vendor_invoice_no: `VINV/FY26/${String(1 + (state.vendor_invoices || []).length).padStart(4, '0')}`,
-      po_id: po.id, grn_id: grn.id, vendor_id: po.vendor_id, date: grnDate, amount: Math.round(recvValue), status: 'Booked', tolerance: 'within',
-    } : null;
-    mutate(s => ({
-      ...s,
-      grns: [grn, ...s.grns],
-      vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received', ebill } : p),
-      vendor_invoices: autoVI ? [autoVI, ...s.vendor_invoices] : s.vendor_invoices,
-      sales_orders: (po.so_id && adjustments.length)
-        ? s.sales_orders.map(x => x.id === po.so_id ? { ...x, bill_adjustments: [...(x.bill_adjustments || []), ...adjustments] } : x)
-        : s.sales_orders,
-      notifications: [
-        { id: 'n-grn-' + Date.now(), kind: 'grn', text: `${grnNo} posted for ${po.po_no}${so ? ' · ' + so.so_no : ''} · received + e-Bill ${ebill.no} auto-saved`, date: TODAY, read: false, role: 'Billing' },
-        ...(autoVI ? [{ id: 'n-payv-' + Date.now(), kind: 'match', text: `${autoVI.vendor_invoice_no} auto-booked · ${inrK(autoVI.amount)} payable to ${getVendor(po.vendor_id)?.name || 'vendor'} (${po.po_no})`, date: TODAY, read: false, role: 'Billing' }] : []),
-        ...(surplusUnits ? [{ id: 'n-pool-' + Date.now(), kind: 'transfer', text: `${surplusUnits} surplus unit(s) auto-moved to Master Pool from ${po.po_no}${so ? ' (' + so.so_no + ')' : ''}`, date: TODAY, read: false, role: 'Stores' }] : []),
-        ...(billCut ? [{ id: 'n-bill-' + Date.now(), kind: 'so', text: `${so ? so.so_no : po.po_no}: customer bill auto-reduced by ${inrK(billCut)} (items not supplied)`, date: TODAY, read: false, role: 'Billing' }] : []),
-      ],
-    }), { action: 'create', entity: 'GRN', entity_id: grn.id });
-    // Surplus auto-flows to the Master Surplus Pool (real insert, no manual entry).
-    if (surplus.length) await addToPool(surplus);
-    // Auto-raise a PARTIAL invoice for whatever bundles are now fully received
-    // (real-time, no human input). Silent if nothing is invoiceable yet.
-    if (po.so_id && window.raiseSOInvoice) window.raiseSOInvoice(po.so_id, { mode: 'bundle' }, { mutate, toast, currentUser, getUser, getProduct }, { silent: true });
-    toast(`${grnNo} posted · ${po.po_no} received${surplusUnits ? ` · ${surplusUnits} → Master Pool` : ''}${billCut ? ` · bill −${inrK(billCut)}` : ''}`, 'success');
+    const r = await postReceiptForPO(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
+    toast(`${r.grn.grn_no} posted · ${po.po_no} received${r.surplusUnits ? ` · ${r.surplusUnits} → Master Pool` : ''}${r.billCut ? ` · bill −${inrK(r.billCut)}` : ''}`, 'success');
     navigate(`vendor-pos/${po.id}`);
   };
 

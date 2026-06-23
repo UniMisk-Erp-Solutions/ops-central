@@ -684,6 +684,16 @@ function SalesOrderDetail({ soId }) {
 
   const advanceStatus = () => {
     if (!nextAction) return;
+    // Start Procurement → auto-generate the (split) Vendor POs from the inquiry's
+    // vendor allocation, so every vendor + the GRN appear immediately.
+    if (so.status === 'Approved' && nextAction.next === 'Procurement Started') {
+      const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
+      const hasPOs = state.vendor_pos.some(p => p.so_id === so.id);
+      if (sourcing && !hasPOs && window.generateVendorPOsFromSourcing) {
+        window.generateVendorPOsFromSourcing(so, sourcing, { state, mutate, toast, navigate, getProduct });
+        return;
+      }
+    }
     const next = nextAction.next;
     const notif = nextAction.notify;
     mutate(s => {
