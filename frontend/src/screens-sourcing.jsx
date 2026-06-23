@@ -615,7 +615,15 @@ function AddVendorQuoteModal({ src, comps, onClose }) {
     setPrices(next);
   }, [mode]);
   const setPrice = (pid, v) => setPrices(s => ({ ...s, [pid]: v }));
+  // Our price per item (editable here for live margin) — defaults to product sell.
+  const [ourPrices, setOurPrices] = React.useState(() => {
+    const init = {}; comps.forEach(c => { const p = getProduct(c.product_id); init[c.product_id] = p ? (p.sell || 0) : 0; });
+    return init;
+  });
+  const setOur = (pid, v) => setOurPrices(s => ({ ...s, [pid]: v }));
   const total = comps.reduce((s, c) => s + (Number(prices[c.product_id]) || 0) * c.qty, 0);
+  const ourTotal = comps.reduce((s, c) => s + (Number(ourPrices[c.product_id]) || 0) * c.qty, 0);
+  const marginTotal = ourTotal - total;
 
   const submit = async () => {
     if (saving) return;
@@ -675,26 +683,43 @@ function AddVendorQuoteModal({ src, comps, onClose }) {
         <label className="field-label">This vendor's quote per item</label>
         <div className="card"><div className="card-body flush">
           <table className="t">
-            <thead><tr><th>Item</th><th className="num">Req qty</th><th className="num">Baseline</th><th className="num">Vendor rate ₹</th><th className="num">Line</th></tr></thead>
+            <thead><tr><th>Item</th><th className="num">Req qty</th><th className="num">Our price ₹</th><th className="num">Vendor rate ₹</th><th className="num">Margin</th><th className="num">Line</th></tr></thead>
             <tbody>
               {comps.map(c => {
-                const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id, buy: 0 };
+                const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id, buy: 0, sell: 0 };
                 const sug = mode !== '__custom' ? suggestVendorPrice(state, mode, c.product_id) : null;
+                const our = Number(ourPrices[c.product_id]) || 0;
+                const vr = Number(prices[c.product_id]) || 0;
+                const mLine = (our - vr) * c.qty;
+                const mPct = our > 0 ? ((our - vr) / our) * 100 : 0;
+                const mColor = mLine >= 0 ? 'var(--success)' : 'var(--danger)';
                 return (
                   <tr key={c.product_id}>
                     <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
                     <td className="num">{c.qty}</td>
-                    <td className="num small muted">{inr(p.buy || 0)}</td>
+                    <td className="num">
+                      <input type="number" min="0" className="input mono" value={ourPrices[c.product_id]} onChange={e => setOur(c.product_id, e.target.value)} style={{ width: 100, textAlign: 'right', height: 26 }}/>
+                    </td>
                     <td className="num">
                       <input type="number" min="0" className="input mono" value={prices[c.product_id]} onChange={e => setPrice(c.product_id, e.target.value)} style={{ width: 100, textAlign: 'right', height: 26 }}/>
                       {sug && <div className="tiny" style={{ color: 'var(--accent)' }} title={`Recency-weighted from ${sug.n} past quote(s); last ${inr(sug.last)}`}>≈ {inr(sug.price)} · {sug.n} past</div>}
                     </td>
-                    <td className="num mono">{inr((Number(prices[c.product_id]) || 0) * c.qty)}</td>
+                    <td className="num mono" style={{ color: mColor }}>
+                      <strong>{inr(mLine)}</strong>
+                      <div className="tiny" style={{ color: mColor }}>{mPct >= 0 ? '+' : ''}{mPct.toFixed(1)}%</div>
+                    </td>
+                    <td className="num mono">{inr(vr * c.qty)}</td>
                   </tr>
                 );
               })}
             </tbody>
-            <tfoot><tr><td colSpan="4" className="right small">Vendor quote total</td><td className="num mono"><strong>{inr(total)}</strong></td></tr></tfoot>
+            <tfoot><tr>
+              <td colSpan="2" className="right small">Totals</td>
+              <td className="num mono">{inr(ourTotal)}</td>
+              <td className="num mono">{inr(total)}</td>
+              <td className="num mono" style={{ color: marginTotal >= 0 ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(marginTotal)}</strong><div className="tiny">{ourTotal > 0 ? ((marginTotal / ourTotal) * 100).toFixed(1) : '0.0'}%</div></td>
+              <td className="num mono"><strong>{inr(total)}</strong></td>
+            </tr></tfoot>
           </table>
         </div></div>
       </div>
