@@ -122,6 +122,7 @@ function SOVendorPOsTab({ so }) {
   const [vF, setVF] = React.useState('');
   const [sF, setSF] = React.useState('');
   const [q, setQ] = React.useState('');
+  const [showSplit, setShowSplit] = React.useState(false);
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canProcure = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
 
@@ -230,7 +231,7 @@ function SOVendorPOsTab({ so }) {
             <tfoot><tr><td className="right small">Totals</td><td className="num mono"><strong>{inr(vendorSpend)}</strong></td><td className="num mono">{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0))}</td><td className="num mono" style={{ color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0) - vendorSpend)}</strong></td><td colSpan="4"></td></tr></tfoot>
           </table>
         </div>
-        {canProcure && <div className="card-body" style={{ borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}><button className="btn btn-sm" onClick={() => navigate('grn/new')}><Icon name="package" size={12}/>Receive material (GRN)</button><button className="btn btn-sm" onClick={() => navigate('three-way')}><Icon name="check" size={12}/>Vendor invoices / 3-way</button></div>}
+        {canProcure && <div className="card-body" style={{ borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}><button className="btn btn-sm btn-primary" onClick={() => setShowSplit(true)}><Icon name="arrowLeftRight" size={12}/>Split across vendors</button><button className="btn btn-sm" onClick={() => navigate('grn/new')}><Icon name="package" size={12}/>Receive material (GRN)</button><button className="btn btn-sm" onClick={() => navigate('three-way')}><Icon name="check" size={12}/>Vendor invoices / 3-way</button></div>}
       </div>
 
       {/* Item tracking */}
@@ -258,11 +259,116 @@ function SOVendorPOsTab({ so }) {
           </table>
         </div>
       </div>
+
+      {showSplit && <SplitAllocatorModal so={so} onClose={() => setShowSplit(false)}/>}
     </div>
   );
 }
 
 window.SOVendorPOsTab = SOVendorPOsTab;
+
+// Create one Vendor PO per vendor from a split allocation { product_id: [{vendor_id, qty, rate}] }.
+function generateSplitVendorPOs(so, alloc, ctx) {
+  const { state, mutate, toast, navigate } = ctx;
+  const groups = {};
+  Object.entries(alloc || {}).forEach(([pid, rows]) => (rows || []).forEach(r => {
+    const qty = Number(r.qty) || 0; if (qty <= 0 || !r.vendor_id) return;
+    (groups[r.vendor_id] = groups[r.vendor_id] || []).push({ product_id: pid, qty, rate: Number(r.rate) || 0 });
+  }));
+  const entries = Object.entries(groups);
+  if (!entries.length) { toast('Allocate at least one item to a vendor'); return; }
+  const base = 40 + state.vendor_pos.length;
+  const expected = (() => { const d = new Date(TODAY); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
+  const pos = entries.map(([vid, items], i) => {
+    const amount = items.reduce((s, it) => s + it.qty * it.rate, 0);
+    return { id: 'po-' + Date.now() + '-' + i, po_no: `VPO/FY26/${String(base + i).padStart(4, '0')}`, so_id: so.id, vendor_id: vid, date: TODAY, expected, status: amount > 500000 ? 'Pending MD Approval' : 'Issued', amount, items, ebill: {}, source: 'sourcing-split' };
+  });
+  const anyMD = pos.some(p => p.status === 'Pending MD Approval');
+  mutate(s => ({
+    ...s,
+    vendor_pos: [...pos, ...s.vendor_pos],
+    sales_orders: s.sales_orders.map(x => x.id === so.id && x.status === 'Approved' ? { ...x, status: 'Procurement Started' } : x),
+    notifications: [{ id: 'n-split-' + Date.now(), kind: 'po', text: `${pos.length} split Vendor PO(s) raised for ${so.so_no}${anyMD ? ' · some need MD approval' : ''}`, date: TODAY, read: false, role: anyMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
+  }), { action: 'split-po', entity: 'SalesOrder', entity_id: so.id });
+  toast(`${pos.length} Vendor PO(s) created — quantity split across vendors`, 'success');
+  navigate(`sales-orders/${so.id}`);
+}
+
+// Split each still-to-order item's quantity across multiple vendors → split POs.
+function SplitAllocatorModal({ so, onClose }) {
+  const { state, mutate, navigate, getVendor, getProduct } = useStore();
+  const toast = useToast();
+  const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
+  const candIds = (sourcing && (sourcing.quote_vendors || []).length) ? sourcing.quote_vendors : state.vendors.map(v => v.id);
+  const required = soReqComponents(so);
+  const onPO = {};
+  state.vendor_pos.filter(p => p.so_id === so.id).forEach(po => (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + (it.qty || 0); }));
+  const items = Object.keys(required).map(pid => ({ pid, p: getProduct(pid), required: required[pid], onPO: onPO[pid] || 0, toOrder: Math.max(0, required[pid] - (onPO[pid] || 0)) })).filter(x => x.toOrder > 0);
+  const rateOf = (vid, p) => (sourcing && sourcing.prices && sourcing.prices[p.id] && sourcing.prices[p.id][vid] != null) ? sourcing.prices[p.id][vid] : (window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : (p ? (p.buy || 0) : 0));
+  const [alloc, setAlloc] = React.useState(() => {
+    const a = {};
+    items.forEach(x => { const def = (sourcing && sourcing.picks && sourcing.picks[x.pid]) || candIds[0]; a[x.pid] = [{ vendor_id: def, qty: x.toOrder, rate: rateOf(def, x.p) }]; });
+    return a;
+  });
+  const setRow = (pid, ri, patch) => setAlloc(a => ({ ...a, [pid]: a[pid].map((r, i) => i === ri ? { ...r, ...patch } : r) }));
+  const addRow = (pid) => setAlloc(a => ({ ...a, [pid]: [...(a[pid] || []), { vendor_id: candIds[0], qty: 0, rate: rateOf(candIds[0], items.find(x => x.pid === pid).p) }] }));
+  const removeRow = (pid, ri) => setAlloc(a => ({ ...a, [pid]: a[pid].filter((_, i) => i !== ri) }));
+
+  const vendorSet = new Set();
+  let totalAmt = 0;
+  Object.values(alloc).forEach(rows => rows.forEach(r => { const q = Number(r.qty) || 0; if (q > 0 && r.vendor_id) { vendorSet.add(r.vendor_id); totalAmt += q * (Number(r.rate) || 0); } }));
+
+  return (
+    <Modal title={`Split across vendors — ${so.so_no}`} onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={vendorSet.size === 0} onClick={() => { generateSplitVendorPOs(so, alloc, { state, mutate, toast, navigate, getVendor }); onClose(); }}>Generate {vendorSet.size} PO(s) · {inr(totalAmt)}</button>
+      </>
+    }>
+      {items.length === 0 ? (
+        <div className="empty"><div className="empty-title">Nothing left to order</div>Every required item is already on a Vendor PO.</div>
+      ) : (
+        <>
+          <div className="tiny muted mb-2" style={{ padding: 10, background: 'var(--accent-bg)', borderRadius: 4 }}>
+            For each item, give each vendor a quantity (and rate). The split is auto-grouped into one Vendor PO per vendor. Rate prefills from the inquiry quote / estimate.
+          </div>
+          {items.map(x => {
+            const rows = alloc[x.pid] || [];
+            const allocated = rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+            const remain = x.toOrder - allocated;
+            return (
+              <div className="card mb-2" key={x.pid}>
+                <div className="card-header">
+                  <div><strong>{x.p ? x.p.name : x.pid}</strong><div className="tiny muted mono">{x.p ? x.p.code : ''} · required {x.required} · on PO {x.onPO} · to allocate {x.toOrder}</div></div>
+                  <span className={`badge ${remain === 0 ? 'success' : remain < 0 ? 'danger' : 'warning'} dot`}>{remain === 0 ? 'balanced' : remain < 0 ? `over ${-remain}` : `${remain} left`}</span>
+                </div>
+                <div className="card-body flush">
+                  <table className="t">
+                    <thead><tr><th>Vendor</th><th className="num">Qty</th><th className="num">Rate ₹</th><th className="num">Line</th><th style={{ width: 28 }}></th></tr></thead>
+                    <tbody>
+                      {rows.map((r, ri) => (
+                        <tr key={ri}>
+                          <td><select className="select" value={r.vendor_id} onChange={e => setRow(x.pid, ri, { vendor_id: e.target.value, rate: rateOf(e.target.value, x.p) })} style={{ height: 26, fontSize: 12 }}>{candIds.map(vid => { const v = getVendor(vid); return <option key={vid} value={vid}>{v ? v.name : vid}</option>; })}</select></td>
+                          <td className="num"><input type="number" min="0" className="input mono" value={r.qty} onChange={e => setRow(x.pid, ri, { qty: e.target.value })} style={{ width: 80, textAlign: 'right', height: 26 }}/></td>
+                          <td className="num"><input type="number" min="0" className="input mono" value={r.rate} onChange={e => setRow(x.pid, ri, { rate: e.target.value })} style={{ width: 90, textAlign: 'right', height: 26 }}/></td>
+                          <td className="num mono">{inr((Number(r.qty) || 0) * (Number(r.rate) || 0))}</td>
+                          <td>{rows.length > 1 && <button className="btn btn-ghost btn-sm" onClick={() => removeRow(x.pid, ri)}><Icon name="x" size={11}/></button>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div style={{ padding: '6px 14px' }}><button className="btn btn-sm" onClick={() => addRow(x.pid)}><Icon name="plus" size={11}/>Add vendor</button></div>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+window.SplitAllocatorModal = SplitAllocatorModal;
 
 // ===== Vendor PO List ===== (payables side — kept separate from client billing)
 function VendorPOList() {
