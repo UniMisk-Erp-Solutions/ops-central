@@ -456,14 +456,48 @@ function AuditLog() {
 }
 
 // ===== Add Vendor / Add Customer modals =====
+// Render admin-defined custom fields for a master (Customisation → Custom fields).
+// Values are stored in the record's `extra` jsonb (additive — column already exists).
+function CustomMasterFields({ master, state, extra, onChange }) {
+  const fields = (state.config.custom_fields || []).filter(c => c.master === master);
+  if (!fields.length) return null;
+  return (
+    <>
+      <div className="divider"/>
+      <div className="form-section-title" style={{ marginBottom: 8 }}>Custom fields</div>
+      <div className="field-row-3">
+        {fields.map((cf, i) => (
+          <div className="field" key={i}>
+            <label className="field-label">{cf.field}{cf.required ? ' *' : ''}</label>
+            {cf.type === 'Number'
+              ? <input type="number" className="input mono" value={extra[cf.field] || ''} onChange={e => onChange(cf.field, e.target.value)}/>
+              : cf.type === 'Date'
+                ? <input type="date" className="input mono" value={extra[cf.field] || ''} onChange={e => onChange(cf.field, e.target.value)}/>
+                : <input className="input" value={extra[cf.field] || ''} onChange={e => onChange(cf.field, e.target.value)}/>}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+function missingRequiredCustom(master, state, extra) {
+  return (state.config.custom_fields || [])
+    .filter(c => c.master === master && c.required)
+    .filter(c => !String((extra || {})[c.field] || '').trim())
+    .map(c => c.field);
+}
+
 function NewVendorModal({ onClose }) {
-  const { addVendor } = useStore();
+  const { addVendor, state } = useStore();
   const toast = useToast();
-  const [f, setF] = React.useState({ name: '', code: '', gstin: '', city: '', contact: '', phone: '', terms: 'Net 30', type: 'Goods', rating: 4.0 });
+  const [f, setF] = React.useState({ name: '', code: '', gstin: '', city: '', contact: '', phone: '', terms: 'Net 30', type: 'Goods', rating: 4.0, extra: {} });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const setExtra = (k, v) => setF(p => ({ ...p, extra: { ...p.extra, [k]: v } }));
   const submit = async () => {
     if (!f.name.trim()) { toast('Vendor name is required'); return; }
+    const miss = missingRequiredCustom('Vendor', state, f.extra);
+    if (miss.length) { toast('Required custom field(s): ' + miss.join(', ')); return; }
     setBusy(true);
     const res = await addVendor({ ...f, rating: Number(f.rating) || 4.0 });
     setBusy(false);
@@ -501,18 +535,22 @@ function NewVendorModal({ onClose }) {
         </div>
         <div className="field"><label className="field-label">Rating</label><input type="number" step="0.1" min="0" max="5" className="input mono" value={f.rating} onChange={e => set('rating', e.target.value)}/></div>
       </div>
+      <CustomMasterFields master="Vendor" state={state} extra={f.extra} onChange={setExtra}/>
     </Modal>
   );
 }
 
 function NewCustomerModal({ onClose }) {
-  const { addCustomer } = useStore();
+  const { addCustomer, state } = useStore();
   const toast = useToast();
-  const [f, setF] = React.useState({ name: '', code: '', gstin: '', state: '', address: '', contact: '', phone: '', terms: 'Net 30', credit_limit: 0, tier: 'Silver' });
+  const [f, setF] = React.useState({ name: '', code: '', gstin: '', state: '', address: '', contact: '', phone: '', terms: 'Net 30', credit_limit: 0, tier: 'Silver', extra: {} });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const setExtra = (k, v) => setF(p => ({ ...p, extra: { ...p.extra, [k]: v } }));
   const submit = async () => {
     if (!f.name.trim()) { toast('Customer name is required'); return; }
+    const miss = missingRequiredCustom('Customer', state, f.extra);
+    if (miss.length) { toast('Required custom field(s): ' + miss.join(', ')); return; }
     setBusy(true);
     const res = await addCustomer({ ...f, credit_limit: Number(f.credit_limit) || 0 });
     setBusy(false);
@@ -551,6 +589,7 @@ function NewCustomerModal({ onClose }) {
           <select className="select" value={f.tier} onChange={e => set('tier', e.target.value)}><option>Silver</option><option>Gold</option><option>Platinum</option></select>
         </div>
       </div>
+      <CustomMasterFields master="Customer" state={state} extra={f.extra} onChange={setExtra}/>
     </Modal>
   );
 }

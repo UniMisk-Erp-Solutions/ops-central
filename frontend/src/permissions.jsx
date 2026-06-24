@@ -203,7 +203,10 @@ function buildTasks(state, mutate, navigate, toast) {
     const selected = rfq.quotes.find(q => q.vendor_id === rfq.selected_vendor);
     if (!selected) return;
     const vendor = state.vendors.find(v => v.id === rfq.selected_vendor);
-    const needsMD = selected.total > 500000;
+    const mdThreshold = (state.config && state.config.vendor_po_md_threshold != null) ? state.config.vendor_po_md_threshold : 500000;
+    const lppThreshold = (state.config && state.config.lpp_threshold != null) ? state.config.lpp_threshold : 10;
+    const lppOver = Math.abs(Number(selected.lpp_variance) || 0) > lppThreshold;
+    const needsMD = selected.total > mdThreshold;
     if (needsMD) {
       tasks.push({
         id: `task-rfq-md-${rfq.id}`,
@@ -213,8 +216,8 @@ function buildTasks(state, mutate, navigate, toast) {
         refId: rfq.id,
         by: state.users.find(u => u.role === 'Purchase')?.name || 'Purchase',
         amount: selected.total,
-        detail: `${vendor?.name} selected · ${rfq.items_label} · LPP ${selected.lpp_variance > 0 ? '+' : ''}${selected.lpp_variance}%`,
-        gate: '> ₹5L · MD approval',
+        detail: `${vendor?.name} selected · ${rfq.items_label} · LPP ${selected.lpp_variance > 0 ? '+' : ''}${selected.lpp_variance}%${lppOver ? ` ⚠ over ${lppThreshold}% LPP limit` : ''}`,
+        gate: `> ${window.inrK ? window.inrK(mdThreshold) : '₹5L'} · MD approval`,
         icon: 'cart',
         navigateTo: 'rfq',
         approve: () => {

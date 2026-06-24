@@ -343,6 +343,9 @@ function ClassicDashboardBody() {
     const pr = state.products.find(x => x.id === p.product_id);
     return sum + (pr ? pr.buy * p.qty : 0);
   }, 0);
+  // LPP variance alerts driven by the admin-configured threshold (Customisation → Virtual Godown rules).
+  const lppThreshold = state.config && state.config.lpp_threshold != null ? state.config.lpp_threshold : 10;
+  const lppAlerts = (state.rfqs || []).reduce((n, r) => n + (r.quotes || []).filter(q => Math.abs(Number(q.lpp_variance) || 0) > lppThreshold).length, 0);
 
   const kpisByRole = {
     'Org Admin': [
@@ -372,7 +375,7 @@ function ClassicDashboardBody() {
     'Purchase': [
       { label: 'Open RFQs', value: state.rfqs.filter(r => r.status === 'Responses In').length, sub: 'Awaiting decision' },
       { label: 'Active Vendor POs', value: pendingPOs, sub: 'Material in transit' },
-      { label: 'LPP Variance Alerts', value: 1, sub: 'Above 10% threshold' },
+      { label: 'LPP Variance Alerts', value: lppAlerts, sub: `Above ${lppThreshold}% threshold` },
       { label: 'Vendor Performance', value: '4.3 ★', sub: 'Avg this month' },
     ],
     'Stores': [

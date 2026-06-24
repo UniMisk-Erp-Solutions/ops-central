@@ -170,6 +170,10 @@ function SalesOrderNew() {
   const [extra, setExtra] = React.useState({});
   const setExtraVal = (k, v) => setExtra(prev => ({ ...prev, [k]: v }));
 
+  // Billing patterns enabled by the admin (Customisation → Billing patterns).
+  const enabledPatterns = (state.config.billing_patterns || []).filter(p => p.on !== false).map(p => p.t);
+  const [billingPattern, setBillingPattern] = React.useState('');
+
   const cust = customer ? getCustomer(customer) : null;
   const orgState = state.org.state;
   const sameState = cust && cust.state === orgState;
@@ -234,7 +238,10 @@ function SalesOrderNew() {
   const canSubmit = customer && poRef && lines.length > 0 && customOk;
 
   // Pool reuse suggestions for the current lines; effective use = min(picked, needed, available).
-  const poolSugg = poolSuggestionsForSO(state, lines, getProduct);
+  // Honour the admin "pool-first allocation" rule (Customisation → Virtual Godown):
+  // when disabled, the Master Pool is not checked before procurement.
+  const poolFirst = state.config.pool_first !== false;
+  const poolSugg = poolFirst ? poolSuggestionsForSO(state, lines, getProduct) : [];
   const useQtyFor = (s) => Math.max(0, Math.min(poolUse[s.product_id] != null ? Number(poolUse[s.product_id]) : s.suggestUse, s.needed, s.available));
   const poolSavings = poolSugg.reduce((sum, s) => sum + useQtyFor(s) * ((s.product && s.product.buy) || 0), 0);
 
@@ -252,7 +259,7 @@ function SalesOrderNew() {
       so_no: `SO/FY26/${String(17 + state.sales_orders.length).padStart(4, '0')}`,
       customer_id: customer, customer_po: poRef, date, expected, priority, order_type: orderType,
       pm, ship_to: cust.address, payment_terms: paymentTerms, status: 'Pending Approval',
-      lines, notes, extra, pool_alloc,
+      lines, notes, extra: billingPattern ? { ...extra, billing_pattern: billingPattern } : extra, pool_alloc,
     };
     mutate(s => ({
       ...s,
@@ -355,6 +362,16 @@ function SalesOrderNew() {
                   </select>
                 </div>
               </div>
+              {enabledPatterns.length > 0 && (
+                <div className="field mt-2">
+                  <label className="field-label">Billing pattern</label>
+                  <select className="select" value={billingPattern} onChange={e => setBillingPattern(e.target.value)}>
+                    <option value="">Default (Lumpsum on delivery)</option>
+                    {enabledPatterns.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <div className="field-hint">Only patterns enabled in Customisation → Billing patterns are shown.</div>
+                </div>
+              )}
               {cust && (
                 <div className="field mt-2">
                   <label className="field-label">Ship-to address</label>
@@ -883,6 +900,7 @@ function SalesOrderDetail({ soId }) {
                   <dt>Ship to</dt><dd>{so.ship_to}</dd>
                   <dt>Customer PO</dt><dd className="mono">{so.customer_po}</dd>
                   <dt>Payment terms</dt><dd>{so.payment_terms}</dd>
+                  {so.extra && so.extra.billing_pattern && <><dt>Billing pattern</dt><dd>{so.extra.billing_pattern}</dd></>}
                   <dt>Order date</dt><dd className="mono">{fmtDate(so.date)}</dd>
                   <dt>Expected</dt><dd className="mono">{fmtDate(so.expected)}</dd>
                   <dt>PM</dt><dd><Avatar user={pm} size={18}/> {pm ? pm.name : 'Unassigned'}</dd>
