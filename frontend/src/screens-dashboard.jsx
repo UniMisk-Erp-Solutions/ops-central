@@ -137,7 +137,10 @@ function SOBoardDashboard() {
     <div className="stack">
       <div className="card"><div className="card-body" style={{ padding: 10 }}>
         <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', width: '100%' }}>
-          <input className="input" placeholder="🔍  Search SO, customer, PO…" value={q} onChange={e => { setQ(e.target.value); setPage(0); }} style={{ flex: '2 1 130px', minWidth: 0, height: 30, fontSize: 12.5 }}/>
+          <div style={{ flex: '2 1 130px', minWidth: 0, position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <span style={{ position: 'absolute', left: 9, color: 'var(--text-muted)', display: 'flex', pointerEvents: 'none' }}><Icon name="search" size={14}/></span>
+            <input className="input" placeholder="Search SO, customer, PO…" value={q} onChange={e => { setQ(e.target.value); setPage(0); }} style={{ width: '100%', minWidth: 0, height: 30, fontSize: 12.5, paddingLeft: 28 }}/>
+          </div>
           {[
             { v: status, set: setStatus, opts: [['', 'All statuses'], ...statuses.map(s => [s, s])] },
             { v: priority, set: setPriority, opts: [['', 'All priorities'], ['Standard', 'Standard'], ['Urgent', 'Urgent'], ['Critical', 'Critical']] },
