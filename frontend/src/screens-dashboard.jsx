@@ -135,15 +135,20 @@ function SOBoardDashboard() {
 
   return (
     <div className="stack">
-      <div className="card"><div className="filter-bar" style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, alignItems: 'center', overflowX: 'auto' }}>
-        <input className="input search" placeholder="Search SO, customer, PO…" value={q} onChange={e => { setQ(e.target.value); setPage(0); }} style={{ flex: '0 0 210px' }}/>
-        <select className="select" value={status} onChange={e => { setStatus(e.target.value); setPage(0); }} style={{ flex: '0 0 auto' }}><option value="">All statuses</option>{statuses.map(s => <option key={s} value={s}>{s}</option>)}</select>
-        <select className="select" value={priority} onChange={e => { setPriority(e.target.value); setPage(0); }} style={{ flex: '0 0 auto' }}><option value="">All priorities</option><option>Standard</option><option>Urgent</option><option>Critical</option></select>
-        <select className="select" value={pmF} onChange={e => { setPmF(e.target.value); setPage(0); }} style={{ flex: '0 0 auto' }}><option value="">All PMs</option>{pms.map(id => <option key={id} value={id}>{getUser(id)?.name || id}</option>)}</select>
-        <select className="select" value={sort} onChange={e => setSort(e.target.value)} style={{ flex: '0 0 auto' }}><option value="date">Sort: Created</option><option value="expected">Delivery</option><option value="value">Value</option><option value="margin">Margin %</option><option value="so">SO No</option></select>
-        <button className="btn btn-sm" onClick={() => setDir(d => d === 'asc' ? 'desc' : 'asc')} style={{ flex: '0 0 auto' }}><Icon name="sort" size={12}/>{dir === 'asc' ? 'Asc' : 'Desc'}</button>
-        <div className="grow"/>
-        <span className="muted small" style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>{rows.length} SO(s) · drag a card corner to expand</span>
+      <div className="card"><div className="card-body" style={{ display: 'flex', flexWrap: 'nowrap', gap: 7, alignItems: 'center', padding: 10 }}>
+        <input className="input" placeholder="🔍  Search SO, customer, PO…" value={q} onChange={e => { setQ(e.target.value); setPage(0); }} style={{ flex: '1 1 auto', minWidth: 0, height: 30, fontSize: 12.5 }}/>
+        {[
+          { v: status, set: setStatus, opts: [['', 'All statuses'], ...statuses.map(s => [s, s])] },
+          { v: priority, set: setPriority, opts: [['', 'All priorities'], ['Standard', 'Standard'], ['Urgent', 'Urgent'], ['Critical', 'Critical']] },
+          { v: pmF, set: setPmF, opts: [['', 'All PMs'], ...pms.map(id => [id, getUser(id)?.name || id])] },
+          { v: sort, set: setSort, reset: false, opts: [['date', 'Created'], ['expected', 'Delivery'], ['value', 'Value'], ['margin', 'Margin %'], ['so', 'SO No']] },
+        ].map((f, i) => (
+          <select key={i} className="select" value={f.v} onChange={e => { f.set(e.target.value); if (f.reset !== false) setPage(0); }}
+            style={{ flex: '0 0 auto', height: 30, fontSize: 12, padding: '0 24px 0 9px' }}>
+            {f.opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        ))}
+        <button className="btn btn-sm" title={dir === 'asc' ? 'Ascending' : 'Descending'} onClick={() => setDir(d => d === 'asc' ? 'desc' : 'asc')} style={{ flex: '0 0 auto', height: 30, padding: '0 10px', fontSize: 13, lineHeight: 1 }}>{dir === 'asc' ? '↑' : '↓'}</button>
       </div></div>
 
       <style>{`
