@@ -10,7 +10,63 @@ function soMetrics(state, so, soSubtotal) {
   const vendorIds = [...new Set(pos.map(p => p.vendor_id))];
   const idx = SO_LIFECYCLE.indexOf(so.status);
   const progress = idx >= 0 ? Math.round((idx / (SO_LIFECYCLE.length - 1)) * 100) : 0;
-  return { sell, vendorSpend, margin, marginPct: sell > 0 ? (margin / sell) * 100 : 0, vendorIds, progress };
+  return { sell, vendorSpend, margin, marginPct: sell > 0 ? (margin / sell) * 100 : 0, vendorIds, pos, progress };
+}
+
+// SVG donut / circle chart — data: [{label, value, color}]
+function DonutChart({ data, size = 168, thickness = 24, centerLabel = 'Total' }) {
+  const total = data.reduce((s, d) => s + d.value, 0) || 1;
+  const r = (size - thickness) / 2;
+  const circ = 2 * Math.PI * r;
+  let off = 0;
+  return (
+    <div style={{ display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex: '0 0 auto' }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg-subtle)" strokeWidth={thickness}/>
+        <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
+          {data.filter(d => d.value > 0).map((d, i) => {
+            const len = (d.value / total) * circ;
+            const seg = <circle key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={d.color} strokeWidth={thickness} strokeDasharray={`${len} ${circ - len}`} strokeDashoffset={-off} strokeLinecap="butt"/>;
+            off += len;
+            return seg;
+          })}
+        </g>
+        <text x="50%" y="47%" textAnchor="middle" dominantBaseline="middle" style={{ fontSize: 26, fontWeight: 700, fill: 'var(--text)' }}>{total}</text>
+        <text x="50%" y="62%" textAnchor="middle" dominantBaseline="middle" style={{ fontSize: 10, fill: 'var(--text-muted)' }}>{centerLabel}</text>
+      </svg>
+      <div className="stack" style={{ gap: 6, minWidth: 120 }}>
+        {data.map((d, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 3, background: d.color, flex: '0 0 auto' }}/>
+            <span className="muted" style={{ flex: 1, whiteSpace: 'nowrap' }}>{d.label}</span>
+            <span className="mono" style={{ fontWeight: 600 }}>{d.value}</span>
+            <span className="muted tiny">{Math.round((d.value / total) * 100)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Vertical "standing" column chart — data: [{label, value, color}]
+function ColumnChart({ data, height = 180, fmt }) {
+  const max = Math.max(1, ...data.map(d => Math.abs(d.value)));
+  const plot = height - 38;
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height, padding: '4px 2px 0' }}>
+      {data.map((d, i) => {
+        const h = Math.max(3, (Math.abs(d.value) / max) * plot);
+        return (
+          <div key={i} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', gap: 5, height: '100%' }}>
+            <span className="tiny mono" style={{ color: d.color || 'var(--accent)', fontWeight: 600 }}>{fmt ? fmt(d.value) : d.value}</span>
+            <div title={`${d.label}: ${d.value}`} style={{ width: '64%', maxWidth: 40, height: h, background: d.color || 'var(--accent)', borderRadius: '4px 4px 0 0', transition: 'height .3s' }}/>
+            <span className="tiny muted" style={{ maxWidth: '100%', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</span>
+          </div>
+        );
+      })}
+      {data.length === 0 && <div className="empty" style={{ margin: 'auto' }}>No data</div>}
+    </div>
+  );
 }
 
 // ===== Dashboard shell — 3 switchable views =====
@@ -79,41 +135,77 @@ function SOBoardDashboard() {
 
   return (
     <div className="stack">
-      <div className="card"><div className="filter-bar" style={{ flexWrap: 'wrap', gap: 6 }}>
-        <input className="input search" placeholder="Search SO, customer, PO…" value={q} onChange={e => { setQ(e.target.value); setPage(0); }} style={{ flex: '0 0 200px' }}/>
-        <select className="select" value={status} onChange={e => { setStatus(e.target.value); setPage(0); }}><option value="">All statuses</option>{statuses.map(s => <option key={s} value={s}>{s}</option>)}</select>
-        <select className="select" value={priority} onChange={e => { setPriority(e.target.value); setPage(0); }}><option value="">All priorities</option><option>Standard</option><option>Urgent</option><option>Critical</option></select>
-        <select className="select" value={pmF} onChange={e => { setPmF(e.target.value); setPage(0); }}><option value="">All PMs</option>{pms.map(id => <option key={id} value={id}>{getUser(id)?.name || id}</option>)}</select>
-        <select className="select" value={sort} onChange={e => setSort(e.target.value)}><option value="date">Sort: Created</option><option value="expected">Delivery</option><option value="value">Value</option><option value="margin">Margin %</option><option value="so">SO No</option></select>
-        <button className="btn btn-sm" onClick={() => setDir(d => d === 'asc' ? 'desc' : 'asc')}><Icon name="sort" size={12}/>{dir === 'asc' ? 'Asc' : 'Desc'}</button>
+      <div className="card"><div className="filter-bar" style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, alignItems: 'center', overflowX: 'auto' }}>
+        <input className="input search" placeholder="Search SO, customer, PO…" value={q} onChange={e => { setQ(e.target.value); setPage(0); }} style={{ flex: '0 0 210px' }}/>
+        <select className="select" value={status} onChange={e => { setStatus(e.target.value); setPage(0); }} style={{ flex: '0 0 auto' }}><option value="">All statuses</option>{statuses.map(s => <option key={s} value={s}>{s}</option>)}</select>
+        <select className="select" value={priority} onChange={e => { setPriority(e.target.value); setPage(0); }} style={{ flex: '0 0 auto' }}><option value="">All priorities</option><option>Standard</option><option>Urgent</option><option>Critical</option></select>
+        <select className="select" value={pmF} onChange={e => { setPmF(e.target.value); setPage(0); }} style={{ flex: '0 0 auto' }}><option value="">All PMs</option>{pms.map(id => <option key={id} value={id}>{getUser(id)?.name || id}</option>)}</select>
+        <select className="select" value={sort} onChange={e => setSort(e.target.value)} style={{ flex: '0 0 auto' }}><option value="date">Sort: Created</option><option value="expected">Delivery</option><option value="value">Value</option><option value="margin">Margin %</option><option value="so">SO No</option></select>
+        <button className="btn btn-sm" onClick={() => setDir(d => d === 'asc' ? 'desc' : 'asc')} style={{ flex: '0 0 auto' }}><Icon name="sort" size={12}/>{dir === 'asc' ? 'Asc' : 'Desc'}</button>
         <div className="grow"/>
-        <span className="muted small">{rows.length} SO(s) · drag any card's bottom-right corner to resize</span>
+        <span className="muted small" style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>{rows.length} SO(s) · drag a card corner to expand</span>
       </div></div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+      <style>{`
+        .so-card { container-type: size; container-name: socard; scrollbar-width: thin; scrollbar-color: #e8e8e8 transparent; }
+        .so-card::-webkit-scrollbar { width: 3px; height: 3px; }
+        .so-card::-webkit-scrollbar-track { background: transparent; }
+        .so-card::-webkit-scrollbar-thumb { background: #ececec; border-radius: 10px; }
+        .so-card::-webkit-scrollbar-thumb:hover { background: #dcdcdc; }
+        .so-card:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+        .so-card .so-extra, .so-card .so-extra-2 { display: none; }
+        @container socard (min-height: 232px) { .so-card .so-extra { display: grid; } }
+        @container socard (min-height: 320px) { .so-card .so-extra-2 { display: block; } }
+      `}</style>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
         {slice.map(({ so, m, cust }) => {
           const mColor = m.margin >= 0 ? 'var(--success)' : 'var(--danger)';
           return (
-            <div key={so.id} onDoubleClick={() => navigate(`sales-orders/${so.id}`)}
-              style={{ flex: '0 0 auto', width: 'calc(25% - 8px)', minWidth: 210, height: 196, minHeight: 150, maxWidth: '100%', resize: 'both', overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--surface)', padding: 10, cursor: 'default' }}>
+            <div key={so.id} className="so-card" onDoubleClick={() => navigate(`sales-orders/${so.id}`)}
+              style={{ flex: '0 0 auto', width: 'calc(25% - 9px)', minWidth: 200, height: 152, minHeight: 120, maxWidth: '100%', resize: 'both', overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)', padding: 11, cursor: 'default', transition: 'border-color .15s, box-shadow .15s' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cust ? cust.name : '—'}</div>
-                  <a className="mono tiny" style={{ cursor: 'pointer' }} onClick={() => navigate(`sales-orders/${so.id}`)}>{so.so_no}</a>
+                  <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cust ? cust.name : '—'}</div>
+                  <a className="mono tiny muted" style={{ cursor: 'pointer' }} onClick={() => navigate(`sales-orders/${so.id}`)}>{so.so_no}</a>
                 </div>
                 <PriorityBadge priority={so.priority}/>
               </div>
-              <div style={{ margin: '6px 0' }}><StatusBadge status={so.status}/></div>
-              <div style={{ height: 6, background: 'var(--bg-subtle)', borderRadius: 4, overflow: 'hidden', margin: '2px 0 6px' }}>
-                <div style={{ width: `${m.progress}%`, height: '100%', background: 'var(--accent)', transition: 'width .3s' }}/>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, margin: '8px 0 5px' }}>
+                <StatusBadge status={so.status}/>
+                <span className="tiny mono muted">{m.progress}%</span>
               </div>
-              <div className="dl" style={{ gridTemplateColumns: 'auto 1fr', rowGap: 3, columnGap: 8, fontSize: 11.5 }}>
-                <dt className="muted">Value</dt><dd className="mono right">{inr(m.sell)}</dd>
-                <dt className="muted">Margin</dt><dd className="mono right" style={{ color: mColor, fontWeight: 600 }}>{inr(m.margin)} · {m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</dd>
-                <dt className="muted">PM</dt><dd className="right trunc">{getUser(so.pm)?.name || 'Unassigned'}</dd>
-                <dt className="muted">Created</dt><dd className="mono right">{fmtDate(so.date)}</dd>
-                <dt className="muted">Delivery</dt><dd className="mono right">{fmtDate(so.expected)}</dd>
-                <dt className="muted">Vendors</dt><dd className="right trunc">{m.vendorIds.length ? m.vendorIds.map(id => getVendor(id)?.name || id).join(', ') : '—'}</dd>
+              <div style={{ height: 5, background: 'var(--bg-subtle)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ width: `${m.progress}%`, height: '100%', background: m.progress >= 100 ? 'var(--success)' : 'var(--accent)', transition: 'width .3s' }}/>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 9 }}>
+                <div style={{ background: 'var(--bg-subtle)', borderRadius: 5, padding: '5px 8px' }}>
+                  <div className="tiny muted">Value</div>
+                  <div className="mono" style={{ fontWeight: 600, fontSize: 12.5 }}>{inr(m.sell)}</div>
+                </div>
+                <div style={{ background: 'var(--bg-subtle)', borderRadius: 5, padding: '5px 8px' }}>
+                  <div className="tiny muted">Margin</div>
+                  <div className="mono" style={{ fontWeight: 600, fontSize: 12.5, color: mColor }}>{m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</div>
+                </div>
+              </div>
+              <div className="so-extra" style={{ gridTemplateColumns: 'auto 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5, marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
+                <span className="muted">PM</span><span className="right trunc">{getUser(so.pm)?.name || 'Unassigned'}</span>
+                <span className="muted">Profit</span><span className="mono right" style={{ color: mColor, fontWeight: 600 }}>{inr(m.margin)}</span>
+                <span className="muted">Created</span><span className="mono right">{fmtDate(so.date)}</span>
+                <span className="muted">Delivery</span><span className="mono right">{fmtDate(so.expected)}</span>
+                <span className="muted">Vendors</span><span className="right trunc">{m.vendorIds.length ? m.vendorIds.map(id => getVendor(id)?.name || id).join(', ') : '—'}</span>
+              </div>
+              <div className="so-extra-2" style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
+                <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Vendor POs ({m.pos.length})</div>
+                {m.pos.length === 0 && <div className="tiny muted">No POs raised yet.</div>}
+                {m.pos.slice(0, 8).map(p => (
+                  <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 11, padding: '2px 0' }}>
+                    <span className="trunc">{getVendor(p.vendor_id)?.name || p.vendor_id}</span>
+                    <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '0 0 auto' }}>
+                      <StatusBadge status={p.status}/>
+                      <span className="mono">{inr(p.amount || 0)}</span>
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           );
@@ -149,6 +241,16 @@ function SOOverviewDashboard() {
   const topMargin = [...rows].sort((a, b) => b.m.margin - a.m.margin).slice(0, 8);
   const mMax = Math.max(1, ...topMargin.map(r => Math.abs(r.m.margin)));
 
+  // Circle chart — SO count by priority
+  const prioColor = { Critical: 'var(--danger)', Urgent: 'var(--warning)', Standard: 'var(--accent)' };
+  const donutData = prioCounts.map(c => ({ label: c.p, value: c.n, color: prioColor[c.p] }));
+
+  // Standing chart — new SOs by creation month
+  const MN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const byMonth = {};
+  state.sales_orders.forEach(s => { const k = (s.date || '').slice(0, 7); if (k) byMonth[k] = (byMonth[k] || 0) + 1; });
+  const monthData = Object.keys(byMonth).sort().slice(-8).map(k => ({ label: `${MN[+k.slice(5, 7) - 1]} ${k.slice(2, 4)}`, value: byMonth[k], color: 'var(--accent)' }));
+
   return (
     <div className="stack">
       <div className="kpi-grid mb-1">
@@ -159,17 +261,11 @@ function SOOverviewDashboard() {
       </div>
 
       <div className="split-2">
-        <div className="card"><div className="card-header"><h3 className="card-title">Status funnel</h3><span className="card-sub">all SOs</span></div><div className="card-body"><FunnelChart orders={state.sales_orders}/></div></div>
-        <div className="card"><div className="card-header"><h3 className="card-title">Priority mix</h3></div><div className="card-body"><div className="stack" style={{ gap: 7 }}>
-          {prioCounts.map(c => (
-            <div key={c.p} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 30px', gap: 8, alignItems: 'center', fontSize: 11.5 }}>
-              <span className="muted">{c.p}</span>
-              <div style={{ height: 9, background: 'var(--bg-subtle)', borderRadius: 4, overflow: 'hidden' }}><div style={{ width: `${(c.n / prioMax) * 100}%`, height: '100%', background: c.p === 'Critical' ? 'var(--danger)' : c.p === 'Urgent' ? 'var(--warning)' : 'var(--accent)' }}/></div>
-              <span className="mono num right">{c.n}</span>
-            </div>
-          ))}
-        </div></div></div>
+        <div className="card"><div className="card-header"><h3 className="card-title">Priority mix</h3><span className="card-sub">share of all SOs</span></div><div className="card-body"><DonutChart data={donutData} centerLabel="SOs"/></div></div>
+        <div className="card"><div className="card-header"><h3 className="card-title">New SOs by month</h3><span className="card-sub">by creation date</span></div><div className="card-body"><ColumnChart data={monthData}/></div></div>
       </div>
+
+      <div className="card"><div className="card-header"><h3 className="card-title">Status funnel</h3><span className="card-sub">all SOs across the pipeline</span></div><div className="card-body"><FunnelChart orders={state.sales_orders}/></div></div>
 
       <div className="card"><div className="card-header"><h3 className="card-title">Profit margin — top SOs</h3><span className="card-sub">sell − vendor spend</span></div><div className="card-body"><div className="stack" style={{ gap: 6 }}>
         {topMargin.map(r => (
