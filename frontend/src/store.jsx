@@ -99,6 +99,7 @@ function loadInitialState() {
       three_way_value_tolerance: 2,
       three_way_qty_tolerance: 1,
       pool_first: true,
+      vendor_po_md_threshold: 500000,
     },
   };
 }
@@ -217,6 +218,16 @@ function StoreProvider({ children }) {
     return () => { cancelled = true; };
   }, [realUserId]);
 
+  // Apply saved branding (brand colour) live whenever it changes — including the
+  // first load after config is fetched, so customisation survives a refresh.
+  React.useEffect(() => {
+    const color = state.org && state.org.brand_color;
+    if (color) {
+      document.documentElement.style.setProperty('--accent', color);
+      document.documentElement.style.setProperty('--brand-mark-bg', color);
+    }
+  }, [state.org && state.org.brand_color]);
+
   // Hash routing
   React.useEffect(() => {
     const h = () => setRoute(window.location.hash.slice(1) || 'dashboard');
@@ -275,9 +286,10 @@ function StoreProvider({ children }) {
     setState(prev => ({ ...prev, config: { ...prev.config, ...configPatch }, org: orgPatch ? { ...prev.org, ...orgPatch } : prev.org }));
     if (window.OPC_SB) {
       try {
+        // upsert (not update) so the singleton is created if missing — an update
+        // against a non-existent row silently affects 0 rows and looks like a save.
         const { error } = await window.OPC_SB.from('config')
-          .update({ data: snapshot, updated_at: new Date().toISOString() })
-          .eq('id', 'singleton');
+          .upsert({ id: 'singleton', data: snapshot, updated_at: new Date().toISOString() }, { onConflict: 'id' });
         if (error) { console.error('[OPC] saveConfig failed', error.message); return { ok: false, error: error.message }; }
       } catch (e) {
         console.error('[OPC] saveConfig failed (kept local change)', e);

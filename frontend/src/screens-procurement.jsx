@@ -401,7 +401,7 @@ function generateSplitVendorPOs(so, alloc, ctx) {
   const expected = (() => { const d = new Date(TODAY); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
   const pos = entries.map(([vid, items], i) => {
     const amount = items.reduce((s, it) => s + it.qty * it.rate, 0);
-    return { id: 'po-' + Date.now() + '-' + i, po_no: `VPO/FY26/${String(base + i).padStart(4, '0')}`, so_id: so.id, vendor_id: vid, date: TODAY, expected, status: amount > 500000 ? 'Pending MD Approval' : 'Issued', amount, items, ebill: {}, source: 'sourcing-split' };
+    return { id: 'po-' + Date.now() + '-' + i, po_no: `VPO/FY26/${String(base + i).padStart(4, '0')}`, so_id: so.id, vendor_id: vid, date: TODAY, expected, status: amount > (state.config.vendor_po_md_threshold ?? 500000) ? 'Pending MD Approval' : 'Issued', amount, items, ebill: {}, source: 'sourcing-split' };
   });
   const anyMD = pos.some(p => p.status === 'Pending MD Approval');
   mutate(s => ({
@@ -1558,7 +1558,7 @@ function generateVendorPOsFromSourcing(so, sourcing, ctx) {
     id: 'po-' + Date.now() + '-' + i,
     po_no: `VPO/FY26/${String(base + i).padStart(4, '0')}`,
     so_id: so.id, vendor_id: g.vendor_id, date: TODAY, expected,
-    status: g.amount > 500000 ? 'Pending MD Approval' : 'Issued',
+    status: g.amount > (state.config.vendor_po_md_threshold ?? 500000) ? 'Pending MD Approval' : 'Issued',
     amount: g.amount, items: g.items, ebill: {}, source: 'sourcing',
   }));
   const anyMD = pos.some(p => p.status === 'Pending MD Approval');
@@ -1623,7 +1623,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
 
   const setItem = (i, patch) => setItems(its => its.map((x, j) => j === i ? { ...x, ...patch } : x));
   const amount = items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0);
-  const needsMD = amount > 500000;
+  const needsMD = amount > (state.config.vendor_po_md_threshold ?? 500000);
 
   const submit = () => {
     const real = items.filter(i => i.qty > 0);

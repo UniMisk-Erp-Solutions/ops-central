@@ -8,8 +8,12 @@ function soMetrics(state, so, soSubtotal) {
   const vendorSpend = pos.reduce((s, p) => s + (p.amount || 0), 0);
   const margin = sell - vendorSpend;
   const vendorIds = [...new Set(pos.map(p => p.vendor_id))];
-  const idx = SO_LIFECYCLE.indexOf(so.status);
-  const progress = idx >= 0 ? Math.round((idx / (SO_LIFECYCLE.length - 1)) * 100) : 0;
+  // Use the admin-configured workflow stages when present; fall back to the
+  // canonical lifecycle (and per-SO fall back if a status isn't in the custom list).
+  const cfgStages = (state.config && Array.isArray(state.config.workflow_stages) && state.config.workflow_stages.length) ? state.config.workflow_stages : SO_LIFECYCLE;
+  let stages = cfgStages, idx = stages.indexOf(so.status);
+  if (idx < 0) { stages = SO_LIFECYCLE; idx = stages.indexOf(so.status); }
+  const progress = idx >= 0 ? Math.round((idx / (stages.length - 1)) * 100) : 0;
   return { sell, vendorSpend, margin, marginPct: sell > 0 ? (margin / sell) * 100 : 0, vendorIds, pos, progress };
 }
 

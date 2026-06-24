@@ -696,6 +696,7 @@ function ApprovalGatesPane() {
   const { state, saveConfig } = useStore();
   const toast = useToast();
   const [gates, setGates] = React.useState(() => (state.config.approval_gates || []).map(g => ({ ...g, approvers: [...(g.approvers || [])] })));
+  const [mdThreshold, setMdThreshold] = React.useState(state.config.vendor_po_md_threshold ?? 500000);
   const [saving, setSaving] = React.useState(false);
 
   const update = (id, patch) => setGates(gs => gs.map(g => g.id === id ? { ...g, ...patch } : g));
@@ -704,15 +705,28 @@ function ApprovalGatesPane() {
 
   const save = async () => {
     setSaving(true);
-    const res = await saveConfig({ approval_gates: gates });
+    const res = await saveConfig({ approval_gates: gates, vendor_po_md_threshold: Math.max(0, Number(mdThreshold) || 0) });
     setSaving(false);
-    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Approval gates saved', res && res.ok === false ? '' : 'success');
+    toast(res && res.ok === false ? 'Save failed — kept locally' : 'Approval gates saved · applied live', res && res.ok === false ? '' : 'success');
   };
 
   return (
     <div className="stack">
       <h3 className="card-title">Approval gates</h3>
       <div className="muted small">Define which roles must approve, per entity & threshold. Approvers are comma-separated.</div>
+      <div className="card">
+        <div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div className="grow">
+            <strong className="small">Vendor PO → Managing Director approval</strong>
+            <div className="tiny muted">Any Vendor PO above this amount is held at <span className="mono">Pending MD Approval</span> and receiving is blocked until the MD approves. Applies live across procurement.</div>
+          </div>
+          <div className="field" style={{ margin: 0 }}>
+            <label className="field-label">Threshold (₹)</label>
+            <input type="number" className="input mono" value={mdThreshold} min="0" step="50000" onChange={e => setMdThreshold(e.target.value)} style={{ width: 160 }}/>
+            <div className="field-hint">{inr(Math.max(0, Number(mdThreshold) || 0))}</div>
+          </div>
+        </div>
+      </div>
       <div className="card">
         <div className="card-body flush">
           <table className="t">
