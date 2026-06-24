@@ -784,9 +784,15 @@ function ConvertToSOModal({ src, margin, onClose }) {
   const { state, mutate, navigate, getCustomer, currentUser } = useStore();
   const toast = useToast();
   const cust = getCustomer(src.customer_id);
+  const pms = state.users.filter(u => u.role === 'Project Manager');
   const [poRef, setPoRef] = React.useState('');
+  const [date, setDate] = React.useState(TODAY);
   const [expected, setExpected] = React.useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() + 14); return d.toISOString().slice(0, 10); });
   const [priority, setPriority] = React.useState('Standard');
+  const [orderType, setOrderType] = React.useState('Supply');
+  const [paymentTerms, setPaymentTerms] = React.useState(['Advance', 'Net 7', 'Net 15', 'Net 30', 'Net 45', 'Net 60'].includes(cust && cust.terms) ? cust.terms : 'Net 30');
+  const [pm, setPm] = React.useState('');
+  const [shipTo, setShipTo] = React.useState(cust ? cust.address : '');
 
   const create = () => {
     if (!poRef.trim()) { toast('Customer PO reference is required (the SO unique id)'); return; }
@@ -795,9 +801,9 @@ function ConvertToSOModal({ src, margin, onClose }) {
     const newSO = {
       id: 'so-' + Date.now(),
       so_no: `SO/FY26/${String(17 + state.sales_orders.length).padStart(4, '0')}`,
-      customer_id: src.customer_id, customer_po: poRef.trim(), date: TODAY, expected,
-      priority, order_type: 'Supply', pm: '', ship_to: cust ? cust.address : '',
-      payment_terms: cust ? cust.terms : 'Net 30', status: 'Pending Approval',
+      customer_id: src.customer_id, customer_po: poRef.trim(), date, expected,
+      priority, order_type: orderType, pm, ship_to: shipTo,
+      payment_terms: paymentTerms, status: 'Pending Approval',
       lines, notes: src.notes || `Raised from inquiry ${src.src_no} · expected margin ${pct1(margin.marginPct)}`, extra: {},
     };
     mutate(s => ({
@@ -821,22 +827,58 @@ function ConvertToSOModal({ src, margin, onClose }) {
       <div className="tiny muted mb-2" style={{ padding: 10, background: 'var(--info-bg, var(--accent-bg))', borderRadius: 4 }}>
         Copies this inquiry's {(src.lines || []).length} bundle(s) into a new Sales Order at the quoted prices (margin {pct1(margin.marginPct)}). It enters the normal flow at <strong>Pending Approval</strong>.
       </div>
-      <div className="field">
-        <label className="field-label">Customer PO Reference (UID) *</label>
-        <input className="input mono" placeholder="e.g. RC/PO/2026/0312" value={poRef} onChange={e => setPoRef(e.target.value)} autoFocus/>
-        <div className="field-hint">The Sales Order's unique identifier — never auto-generated</div>
-      </div>
-      <div className="field-row mt-2">
+      <div className="field-row">
         <div className="field">
-          <label className="field-label">Expected delivery</label>
+          <label className="field-label">Customer</label>
+          <input className="input" value={cust ? cust.name : '—'} readOnly disabled/>
+          {cust && <div className="tiny muted mt-1"><span className="mono">{cust.gstin}</span> · {cust.state} · {cust.terms}</div>}
+        </div>
+        <div className="field">
+          <label className="field-label">Customer PO Reference (UID) *</label>
+          <input className="input mono" placeholder="e.g. RC/PO/2026/0312" value={poRef} onChange={e => setPoRef(e.target.value)} autoFocus/>
+          <div className="field-hint">The Sales Order's unique identifier — never auto-generated</div>
+        </div>
+      </div>
+      <div className="field-row-3 mt-2">
+        <div className="field">
+          <label className="field-label">SO Date</label>
+          <input type="date" className="input mono" value={date} onChange={e => setDate(e.target.value)}/>
+        </div>
+        <div className="field">
+          <label className="field-label">Expected Delivery</label>
           <input type="date" className="input mono" value={expected} onChange={e => setExpected(e.target.value)}/>
         </div>
+        <div className="field">
+          <label className="field-label">Order Type</label>
+          <select className="select" value={orderType} onChange={e => setOrderType(e.target.value)}>
+            <option>Supply</option><option>Supply + Implementation</option><option>Service / AMC</option>
+          </select>
+        </div>
+      </div>
+      <div className="field-row-3 mt-2">
         <div className="field">
           <label className="field-label">Priority</label>
           <select className="select" value={priority} onChange={e => setPriority(e.target.value)}>
             <option>Standard</option><option>Urgent</option><option>Critical</option>
           </select>
         </div>
+        <div className="field">
+          <label className="field-label">Payment Terms</label>
+          <select className="select" value={paymentTerms} onChange={e => setPaymentTerms(e.target.value)}>
+            <option>Advance</option><option>Net 7</option><option>Net 15</option><option>Net 30</option><option>Net 45</option><option>Net 60</option>
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label">Project Manager</label>
+          <select className="select" value={pm} onChange={e => setPm(e.target.value)}>
+            <option value="">Unassigned</option>
+            {pms.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field mt-2">
+        <label className="field-label">Ship-to address</label>
+        <textarea className="textarea" rows="2" value={shipTo} onChange={e => setShipTo(e.target.value)} placeholder="Delivery address for this order"/>
       </div>
       <div className="tiny muted mt-2">Prefer to start fresh? Close this and use <a style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => { onClose(); navigate('sales-orders/new'); }}>New Sales Order</a> instead.</div>
     </Modal>
