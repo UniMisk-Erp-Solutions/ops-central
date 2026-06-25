@@ -415,12 +415,16 @@ function CollectionsDashboard() {
 function _soSub(so) { return (so.lines || []).reduce((a, l) => a + (l.bundle_qty || 0) * (l.unit_price || 0), 0); }
 function _soBilled(so) { return Math.max(0, _soSub(so) - (so.bill_adjustments || []).reduce((a, x) => a + (Number(x.amount) || 0), 0)); }
 
-// Accepted material received against this SO (GRNs of its POs) + pool stock in hand.
+// Accepted material received against this SO (GRNs of its POs) + pool stock in hand,
+// minus any units later diverted to the Master Pool (so the client is never billed
+// for items sent away). The matching bill_adjustment reconciles the order value.
 function soReceivedQty(so, state) {
   const acc = {};
   const poIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
   (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => { acc[it.product_id] = (acc[it.product_id] || 0) + (it.accepted || 0); }); });
   (so.pool_alloc || []).forEach(a => { acc[a.product_id] = (acc[a.product_id] || 0) + (Number(a.qty) || 0); });
+  const out = (window.soPoolOut ? window.soPoolOut(so) : {});
+  Object.keys(out).forEach(pid => { acc[pid] = Math.max(0, (acc[pid] || 0) - out[pid]); });
   return acc;
 }
 
