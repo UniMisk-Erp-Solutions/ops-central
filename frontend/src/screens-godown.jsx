@@ -173,6 +173,101 @@ function VGReceivePanel({ so }) {
   );
 }
 
+// Add components to this SO from the Master Pool — smart suggestions (pool stock
+// the SO's BOM needs) + free search. Allocates pool stock to the SO (pool_alloc)
+// and decrements the pool. Replaces the old New-SO pool-reuse step.
+function VGAddFromPoolPanel({ so }) {
+  const { state, mutate, consumeFromPool, getProduct, getUser, currentUser } = useStore();
+  const toast = useToast();
+  const role = getUser(currentUser)?.role;
+  const canEdit = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const [q, setQ] = React.useState('');
+  const [qty, setQty] = React.useState({});
+  const [busy, setBusy] = React.useState(false);
+  if (!canEdit) return null;
+
+  const poolByProd = {};
+  (state.pool || []).forEach(p => { const b = (poolByProd[p.product_id] = poolByProd[p.product_id] || { qty: 0, srcs: [] }); b.qty += Number(p.qty) || 0; b.srcs.push({ id: p.id, qty: Number(p.qty) || 0, date: p.received_date }); });
+  const need = {}; (so.lines || []).forEach(l => (l.components || []).forEach(c => { need[c.product_id] = (need[c.product_id] || 0) + (c.qty || 0) * (l.bundle_qty || 1); }));
+  const suggestions = Object.keys(need).filter(pid => (poolByProd[pid] && poolByProd[pid].qty > 0)).map(pid => ({ pid, need: need[pid], inPool: poolByProd[pid].qty, product: getProduct(pid) }));
+  const results = q.trim() ? Object.keys(poolByProd).filter(pid => poolByProd[pid].qty > 0).map(pid => ({ pid, inPool: poolByProd[pid].qty, product: getProduct(pid) })).filter(x => ((x.product && x.product.name) || x.pid).toLowerCase().includes(q.trim().toLowerCase())).slice(0, 8) : [];
+
+  const add = async (pid, want) => {
+    const inPool = (poolByProd[pid] && poolByProd[pid].qty) || 0;
+    const n = Math.max(0, Math.min(Number(want) || 0, inPool));
+    if (n <= 0) { toast('Enter a quantity available in the pool'); return; }
+    const srcs = [...((poolByProd[pid] && poolByProd[pid].srcs) || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    let rem = n; const consume = []; for (const s of srcs) { if (rem <= 0) break; const take = Math.min(rem, s.qty); if (take > 0) { consume.push({ id: s.id, qty: take }); rem -= take; } }
+    const p = getProduct(pid);
+    setBusy(true);
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, pool_alloc: [...(x.pool_alloc || []), { product_id: pid, qty: n, name: p ? p.name : pid }] } : x),
+      notifications: [{ id: 'n-pa-' + Date.now(), kind: 'transfer', text: `${n}× ${p ? p.name : pid} allocated to ${so.so_no} from Master Pool`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications],
+    }), { action: 'pool-allocate', entity: 'SalesOrder', entity_id: so.id });
+    await consumeFromPool(consume);
+    setBusy(false); setQty(m => ({ ...m, [pid]: '' })); setQ('');
+    toast(`Added ${n}× ${p ? p.name : pid} from Master Pool`, 'success');
+  };
+
+  return (
+    <div className="card">
+      <div className="card-header"><h3 className="card-title">Add from Master Pool</h3><span className="card-sub">Smart suggestions + search</span></div>
+      <div className="card-body">
+        {suggestions.length > 0 && (
+          <div className="mb-2">
+            <div className="tiny muted mb-1">Suggested for this SO</div>
+            {suggestions.map(s => (
+              <div key={s.pid} className="queue-item">
+                <div className="grow"><div className="small">{s.product ? s.product.name : s.pid}</div><div className="tiny muted">needs {s.need} · {s.inPool} in pool</div></div>
+                <input type="number" min="0" max={Math.min(s.need, s.inPool)} className="input mono" placeholder={String(Math.min(s.need, s.inPool))} value={qty[s.pid] || ''} onChange={e => setQty(m => ({ ...m, [s.pid]: e.target.value }))} style={{ width: 58, height: 26, textAlign: 'right' }}/>
+                <button className="btn btn-sm" disabled={busy} onClick={() => add(s.pid, qty[s.pid] || Math.min(s.need, s.inPool))}><Icon name="plus" size={11}/>Add</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="field"><label className="field-label">Search the pool</label>
+          <input className="input" placeholder="Search any pool component…" value={q} onChange={e => setQ(e.target.value)}/>
+        </div>
+        {results.map(r => (
+          <div key={r.pid} className="queue-item">
+            <div className="grow"><div className="small">{r.product ? r.product.name : r.pid}</div><div className="tiny muted">{r.inPool} in pool</div></div>
+            <input type="number" min="0" max={r.inPool} className="input mono" value={qty[r.pid] || ''} onChange={e => setQty(m => ({ ...m, [r.pid]: e.target.value }))} style={{ width: 58, height: 26, textAlign: 'right' }}/>
+            <button className="btn btn-sm" disabled={busy} onClick={() => add(r.pid, qty[r.pid])}><Icon name="plus" size={11}/>Add</button>
+          </div>
+        ))}
+        {q.trim() && results.length === 0 && <div className="tiny muted mt-1">No matching pool stock.</div>}
+      </div>
+    </div>
+  );
+}
+
+// Client invoices saved against this SO (partial + final) — shown in the VG too.
+function VGInvoicesCard({ so }) {
+  const { navigate } = useStore();
+  const invoices = so.invoices || [];
+  if (!invoices.length && !so.invoice_no) return null;
+  return (
+    <div className="card">
+      <div className="card-header"><h3 className="card-title">Client Invoices</h3><span className="card-sub">{invoices.length || (so.invoice_no ? 1 : 0)} saved</span></div>
+      <div className="card-body flush">
+        {invoices.length ? invoices.map(inv => (
+          <div key={inv.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`invoices/${so.id}`)}>
+            <Icon name="receipt" size={14} color={inv.type === 'Final' ? 'var(--success)' : 'var(--accent)'}/>
+            <div className="grow"><div className="small mono">{inv.no}</div><div className="tiny muted">{inv.type} · {fmtDate(inv.date)}</div></div>
+            <span className="mono small">{inr(inv.total)}</span>
+          </div>
+        )) : (
+          <div className="queue-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`invoices/${so.id}`)}>
+            <Icon name="receipt" size={14}/><div className="grow"><div className="small mono">{so.invoice_no}</div><div className="tiny muted">{fmtDate(so.invoice_date)}</div></div>
+            <span className="mono small">{inr(so.invoice_amount || 0)}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Purchase/PM can divert held stock (procured or pool-allocated) from this SO's
 // VG to the shared Master Pool — at any time, even after dispatch/invoice. The
 // pool gains the units, the SO's bill is auto-reduced (so the client isn't billed
@@ -260,10 +355,19 @@ function VGPoolSendPanel({ so }) {
 }
 
 function VirtualGodownView({ soId, embedded }) {
-  const { state, navigate, getSO, getCustomer, getProduct } = useStore();
+  const { state, navigate, getSO, getCustomer, getProduct, mutate, getUser, currentUser } = useStore();
+  const toast = useToast();
   const so = getSO(soId);
   if (!so) return <div className="empty">Godown not found</div>;
   const cust = getCustomer(so.customer_id);
+  const role = getUser(currentUser)?.role;
+  const canEditBOM = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const removeComponent = (pid) => {
+    const p = getProduct(pid);
+    if (!window.confirm(`Remove ${p ? p.name : pid} from this SO's requirements? Procurement & receiving will no longer expect it.`)) return;
+    mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, lines: (x.lines || []).map(l => ({ ...l, components: (l.components || []).filter(c => c.product_id !== pid) })) } : x) }), { action: 'remove-component', entity: 'SalesOrder', entity_id: so.id });
+    toast(`${p ? p.name : pid} removed from requirements`);
+  };
 
   // Approved cross-SO transfers touching this SO — single source of truth,
   // persisted in transfer_requests. In = received into this VG; Out = lent away.
@@ -294,6 +398,7 @@ function VirtualGodownView({ soId, embedded }) {
   const soPoIds = new Set(soPOs.map(p => p.id));
   const recvByProd = {};
   (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { recvByProd[it.product_id] = (recvByProd[it.product_id] || 0) + (it.accepted || 0); }); });
+  (so.pool_alloc || []).forEach(a => { recvByProd[a.product_id] = (recvByProd[a.product_id] || 0) + (Number(a.qty) || 0); });   // committed pool stock counts as in-hand
   const pooledOut = window.soPoolOut ? window.soPoolOut(so) : {};   // units diverted to the Master Pool
 
   // Pool check + transfer reflection
@@ -354,6 +459,7 @@ function VirtualGodownView({ soId, embedded }) {
       <div className="split-2to1">
         <div className="stack">
         <VGReceivePanel so={so}/>
+        <VGAddFromPoolPanel so={so}/>
         <VGPoolSendPanel so={so}/>
         <div className="card">
           <div className="card-header">
@@ -368,7 +474,7 @@ function VirtualGodownView({ soId, embedded }) {
               <thead><tr>
                 <th>Component</th><th>Code</th>
                 <th className="num">Required</th><th className="num">From Pool</th><th className="num">Transferred</th>
-                <th className="num">Received</th><th className="num">→ Pool</th><th className="num">In hand</th><th className="num">Remaining</th><th>Status</th>
+                <th className="num">Received</th><th className="num">→ Pool</th><th className="num">In hand</th><th className="num">Remaining</th><th>Status</th>{canEditBOM && <th></th>}
               </tr></thead>
               <tbody>
                 {enriched.map(c => {
@@ -389,6 +495,7 @@ function VirtualGodownView({ soId, embedded }) {
                          c.inHand > 0 ? <span className="badge warning dot">Partial</span> :
                          <span className="badge dot">Remaining</span>}
                       </td>
+                      {canEditBOM && <td><button className="btn btn-ghost btn-sm" title="Remove component" onClick={() => removeComponent(c.product_id)}><Icon name="trash" size={11} color="var(--danger)"/></button></td>}
                     </tr>
                   );
                 })}
@@ -399,6 +506,7 @@ function VirtualGodownView({ soId, embedded }) {
         </div>
 
         <div className="stack">
+          <VGInvoicesCard so={so}/>
           <div className="card">
             <div className="card-header"><h3 className="card-title">Inflows & Outflows</h3></div>
             <div className="card-body flush">
@@ -812,6 +920,8 @@ window.soFullyReceived = function (state, so) {
 };
 
 window.VGReceivePanel = VGReceivePanel;
+window.VGAddFromPoolPanel = VGAddFromPoolPanel;
+window.VGInvoicesCard = VGInvoicesCard;
 window.VGPoolSendPanel = VGPoolSendPanel;
 window.VirtualGodownList = VirtualGodownList;
 window.VirtualGodownView = VirtualGodownView;

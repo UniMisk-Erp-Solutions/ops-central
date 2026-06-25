@@ -237,11 +237,10 @@ function SalesOrderNew() {
   const customOk = customFields.every(f => !f.required || (extra[f.key] !== undefined && extra[f.key] !== ''));
   const canSubmit = customer && poRef && lines.length > 0 && customOk;
 
-  // Pool reuse suggestions for the current lines; effective use = min(picked, needed, available).
-  // Honour the admin "pool-first allocation" rule (Customisation → Virtual Godown):
-  // when disabled, the Master Pool is not checked before procurement.
-  const poolFirst = state.config.pool_first !== false;
-  const poolSugg = poolFirst ? poolSuggestionsForSO(state, lines, getProduct) : [];
+  // Pool reuse is now handled in the Virtual Godown (Purchase adds from the
+  // Master Pool there, with smart suggestions), so the New SO no longer
+  // auto-allocates pool stock at creation.
+  const poolSugg = [];
   const useQtyFor = (s) => Math.max(0, Math.min(poolUse[s.product_id] != null ? Number(poolUse[s.product_id]) : s.suggestUse, s.needed, s.available));
   const poolSavings = poolSugg.reduce((sum, s) => sum + useQtyFor(s) * ((s.product && s.product.buy) || 0), 0);
 
@@ -500,35 +499,6 @@ function SalesOrderNew() {
               )}
             </div>
           </div>
-
-          {poolSugg.length > 0 && (
-            <div className="card" style={{ borderLeft: '3px solid var(--success)' }}>
-              <div className="card-header">
-                <div>
-                  <h3 className="card-title">♻ Reuse from Master Surplus Pool</h3>
-                  <div className="tiny muted">Relevant to this order's components · auto-suggested · reduces fresh procurement</div>
-                </div>
-                {poolSavings > 0 && <span className="badge success">saves ~{inr(poolSavings)}</span>}
-              </div>
-              <div className="card-body flush">
-                <table className="t">
-                  <thead><tr><th>Item</th><th className="num">Needed</th><th className="num">In pool</th><th className="num">Use</th><th className="num">Saves</th></tr></thead>
-                  <tbody>
-                    {poolSugg.map(s => (
-                      <tr key={s.product_id}>
-                        <td>{s.product ? s.product.name : s.product_id}<div className="tiny muted mono">{s.product ? s.product.code : ''}</div></td>
-                        <td className="num">{s.needed}</td>
-                        <td className="num">{s.available}</td>
-                        <td className="num"><input type="number" min="0" max={Math.min(s.needed, s.available)} className="input mono" value={poolUse[s.product_id] != null ? poolUse[s.product_id] : s.suggestUse} onChange={e => setPoolUse(m => ({ ...m, [s.product_id]: e.target.value }))} style={{ width: 64, textAlign: 'right', height: 24 }}/></td>
-                        <td className="num mono">{inr(useQtyFor(s) * ((s.product && s.product.buy) || 0))}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="tiny muted" style={{ padding: '8px 14px' }}>Chosen quantities are allocated from the pool on submit — pool stock is decremented and procurement skips these. Irrelevant pool items are hidden.</div>
-            </div>
-          )}
 
           <div className="card">
             <div className="form-section">
