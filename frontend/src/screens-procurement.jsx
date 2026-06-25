@@ -844,7 +844,8 @@ function GRNList() {
           <div className="page-sub">Stores' record of material received · auto-allocated to source SO's Virtual Godown</div>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" onClick={() => navigate('grn/new')}><Icon name="plus" size={13}/>New GRN</button>
+          <span className="tiny muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={12} color="var(--success)"/>Auto-created on receipt at the Virtual Godown</span>
+          <button className="btn" onClick={() => navigate('godown')}><Icon name="box" size={13}/>Go to Virtual Godowns</button>
         </div>
       </div>
 
@@ -906,13 +907,17 @@ function GRNDetail({ grnId }) {
       <div className="detail-grid">
         <div className="stack">
           <div className="card">
-            <div className="card-header"><h3 className="card-title">Receipt Lines</h3></div>
+            <div className="card-header"><h3 className="card-title">Receipt Lines</h3><span className="card-sub">Status reflects cumulative receipts against this PO</span></div>
             <div className="card-body flush">
               <table className="t zebra">
-                <thead><tr><th>Item</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Accepted</th><th className="num">Rejected</th><th>Reason</th></tr></thead>
+                <thead><tr><th>Item</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Accepted</th><th className="num">Rejected</th><th className="num">Remaining</th><th>Status</th></tr></thead>
                 <tbody>
                   {g.items.map((it, i) => {
                     const p = getProduct(it.product_id);
+                    // Cumulative accepted for this product across ALL GRNs of the PO → live remaining.
+                    const cumAcc = state.grns.filter(x => x.po_id === g.po_id).reduce((a, x) => a + (x.items || []).filter(y => y.product_id === it.product_id).reduce((b, y) => b + (y.accepted || 0), 0), 0);
+                    const ordered = (po.items || []).filter(y => y.product_id === it.product_id).reduce((a, y) => a + (y.qty || 0), 0) || it.ordered || 0;
+                    const remaining = Math.max(0, ordered - cumAcc);
                     return (
                       <tr key={i}>
                         <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
@@ -920,7 +925,8 @@ function GRNDetail({ grnId }) {
                         <td className="num">{it.received}</td>
                         <td className="num"><span style={{ color: 'var(--success)' }}>{it.accepted}</span></td>
                         <td className="num">{it.rejected || <span className="muted">0</span>}</td>
-                        <td className="small muted">{it.reject_reason || '—'}</td>
+                        <td className="num">{remaining > 0 ? <strong style={{ color: 'var(--warning)' }}>{remaining}</strong> : <span className="muted">0</span>}</td>
+                        <td>{remaining > 0 ? <span className="badge warning dot">Remaining</span> : <span className="badge success dot">Fulfilled</span>}</td>
                       </tr>
                     );
                   })}
@@ -990,10 +996,11 @@ function GRNDetail({ grnId }) {
 async function postReceiptForPO(po, items, meta, ctx) {
   const { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser } = ctx;
   const grnDate = (meta && meta.grnDate) || TODAY; const lr = (meta && meta.lr) || '';
+  const seqOff = (meta && meta.seqOffset) || 0;   // keeps numbering unique when posting several POs in one action
   const norm = items.map(it => ({ ...it, accepted: Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0)) }));
   const surplus = norm.filter(it => (it.to_pool || 0) > 0).map(it => ({ product_id: it.product_id, qty: it.to_pool, source_so: po.so_id, received_date: grnDate }));
   const surplusUnits = surplus.reduce((s, x) => s + x.qty, 0);
-  const grnNo = `GRN/FY26/${String(28 + state.grns.length).padStart(4, '0')}`;
+  const grnNo = `GRN/FY26/${String(28 + state.grns.length + seqOff).padStart(4, '0')}`;
   const rnd = Math.random().toString(36).slice(2, 5);
   const grn = {
     id: 'grn-' + Date.now() + rnd, grn_no: grnNo, po_id: po.id, date: grnDate, lr, received_by: 'Stores', status: 'Posted',
@@ -1001,16 +1008,24 @@ async function postReceiptForPO(po, items, meta, ctx) {
   };
   const adjustments = norm.filter(it => (it.to_pool || 0) > 0).map(it => { const p = getProduct(it.product_id); return { product_id: it.product_id, qty: it.to_pool, amount: Math.round((p ? (p.sell || 0) : 0) * it.to_pool), reason: 'Removed at GRN — not supplied to customer', grn_id: grn.id, date: grnDate }; });
   const billCut = adjustments.reduce((s, a) => s + a.amount, 0);
-  const ebillSeq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
+  const ebillSeq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length + seqOff).padStart(4, '0');
   const ebill = po.ebill && po.ebill.generated ? po.ebill : { no: `VPO-EB/FY26/${ebillSeq}`, irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(), date: grnDate, amount: Math.round((po.amount || 0) * 1.18), generated: true, auto: true };
   const rateOf = {}; (po.items || []).forEach(it => { rateOf[it.product_id] = it.rate; });
   const recvValue = norm.reduce((s, it) => s + (it.accepted || 0) * (rateOf[it.product_id] || 0), 0);
-  const autoVI = recvValue > 0 ? { id: 'vi-' + Date.now() + rnd, vendor_invoice_no: `VINV/FY26/${String(1 + (state.vendor_invoices || []).length).padStart(4, '0')}`, po_id: po.id, grn_id: grn.id, vendor_id: po.vendor_id, date: grnDate, amount: Math.round(recvValue), status: 'Booked', tolerance: 'within' } : null;
+  const autoVI = recvValue > 0 ? { id: 'vi-' + Date.now() + rnd, vendor_invoice_no: `VINV/FY26/${String(1 + (state.vendor_invoices || []).length + seqOff).padStart(4, '0')}`, po_id: po.id, grn_id: grn.id, vendor_id: po.vendor_id, date: grnDate, amount: Math.round(recvValue), status: 'Booked', tolerance: 'within' } : null;
+  // A PO is only fully received when cumulative accepted >= ordered for EVERY line
+  // (prior GRNs for this PO + this receipt). Otherwise it stays 'Partially Received'
+  // so it remains receivable for the rest. Whole-PO receipts still resolve to complete.
+  const cumAcc = {};
+  state.grns.filter(g => g.po_id === po.id).forEach(g => (g.items || []).forEach(it => { cumAcc[it.product_id] = (cumAcc[it.product_id] || 0) + (it.accepted || 0); }));
+  norm.forEach(it => { cumAcc[it.product_id] = (cumAcc[it.product_id] || 0) + (it.accepted || 0); });
+  const poComplete = (po.items || []).every(it => (cumAcc[it.product_id] || 0) >= (it.qty || 0));
+  const newPoStatus = poComplete ? 'Material Received' : 'Partially Received';
   const so = state.sales_orders.find(x => x.id === po.so_id);
   mutate(s => ({
     ...s,
     grns: [grn, ...s.grns],
-    vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: 'Material Received', ebill } : p),
+    vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status: newPoStatus, ebill } : p),
     vendor_invoices: autoVI ? [autoVI, ...s.vendor_invoices] : s.vendor_invoices,
     sales_orders: (po.so_id && adjustments.length) ? s.sales_orders.map(x => x.id === po.so_id ? { ...x, bill_adjustments: [...(x.bill_adjustments || []), ...adjustments] } : x) : s.sales_orders,
     notifications: [
@@ -1021,8 +1036,11 @@ async function postReceiptForPO(po, items, meta, ctx) {
     ],
   }), { action: 'create', entity: 'GRN', entity_id: grn.id });
   if (surplus.length) await addToPool(surplus);
-  if (po.so_id && window.raiseSOInvoice) window.raiseSOInvoice(po.so_id, { mode: 'bundle' }, { mutate, toast: null, currentUser, getUser, getProduct }, { silent: true });
-  return { grn, surplusUnits, billCut };
+  // Skip the per-PO client invoice when the caller will raise one consolidated
+  // invoice after posting several POs (VG "Mark Received"). Default behaviour
+  // (single-PO receive) is unchanged.
+  if (!(meta && meta.skipInvoice) && po.so_id && window.raiseSOInvoice) window.raiseSOInvoice(po.so_id, { mode: 'bundle' }, { mutate, toast: null, currentUser, getUser, getProduct }, { silent: true });
+  return { grn, surplusUnits, billCut, poComplete };
 }
 window.postReceiptForPO = postReceiptForPO;
 

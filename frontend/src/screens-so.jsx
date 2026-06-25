@@ -701,6 +701,12 @@ function SalesOrderDetail({ soId }) {
 
   const advanceStatus = () => {
     if (!nextAction) return;
+    // Gate: an SO cannot be closed until every item is received in its Virtual Godown.
+    if (nextAction.next === 'Closed' && window.soFullyReceived && !window.soFullyReceived(state, so)) {
+      toast('Cannot close — some items are still not received in the Virtual Godown.');
+      navigate(`godown/${so.id}`);
+      return;
+    }
     // Start Procurement → auto-generate the (split) Vendor POs from the inquiry's
     // vendor allocation, so every vendor + the GRN appear immediately.
     if (so.status === 'Approved' && nextAction.next === 'Procurement Started') {

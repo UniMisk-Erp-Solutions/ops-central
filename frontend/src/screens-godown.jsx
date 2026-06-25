@@ -76,6 +76,103 @@ function VirtualGodownList() {
   );
 }
 
+// Centralised receiving — tick what physically arrived for this SO and post it.
+// Reuses postReceiptForPO (GRN + vendor invoice + pool + e-Bill) per affected PO,
+// then raises ONE consolidated client invoice (bundle-level, BOM excluded).
+function VGReceivePanel({ so }) {
+  const { state, mutate, addToPool, getProduct, getVendor, getUser, currentUser } = useStore();
+  const toast = useToast();
+  const role = getUser(currentUser)?.role;
+  const canReceive = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role);
+
+  const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
+  const acceptedKey = {};
+  (state.grns || []).forEach(g => (g.items || []).forEach(it => { acceptedKey[g.po_id + '|' + it.product_id] = (acceptedKey[g.po_id + '|' + it.product_id] || 0) + (it.accepted || 0); }));
+  const outstanding = [];
+  soPOs.forEach(po => (po.items || []).forEach(it => {
+    const recv = acceptedKey[po.id + '|' + it.product_id] || 0;
+    const remaining = Math.max(0, (it.qty || 0) - recv);
+    if (remaining > 0) outstanding.push({ key: po.id + '|' + it.product_id, po, product_id: it.product_id, ordered: it.qty, received: recv, remaining, rate: it.rate });
+  }));
+
+  const [sel, setSel] = React.useState({});   // key -> receiveNow qty (presence = checked)
+  const [busy, setBusy] = React.useState(false);
+  const checkedKeys = Object.keys(sel).filter(k => sel[k] != null);
+  const toggle = (row) => setSel(s => { const n = { ...s }; if (n[row.key] != null) delete n[row.key]; else n[row.key] = row.remaining; return n; });
+  const setQty = (row, v) => setSel(s => ({ ...s, [row.key]: Math.max(0, Math.min(Number(v) || 0, row.remaining)) }));
+  const allChecked = outstanding.length > 0 && outstanding.every(r => sel[r.key] != null);
+  const selectAll = () => setSel(allChecked ? {} : Object.fromEntries(outstanding.map(r => [r.key, r.remaining])));
+
+  if (!outstanding.length) {
+    return (
+      <div className="card"><div className="card-body" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <Icon name="check" size={16} color="var(--success)"/>
+        <div><strong className="small">All material received</strong><div className="tiny muted">Every ordered item for this SO has been received into the Virtual Godown.</div></div>
+      </div></div>
+    );
+  }
+
+  const markReceived = async () => {
+    const rows = outstanding.filter(r => sel[r.key] != null && sel[r.key] > 0);
+    if (!rows.length) { toast('Tick the items you received (and set a quantity)'); return; }
+    setBusy(true);
+    const byPo = {};
+    rows.forEach(r => { (byPo[r.po.id] = byPo[r.po.id] || { po: r.po, items: [] }).items.push(r); });
+    const ctx = { state, mutate, toast: null, addToPool, getProduct, getVendor, currentUser, getUser };
+    let i = 0, posted = 0, units = 0;
+    for (const { po, items } of Object.values(byPo)) {
+      const recvItems = items.map(r => ({ product_id: r.product_id, qty: r.ordered, rate: r.rate, received: sel[r.key], rejected: 0, to_pool: 0 }));
+      units += recvItems.reduce((s, x) => s + (x.received || 0), 0);
+      await window.postReceiptForPO(po, recvItems, { grnDate: TODAY, lr: '', seqOffset: i, skipInvoice: true }, ctx);
+      i++; posted++;
+    }
+    // One consolidated client partial/final invoice for everything now receivable.
+    if (window.raiseSOInvoice) window.raiseSOInvoice(so.id, { mode: 'bundle' }, { mutate, toast: null, currentUser, getUser, getProduct });
+    setBusy(false); setSel({});
+    toast(`Received ${units} unit(s) · ${posted} GRN(s) posted · client invoice auto-raised`, 'success');
+  };
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <h3 className="card-title">Receive material</h3>
+        <span className="card-sub">Tick what arrived → auto GRN + client invoice</span>
+      </div>
+      <div className="card-body flush">
+        <table className="t">
+          <thead><tr>
+            <th style={{ width: 30 }}><input type="checkbox" checked={allChecked} onChange={selectAll} title="Select all"/></th>
+            <th>Component</th><th>Vendor PO</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Remaining</th><th className="num">Receive now</th>
+          </tr></thead>
+          <tbody>
+            {outstanding.map(r => {
+              const p = getProduct(r.product_id) || { name: r.product_id, code: r.product_id };
+              const on = sel[r.key] != null;
+              return (
+                <tr key={r.key} style={{ opacity: on ? 1 : 0.85 }}>
+                  <td><input type="checkbox" checked={on} onChange={() => toggle(r)}/></td>
+                  <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
+                  <td className="mono small">{r.po.po_no}<div className="tiny muted">{getVendor(r.po.vendor_id)?.name || ''}</div></td>
+                  <td className="num">{r.ordered}</td>
+                  <td className="num">{r.received || <span className="muted">0</span>}</td>
+                  <td className="num"><strong style={{ color: 'var(--warning)' }}>{r.remaining}</strong></td>
+                  <td className="num"><input type="number" min="0" max={r.remaining} className="input mono" disabled={!on} value={on ? sel[r.key] : ''} onChange={e => setQty(r, e.target.value)} style={{ width: 64, textAlign: 'right', height: 26 }}/></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 10, borderTop: '1px solid var(--border)' }}>
+        <span className="tiny muted grow">{checkedKeys.length} of {outstanding.length} selected · posting creates the GRN, books the vendor invoice, routes surplus to pool, and raises the client partial invoice (BOM components never appear on the client invoice).</span>
+        {canReceive
+          ? <button className="btn btn-primary" disabled={busy || checkedKeys.length === 0} onClick={markReceived}><Icon name="check" size={13}/>{busy ? 'Posting…' : `Mark Received (${checkedKeys.length})`}</button>
+          : <span className="tiny muted">Only Stores / Purchase / PM can receive.</span>}
+      </div>
+    </div>
+  );
+}
+
 function VirtualGodownView({ soId, embedded }) {
   const { state, navigate, getSO, getCustomer, getProduct } = useStore();
   const so = getSO(soId);
@@ -106,6 +203,12 @@ function VirtualGodownView({ soId, embedded }) {
     if (!allComponents.find(x => x.product_id === pid)) allComponents.push({ product_id: pid, qty: 0 });
   });
 
+  // Material physically received against this SO's vendor POs (cumulative GRN accepted).
+  const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id);
+  const soPoIds = new Set(soPOs.map(p => p.id));
+  const recvByProd = {};
+  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { recvByProd[it.product_id] = (recvByProd[it.product_id] || 0) + (it.accepted || 0); }); });
+
   // Pool check + transfer reflection
   const pool = state.pool;
   const enriched = allComponents.map(c => {
@@ -116,9 +219,13 @@ function VirtualGodownView({ soId, embedded }) {
     const fromPool = Math.min(poolQty, c.qty);
     const toProcure = Math.max(0, c.qty - fromPool - tIn);   // transfer-in reduces fresh procurement
     const product = getProduct(c.product_id) || { name: c.product_id, code: c.product_id };
-    const available = Math.max(0, fromPool + tIn - tOut);    // what this VG actually holds now
-    return { ...c, product, poolQty, fromPool, toProcure, transferredIn: tIn, transferredOut: tOut, available };
+    const received = recvByProd[c.product_id] || 0;          // procured + GRN-accepted into this VG
+    const available = Math.max(0, fromPool + tIn - tOut);    // pool/transfer stock this VG holds
+    const inHand = available + received;                     // total available to fulfil the requirement
+    const remaining = Math.max(0, c.qty - inHand);
+    return { ...c, product, poolQty, fromPool, toProcure, transferredIn: tIn, transferredOut: tOut, available, received, inHand, remaining };
   });
+  const allReceived = enriched.every(c => c.remaining <= 0);
   const totalIn = Object.values(transferredIn).reduce((a, b) => a + b, 0);
   const totalOut = Object.values(transferredOut).reduce((a, b) => a + b, 0);
 
@@ -149,7 +256,15 @@ function VirtualGodownView({ soId, embedded }) {
           <span><strong>{so.so_no} is on hold</strong> — its stock stays locked here but can be lent to an urgent SO via a cross-SO transfer.</span>
         </div>
       )}
+      {!allReceived && enriched.some(c => c.remaining > 0) && (
+        <div className="mb-2" style={{ padding: '8px 12px', background: 'var(--info-bg)', border: '1px solid oklch(0.86 0.05 260)', borderRadius: 'var(--radius)', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <Icon name="alert" size={14} color="var(--info)"/>
+          <span><strong>Still to receive:</strong> {enriched.filter(c => c.remaining > 0).map(c => `${c.remaining}× ${c.product.name}`).join(' · ')}. This SO cannot be closed until every item is received.</span>
+        </div>
+      )}
       <div className="split-2to1">
+        <div className="stack">
+        <VGReceivePanel so={so}/>
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">VG Contents · {so.so_no}</h3>
@@ -162,8 +277,8 @@ function VirtualGodownView({ soId, embedded }) {
             <table className="t zebra">
               <thead><tr>
                 <th>Component</th><th>Code</th>
-                <th className="num">Required</th><th className="num">From Pool</th><th className="num">Transferred</th><th className="num">To Procure</th>
-                <th className="num">Available</th><th>Status</th>
+                <th className="num">Required</th><th className="num">From Pool</th><th className="num">Transferred</th>
+                <th className="num">Received</th><th className="num">In hand</th><th className="num">Remaining</th><th>Status</th>
               </tr></thead>
               <tbody>
                 {enriched.map(c => {
@@ -175,12 +290,13 @@ function VirtualGodownView({ soId, embedded }) {
                       <td className="num">{c.qty}</td>
                       <td className="num"><span className="badge accent" style={{ minWidth: 28, justifyContent: 'center' }}>{c.fromPool}</span></td>
                       <td className="num">{net !== 0 ? <span className="badge info" style={{ minWidth: 28, justifyContent: 'center' }} title={`In ${c.transferredIn} · Out ${c.transferredOut}`}>{net > 0 ? '+' : ''}{net}</span> : <span className="muted">—</span>}</td>
-                      <td className="num">{c.toProcure}</td>
-                      <td className="num"><strong>{c.available}</strong>{c.qty ? <span className="muted">/{c.qty}</span> : null}</td>
+                      <td className="num">{c.received > 0 ? <span className="badge success" style={{ minWidth: 28, justifyContent: 'center' }}>{c.received}</span> : <span className="muted">0</span>}</td>
+                      <td className="num"><strong>{c.inHand}</strong>{c.qty ? <span className="muted">/{c.qty}</span> : null}</td>
+                      <td className="num">{c.remaining > 0 ? <strong style={{ color: 'var(--warning)' }}>{c.remaining}</strong> : <span className="muted">0</span>}</td>
                       <td>
-                        {c.qty > 0 && c.available >= c.qty ? <span className="badge success dot">Fulfilled</span> :
-                         c.available > 0 ? <span className="badge warning dot">Partial</span> :
-                         <span className="badge dot">Awaiting</span>}
+                        {c.qty > 0 && c.remaining <= 0 ? <span className="badge success dot">Fulfilled</span> :
+                         c.inHand > 0 ? <span className="badge warning dot">Partial</span> :
+                         <span className="badge dot">Remaining</span>}
                       </td>
                     </tr>
                   );
@@ -188,6 +304,7 @@ function VirtualGodownView({ soId, embedded }) {
               </tbody>
             </table>
           </div>
+        </div>
         </div>
 
         <div className="stack">
@@ -585,6 +702,18 @@ function NewTransferModal({ onClose, destSoId }) {
   );
 }
 
+// True only when every BOM component for the SO is fully in hand (GRN-accepted +
+// committed pool stock). Used to gate SO closure. Mirrors billing's soReceivedQty.
+window.soFullyReceived = function (state, so) {
+  if (!so) return false;
+  const req = {}; (so.lines || []).forEach(l => (l.components || []).forEach(c => { req[c.product_id] = (req[c.product_id] || 0) + (c.qty || 0); }));
+  const poIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
+  const recv = {}; (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + (it.accepted || 0); }); });
+  (so.pool_alloc || []).forEach(a => { recv[a.product_id] = (recv[a.product_id] || 0) + (Number(a.qty) || 0); });
+  return Object.keys(req).every(pid => (recv[pid] || 0) >= req[pid]);
+};
+
+window.VGReceivePanel = VGReceivePanel;
 window.VirtualGodownList = VirtualGodownList;
 window.VirtualGodownView = VirtualGodownView;
 window.MasterPool = MasterPool;
