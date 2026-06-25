@@ -33,7 +33,7 @@ const PERMISSIONS = {
     },
   },
   'Purchase': {
-    nav: ['dashboard','inbox','sourcing','sales-orders','rfq','vendor-pos','grn','vendors','pool','products'],
+    nav: ['dashboard','inbox','sourcing','sales-orders','godown','transfers','rfq','vendor-pos','grn','vendors','pool','products'],
     primary: { route: 'sourcing', label: 'Sourcing', icon: 'bookmark' },
     can: {
       createRFQ: true, selectVendor: true, createVendorPO: true, doSourcing: true,

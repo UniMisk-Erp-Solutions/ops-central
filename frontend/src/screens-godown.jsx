@@ -173,6 +173,62 @@ function VGReceivePanel({ so }) {
   );
 }
 
+// Receive BOM components directly from the VG. picks: [{product_id, qty}].
+// Each pick is filled against this SO's existing receivable vendor POs; any
+// shortfall auto-creates ONE vendor PO (sourced vendor if known, else best
+// guess) so a GRN always posts and the 3-way match stays intact. Then a single
+// consolidated client invoice is raised. Returns a short summary.
+async function vgReceiveComponents(so, picks, ctx) {
+  const { state, mutate, getProduct } = ctx;
+  const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
+  const acceptedKey = {};
+  (state.grns || []).forEach(g => (g.items || []).forEach(it => { acceptedKey[g.po_id + '|' + it.product_id] = (acceptedKey[g.po_id + '|' + it.product_id] || 0) + (it.accepted || 0); }));
+
+  const perPo = {};            // po.id -> { po, items:[{product_id, qty, rate, received}] }
+  const newLines = [];         // shortfall lines for an auto PO
+  for (const pick of picks) {
+    let need = Math.max(0, pick.qty);
+    for (const po of soPOs) {
+      if (need <= 0) break;
+      const line = (po.items || []).find(it => it.product_id === pick.product_id);
+      if (!line) continue;
+      const cap = (line.qty || 0) - (acceptedKey[po.id + '|' + pick.product_id] || 0);
+      if (cap <= 0) continue;
+      const take = Math.min(need, cap);
+      (perPo[po.id] = perPo[po.id] || { po, items: [] }).items.push({ product_id: pick.product_id, qty: line.qty, rate: line.rate, received: take });
+      acceptedKey[po.id + '|' + pick.product_id] = (acceptedKey[po.id + '|' + pick.product_id] || 0) + take;   // reserve
+      need -= take;
+    }
+    if (need > 0) { const p = getProduct(pick.product_id); newLines.push({ product_id: pick.product_id, qty: need, rate: p ? (p.buy || 0) : 0 }); }
+  }
+
+  // Auto-create one PO for any shortfall (so receiving never blocks on missing POs).
+  let createdPONeedsMD = false;
+  if (newLines.length) {
+    const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
+    let vendorId = '';
+    if (sourcing && sourcing.picks) { const counts = {}; Object.values(sourcing.picks).forEach(v => { counts[v] = (counts[v] || 0) + 1; }); const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]; vendorId = top ? top[0] : ''; }
+    if (!vendorId) vendorId = (state.vendors[0] && state.vendors[0].id) || '';
+    const amount = newLines.reduce((s, l) => s + l.qty * l.rate, 0);
+    const mdT = state.config.vendor_po_md_threshold != null ? state.config.vendor_po_md_threshold : 500000;
+    const needsMD = amount > mdT;
+    createdPONeedsMD = needsMD;
+    const po = { id: 'po-' + Date.now() + '-vg', po_no: `VPO/FY26/${String(40 + state.vendor_pos.length).padStart(4, '0')}`, so_id: so.id, vendor_id: vendorId, date: TODAY, expected: TODAY, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: newLines.map(l => ({ product_id: l.product_id, qty: l.qty, rate: l.rate })), ebill: {}, source: 'vg-receive' };
+    mutate(s => ({ ...s, vendor_pos: [po, ...s.vendor_pos], notifications: [{ id: 'n-vgpo-' + Date.now(), kind: 'po', text: `${po.po_no} auto-created from VG receive for ${so.so_no}${needsMD ? ' · needs MD approval before receiving' : ''}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications] }), { action: 'create', entity: 'VendorPO', entity_id: po.id });
+    if (!needsMD) perPo[po.id] = { po, items: po.items.map(l => ({ product_id: l.product_id, qty: l.qty, rate: l.rate, received: l.qty })) };
+  }
+
+  let i = 0, posted = 0, units = 0;
+  for (const grp of Object.values(perPo)) {
+    const items = grp.items.map(it => ({ product_id: it.product_id, qty: it.qty, rate: it.rate, received: it.received, rejected: 0, to_pool: 0 }));
+    units += items.reduce((s, x) => s + (x.received || 0), 0);
+    await window.postReceiptForPO(grp.po, items, { grnDate: TODAY, lr: '', seqOffset: i, skipInvoice: true }, ctx);
+    i++; posted++;
+  }
+  if (posted && window.raiseSOInvoice) window.raiseSOInvoice(so.id, { mode: 'bundle' }, { mutate, toast: null, currentUser: ctx.currentUser, getUser: ctx.getUser, getProduct });
+  return { posted, units, createdPONeedsMD };
+}
+
 // Add components to this SO from the Master Pool — smart suggestions (pool stock
 // the SO's BOM needs) + free search. Allocates pool stock to the SO (pool_alloc)
 // and decrements the pool. Replaces the old New-SO pool-reuse step.
@@ -189,7 +245,21 @@ function VGAddFromPoolPanel({ so }) {
   const poolByProd = {};
   (state.pool || []).forEach(p => { const b = (poolByProd[p.product_id] = poolByProd[p.product_id] || { qty: 0, srcs: [] }); b.qty += Number(p.qty) || 0; b.srcs.push({ id: p.id, qty: Number(p.qty) || 0, date: p.received_date }); });
   const need = {}; (so.lines || []).forEach(l => (l.components || []).forEach(c => { need[c.product_id] = (need[c.product_id] || 0) + (c.qty || 0) * (l.bundle_qty || 1); }));
-  const suggestions = Object.keys(need).filter(pid => (poolByProd[pid] && poolByProd[pid].qty > 0)).map(pid => ({ pid, need: need[pid], inPool: poolByProd[pid].qty, product: getProduct(pid) }));
+  // What this SO already holds (GRN-accepted + committed pool − diverted), so we
+  // only suggest filling the real remaining gap, ranked by cost saved.
+  const soPoIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
+  const have = {};
+  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { have[it.product_id] = (have[it.product_id] || 0) + (it.accepted || 0); }); });
+  (so.pool_alloc || []).forEach(a => { have[a.product_id] = (have[a.product_id] || 0) + (Number(a.qty) || 0); });
+  const out = window.soPoolOut ? window.soPoolOut(so) : {};
+  Object.keys(out).forEach(pid => { have[pid] = Math.max(0, (have[pid] || 0) - out[pid]); });
+  const suggestions = Object.keys(need).map(pid => {
+    const inPool = (poolByProd[pid] && poolByProd[pid].qty) || 0;
+    const gap = Math.max(0, need[pid] - (have[pid] || 0));
+    const fill = Math.min(gap, inPool);
+    const p = getProduct(pid);
+    return { pid, need: need[pid], gap, inPool, fill, product: p, save: fill * ((p && p.buy) || 0) };
+  }).filter(s => s.fill > 0).sort((a, b) => b.save - a.save);
   const results = q.trim() ? Object.keys(poolByProd).filter(pid => poolByProd[pid].qty > 0).map(pid => ({ pid, inPool: poolByProd[pid].qty, product: getProduct(pid) })).filter(x => ((x.product && x.product.name) || x.pid).toLowerCase().includes(q.trim().toLowerCase())).slice(0, 8) : [];
 
   const add = async (pid, want) => {
@@ -216,12 +286,12 @@ function VGAddFromPoolPanel({ so }) {
       <div className="card-body">
         {suggestions.length > 0 && (
           <div className="mb-2">
-            <div className="tiny muted mb-1">Suggested for this SO</div>
+            <div className="tiny muted mb-1">Suggested for this SO · fills the remaining gap, best savings first</div>
             {suggestions.map(s => (
               <div key={s.pid} className="queue-item">
-                <div className="grow"><div className="small">{s.product ? s.product.name : s.pid}</div><div className="tiny muted">needs {s.need} · {s.inPool} in pool</div></div>
-                <input type="number" min="0" max={Math.min(s.need, s.inPool)} className="input mono" placeholder={String(Math.min(s.need, s.inPool))} value={qty[s.pid] || ''} onChange={e => setQty(m => ({ ...m, [s.pid]: e.target.value }))} style={{ width: 58, height: 26, textAlign: 'right' }}/>
-                <button className="btn btn-sm" disabled={busy} onClick={() => add(s.pid, qty[s.pid] || Math.min(s.need, s.inPool))}><Icon name="plus" size={11}/>Add</button>
+                <div className="grow"><div className="small">{s.product ? s.product.name : s.pid}</div><div className="tiny muted">gap {s.gap} · {s.inPool} in pool · saves ~{inr(s.save)}</div></div>
+                <input type="number" min="0" max={Math.min(s.gap, s.inPool)} className="input mono" placeholder={String(s.fill)} value={qty[s.pid] || ''} onChange={e => setQty(m => ({ ...m, [s.pid]: e.target.value }))} style={{ width: 58, height: 26, textAlign: 'right' }}/>
+                <button className="btn btn-sm" disabled={busy} onClick={() => add(s.pid, qty[s.pid] || s.fill)}><Icon name="plus" size={11}/>Add</button>
               </div>
             ))}
           </div>
@@ -355,19 +425,24 @@ function VGPoolSendPanel({ so }) {
 }
 
 function VirtualGodownView({ soId, embedded }) {
-  const { state, navigate, getSO, getCustomer, getProduct, mutate, getUser, currentUser } = useStore();
+  const { state, navigate, getSO, getCustomer, getProduct, mutate, getUser, currentUser, addToPool, getVendor } = useStore();
   const toast = useToast();
+  const [recvSel, setRecvSel] = React.useState({});   // product_id -> receive-now qty
+  const [recvBusy, setRecvBusy] = React.useState(false);
   const so = getSO(soId);
   if (!so) return <div className="empty">Godown not found</div>;
   const cust = getCustomer(so.customer_id);
   const role = getUser(currentUser)?.role;
   const canEditBOM = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const canReceive = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role);
   const removeComponent = (pid) => {
     const p = getProduct(pid);
     if (!window.confirm(`Remove ${p ? p.name : pid} from this SO's requirements? Procurement & receiving will no longer expect it.`)) return;
     mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, lines: (x.lines || []).map(l => ({ ...l, components: (l.components || []).filter(c => c.product_id !== pid) })) } : x) }), { action: 'remove-component', entity: 'SalesOrder', entity_id: so.id });
     toast(`${p ? p.name : pid} removed from requirements`);
   };
+  const toggleRecv = (c) => setRecvSel(m => { const n = { ...m }; if (n[c.product_id] != null) delete n[c.product_id]; else n[c.product_id] = c.remaining; return n; });
+  const setRecvQty = (c, v) => setRecvSel(m => ({ ...m, [c.product_id]: Math.max(0, Math.min(Number(v) || 0, c.remaining)) }));
 
   // Approved cross-SO transfers touching this SO — single source of truth,
   // persisted in transfer_requests. In = received into this VG; Out = lent away.
@@ -420,6 +495,17 @@ function VirtualGodownView({ soId, embedded }) {
     return { ...c, product, poolQty, fromPool, toProcure, transferredIn: tIn, transferredOut: tOut, available, received, grossReceived, sentToPool, inHand, remaining };
   });
   const allReceived = enriched.every(c => c.remaining <= 0);
+  const receivable = enriched.filter(c => c.remaining > 0);
+  const recvPicks = Object.keys(recvSel).filter(pid => recvSel[pid] > 0).map(pid => ({ product_id: pid, qty: recvSel[pid] }));
+  const allTicked = receivable.length > 0 && receivable.every(c => recvSel[c.product_id] != null);
+  const toggleAllRecv = () => setRecvSel(allTicked ? {} : Object.fromEntries(receivable.map(c => [c.product_id, c.remaining])));
+  const doMarkReceived = async () => {
+    if (!recvPicks.length) { toast('Tick the items you received'); return; }
+    setRecvBusy(true);
+    const r = await vgReceiveComponents(so, recvPicks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
+    setRecvBusy(false); setRecvSel({});
+    toast(`Received ${r.units} unit(s) · ${r.posted} GRN(s) posted · client invoice auto-raised${r.createdPONeedsMD ? ' · a high-value PO needs MD approval before it can be received' : ''}`, 'success');
+  };
   const totalIn = Object.values(transferredIn).reduce((a, b) => a + b, 0);
   const totalOut = Object.values(transferredOut).reduce((a, b) => a + b, 0);
 
@@ -458,20 +544,23 @@ function VirtualGodownView({ soId, embedded }) {
       )}
       <div className="split-2to1">
         <div className="stack">
-        <VGReceivePanel so={so}/>
         <VGAddFromPoolPanel so={so}/>
         <VGPoolSendPanel so={so}/>
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">VG Contents · {so.so_no}</h3>
-            <div style={{ display: 'flex', gap: 12, fontSize: 11.5 }}>
-              <span><span className="badge accent" style={{ marginRight: 4 }}>Pool</span>auto-allocated</span>
-              <span><span className="badge info" style={{ marginRight: 4 }}>Transfer</span>cross-SO</span>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              {allReceived
+                ? <span className="badge success dot">All received</span>
+                : canReceive
+                  ? <><span className="tiny muted">Tick what arrived →</span><button className="btn btn-primary btn-sm" disabled={recvBusy || recvPicks.length === 0} onClick={doMarkReceived}><Icon name="check" size={12}/>{recvBusy ? 'Posting…' : `Mark Received (${recvPicks.length})`}</button></>
+                  : <span className="tiny muted">{receivable.length} remaining</span>}
             </div>
           </div>
           <div className="card-body flush">
             <table className="t zebra">
               <thead><tr>
+                {canReceive && <th style={{ width: 60 }}><input type="checkbox" checked={allTicked} onChange={toggleAllRecv} title="Select all to receive"/></th>}
                 <th>Component</th><th>Code</th>
                 <th className="num">Required</th><th className="num">From Pool</th><th className="num">Transferred</th>
                 <th className="num">Received</th><th className="num">→ Pool</th><th className="num">In hand</th><th className="num">Remaining</th><th>Status</th>{canEditBOM && <th></th>}
@@ -481,6 +570,12 @@ function VirtualGodownView({ soId, embedded }) {
                   const net = c.transferredIn - c.transferredOut;
                   return (
                     <tr key={c.product_id}>
+                      {canReceive && <td>{c.remaining > 0 ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <input type="checkbox" checked={recvSel[c.product_id] != null} onChange={() => toggleRecv(c)}/>
+                          {recvSel[c.product_id] != null && <input type="number" min="0" max={c.remaining} value={recvSel[c.product_id]} onChange={e => setRecvQty(c, e.target.value)} className="input mono" style={{ width: 44, height: 22, textAlign: 'right', padding: '0 4px' }}/>}
+                        </div>
+                      ) : <Icon name="check" size={12} color="var(--success)"/>}</td>}
                       <td>{c.product.name}</td>
                       <td className="mono small muted">{c.product.code}</td>
                       <td className="num">{c.qty}</td>
