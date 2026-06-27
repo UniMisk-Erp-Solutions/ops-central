@@ -225,7 +225,7 @@ async function vgReceiveComponents(so, picks, ctx) {
     await window.postReceiptForPO(grp.po, items, { grnDate: TODAY, lr: '', seqOffset: i, skipInvoice: true }, ctx);
     i++; posted++;
   }
-  if (posted && window.raiseSOInvoice) window.raiseSOInvoice(so.id, { mode: 'bundle' }, { mutate, toast: null, currentUser: ctx.currentUser, getUser: ctx.getUser, getProduct });
+  if (posted && window.autoInvoiceSO) window.autoInvoiceSO(so.id, { mutate, toast: null, currentUser: ctx.currentUser, getUser: ctx.getUser, getProduct });
   return { posted, units, createdPONeedsMD };
 }
 
@@ -322,9 +322,9 @@ function VGInvoicesCard({ so }) {
       <div className="card-header"><h3 className="card-title">Client Invoices</h3><span className="card-sub">{invoices.length || (so.invoice_no ? 1 : 0)} saved</span></div>
       <div className="card-body flush">
         {invoices.length ? invoices.map(inv => (
-          <div key={inv.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`invoices/${so.id}`)}>
-            <Icon name="receipt" size={14} color={inv.type === 'Final' ? 'var(--success)' : 'var(--accent)'}/>
-            <div className="grow"><div className="small mono">{inv.no}</div><div className="tiny muted">{inv.type} · {fmtDate(inv.date)}</div></div>
+          <div key={inv.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`invoices/${so.id}/${inv.id}`)}>
+            <Icon name="receipt" size={14} color={inv.consolidated || inv.type === 'Final' ? 'var(--success)' : 'var(--accent)'}/>
+            <div className="grow"><div className="small mono">{inv.no}</div><div className="tiny muted">{inv.consolidated ? 'Consolidated' : inv.type} · qty {(inv.lines || []).reduce((a, l) => a + (Number(l.qty) || 0), 0)} · {fmtDate(inv.date)}</div></div>
             <span className="mono small">{inr(inv.total)}</span>
           </div>
         )) : (

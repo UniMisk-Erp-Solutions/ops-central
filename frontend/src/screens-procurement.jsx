@@ -1039,7 +1039,7 @@ async function postReceiptForPO(po, items, meta, ctx) {
   // Skip the per-PO client invoice when the caller will raise one consolidated
   // invoice after posting several POs (VG "Mark Received"). Default behaviour
   // (single-PO receive) is unchanged.
-  if (!(meta && meta.skipInvoice) && po.so_id && window.raiseSOInvoice) window.raiseSOInvoice(po.so_id, { mode: 'bundle' }, { mutate, toast: null, currentUser, getUser, getProduct }, { silent: true });
+  if (!(meta && meta.skipInvoice) && po.so_id && window.autoInvoiceSO) window.autoInvoiceSO(po.so_id, { mutate, toast: null, currentUser, getUser, getProduct });
   return { grn, surplusUnits, billCut, poComplete };
 }
 window.postReceiptForPO = postReceiptForPO;

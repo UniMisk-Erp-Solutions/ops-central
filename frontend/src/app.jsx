@@ -86,6 +86,7 @@ function App() {
   else if (route === 'three-way') Content = <ThreeWayMatchList/>;
   else if (parts[0] === 'three-way' && parts[1]) Content = <ThreeWayMatchDetail viId={parts[1]}/>;
   else if (route === 'invoices') Content = <InvoiceList/>;
+  else if (parts[0] === 'invoices' && parts[1] && parts[2]) Content = <InvoiceDetail soId={parts[1]} invId={parts[2]}/>;
   else if (parts[0] === 'invoices' && parts[1]) Content = <InvoiceDetail soId={parts[1]}/>;
   else if (route === 'collections') Content = <CollectionsDashboard/>;
   else if (route === 'settings') Content = <Settings/>;

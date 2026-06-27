@@ -67,15 +67,24 @@ function InvoiceList() {
   );
 }
 
-function InvoiceDetail({ soId }) {
+function InvoiceDetail({ soId, invId }) {
   const { state, navigate, getSO, getCustomer, getCategory, getProduct, soSubtotal, soBillAdjustment, soBilledSubtotal } = useStore();
   const so = getSO(soId);
-  if (!so || !so.invoice_no) return <div className="page"><div className="empty">Invoice not found</div></div>;
+  if (!so) return <div className="page"><div className="empty">Invoice not found</div></div>;
+  // When an invoice id is given, render THAT specific invoice (partial / consolidated);
+  // otherwise fall back to the order-level (legacy) full invoice.
+  const inv = invId ? (so.invoices || []).find(i => i.id === invId) : null;
+  if (invId && !inv) return <div className="page"><div className="empty">Invoice not found</div></div>;
+  if (!invId && !so.invoice_no) return <div className="page"><div className="empty">Invoice not found</div></div>;
   const c = getCustomer(so.customer_id);
   const sameState = c.state === state.org.state;
+  const docNo = inv ? inv.no : so.invoice_no;
+  const docDate = inv ? inv.date : so.invoice_date;
+  const docType = inv ? (inv.consolidated ? 'Consolidated' : inv.type) : 'Full';
+  const docLines = inv ? (inv.lines || []) : null;     // null → render full so.lines
   const orderedSubtotal = soSubtotal(so);
-  const billAdj = soBillAdjustment(so);
-  const subtotal = soBilledSubtotal(so);   // billed = ordered − items removed at GRN
+  const billAdj = inv ? 0 : soBillAdjustment(so);
+  const subtotal = inv ? (inv.subtotal || 0) : soBilledSubtotal(so);   // billed = ordered − items removed at GRN
   const cgst = sameState ? subtotal * 0.09 : 0;
   const sgst = sameState ? subtotal * 0.09 : 0;
   const igst = sameState ? 0 : subtotal * 0.18;
@@ -103,8 +112,8 @@ function InvoiceDetail({ soId }) {
             <Icon name="chevronLeft" size={12}/> Invoices
           </div>
           <h1 className="page-title">
-            Tax Invoice — <span className="mono">{so.invoice_no}</span>
-            {so.status === 'Payment Pending' ? <span className="badge warning dot" style={{ marginLeft: 8 }}>Payment Due</span> : <span className="badge success dot" style={{ marginLeft: 8 }}>Paid</span>}
+            Tax Invoice — <span className="mono">{docNo}</span>
+            {inv ? <span className={`badge ${inv.consolidated ? 'success' : 'accent'} dot`} style={{ marginLeft: 8 }}>{docType}</span> : (so.status === 'Payment Pending' ? <span className="badge warning dot" style={{ marginLeft: 8 }}>Payment Due</span> : <span className="badge success dot" style={{ marginLeft: 8 }}>Paid</span>)}
           </h1>
           <div className="page-sub">SO Ref <span className="mono">{so.so_no}</span> · {c.name}</div>
         </div>
@@ -130,8 +139,8 @@ function InvoiceDetail({ soId }) {
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '0.06em' }}>TAX INVOICE</div>
-              <div className="small mono">{so.invoice_no}</div>
-              <div className="tiny muted">Original for recipient</div>
+              <div className="small mono">{docNo}</div>
+              <div className="tiny muted">{inv && !inv.consolidated ? `${docType} · qty-proportional` : 'Original for recipient'}</div>
             </div>
           </div>
 
@@ -153,7 +162,7 @@ function InvoiceDetail({ soId }) {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: 8, background: 'var(--bg-subtle)', borderRadius: 4, marginBottom: 10 }}>
-            <div><div className="tiny muted">Invoice date</div><div className="mono small">{fmtDate(so.invoice_date)}</div></div>
+            <div><div className="tiny muted">Invoice date</div><div className="mono small">{fmtDate(docDate)}</div></div>
             <div><div className="tiny muted">Place of supply</div><div className="small">{c.state}</div></div>
             <div><div className="tiny muted">e-Way Bill</div><div className="mono small">EWB-2312-0231-{(45000 + parseInt(so.id.replace('so-','')) * 33).toString()}</div></div>
             <div><div className="tiny muted">IRN</div><div className="mono small">{(so.id + '...e8f9').replace('so-','')}aab2…</div></div>
@@ -164,7 +173,22 @@ function InvoiceDetail({ soId }) {
               <tr><th>#</th><th>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>
             </thead>
             <tbody>
-              {so.lines.map((l, i) => {
+              {docLines ? docLines.map((l, i) => {
+                const cat = l.category_id ? getCategory(l.category_id) : null;
+                const prod = !cat && l.ref_id ? getProduct(l.ref_id) : null;
+                const name = cat ? cat.name : (l.label || (prod && prod.name) || 'Item');
+                const hsn = cat ? cat.hsn : (prod && prod.hsn) || '—';
+                return (
+                  <tr key={i}>
+                    <td>{i + 1}</td>
+                    <td><strong>{name}</strong>{cat && <div className="tiny muted">{cat.bundle_desc}</div>}</td>
+                    <td className="mono">{hsn}</td>
+                    <td className="num mono">{l.qty}</td>
+                    <td className="num mono">{inr(l.unit_price)}</td>
+                    <td className="num mono">{inr(l.amount)}</td>
+                  </tr>
+                );
+              }) : so.lines.map((l, i) => {
                 const cat = getCategory(l.category_id);
                 return (
                   <tr key={l.id}>
@@ -463,14 +487,103 @@ function soInvoiceState(so, state) {
   });
 }
 
+// Fraction of each bundle currently fulfilled, measured BY ITEM COUNT
+// (distinct components fully received ÷ total distinct components), allocated
+// greedily across bundles when a product is shared.
+function soBundleFraction(so, state) {
+  const avail = { ...soReceivedQty(so, state) };   // already nets out pool-out
+  const out = {};
+  (so.lines || []).forEach(l => {
+    const comps = l.components || [];
+    if (!comps.length) { out[l.id] = 1; return; }
+    let count = 0;
+    comps.forEach(c => {
+      const req = (c.qty || 0) * (l.bundle_qty || 1);
+      if (req <= 0) { count++; return; }
+      if ((avail[c.product_id] || 0) >= req) { count++; avail[c.product_id] = (avail[c.product_id] || 0) - req; }
+    });
+    out[l.id] = count / comps.length;
+  });
+  return out;
+}
+// Cumulative fraction of each bundle already billed (non-consolidated invoices).
+function soLineInvoicedFraction(so) {
+  const qty = {};
+  (so.invoices || []).filter(i => !i.consolidated).forEach(inv => (inv.lines || []).forEach(ln => { if (ln.ref_id) qty[ln.ref_id] = (qty[ln.ref_id] || 0) + (Number(ln.qty) || 0); }));
+  const out = {};
+  (so.lines || []).forEach(l => { const bq = l.bundle_qty || 1; out[l.id] = bq > 0 ? (qty[l.id] || 0) / bq : 0; });
+  return out;
+}
+const _nonConsolidatedTotal = (invs) => (invs || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.total || 0), 0);
+
+// Item-count fractional invoice: bills the newly-fulfilled fraction of each
+// bundle (e.g. 0.8 then 0.2). Always type 'Partial'; the consolidated final is
+// raised separately once everything is in.
+function buildFractionInvoice(so, state, currentUser, getUser) {
+  if ((so.invoices || []).length === 0 && so.invoice_no) return null;   // legacy full invoice
+  const frac = soBundleFraction(so, state);
+  const invF = soLineInvoicedFraction(so);
+  const lines = []; const comp = {}; let subtotal = 0;
+  (so.lines || []).forEach(l => {
+    const newF = Math.max(0, (frac[l.id] || 0) - (invF[l.id] || 0));
+    if (newF <= 0.0005) return;
+    const qty = Math.round(newF * (l.bundle_qty || 1) * 1000) / 1000;
+    if (qty <= 0) return;
+    const amount = Math.round(qty * (l.unit_price || 0));
+    if (amount <= 0) return;
+    lines.push({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty, unit_price: l.unit_price || 0, amount });
+    subtotal += amount;
+    (l.components || []).forEach(c => { comp[c.product_id] = (comp[c.product_id] || 0) + (c.qty || 0) * qty; });
+  });
+  if (subtotal <= 0.5) return null;
+  // Never bill beyond the order's remaining billable value (guards against mixed
+  // manual/auto invoicing and rounding drift).
+  const invoicedSub = (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0);
+  const remainingBilled = Math.max(0, _soBilled(so) - invoicedSub);
+  if (remainingBilled <= 0.5) return null;
+  subtotal = Math.min(subtotal, Math.round(remainingBilled));
+  const total = Math.round(subtotal * 1.18);
+  const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
+  const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
+  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY, type: 'Partial', mode: 'itemfraction', lines, comp_consumed: comp, subtotal, gst: total - subtotal, total, created_by: currentUser || null, role };
+  const invoices = [...(so.invoices || []), invoice];
+  const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices) };
+  return { so: nextSO, invoice, fully: false };
+}
+// Consolidated final tax invoice: the whole order at full qty (e.g. qty 1), as a
+// single shareable document. Raised automatically once every bundle is fully
+// received AND fully billed by the partials. NOT added to the SO total again.
+function buildConsolidatedInvoice(so, state, currentUser, getUser) {
+  if ((so.invoices || []).some(i => i.consolidated)) return null;
+  if ((so.invoices || []).length === 0 && so.invoice_no) return null;
+  const frac = soBundleFraction(so, state);
+  const invF = soLineInvoicedFraction(so);
+  const lines = so.lines || [];
+  if (!lines.length) return null;
+  const allDone = lines.every(l => (frac[l.id] || 0) >= 0.999 && (invF[l.id] || 0) >= 0.999);
+  if (!allDone) return null;
+  const invLines = lines.map(l => ({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty: l.bundle_qty || 1, unit_price: l.unit_price || 0, amount: Math.round((l.bundle_qty || 1) * (l.unit_price || 0)) }));
+  const subtotal = invLines.reduce((a, x) => a + x.amount, 0);
+  if (subtotal <= 0.5) return null;
+  const total = Math.round(subtotal * 1.18);
+  const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
+  const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
+  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY, type: 'Final', mode: 'consolidated', consolidated: true, lines: invLines, comp_consumed: {}, subtotal, gst: total - subtotal, total, created_by: currentUser || null, role };
+  const invoices = [...(so.invoices || []), invoice];
+  const nextSO = { ...so, invoices, status: 'Invoiced', invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices) };
+  return { so: nextSO, invoice, fully: true };
+}
+
 // Build (don't commit) the next invoice. opts.mode: 'bundle' | 'component' | 'final'.
 // opts.selections optionally caps qty per line (bundle) or per product (component);
 // default = everything invoiceable. Records comp_consumed for the ledger.
 function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
-  if ((so.invoices || []).length === 0 && so.invoice_no) return null;   // legacy direct invoice → done
   const mode = (opts && opts.mode) || 'bundle';
+  if (mode === 'itemfraction') return buildFractionInvoice(so, state, currentUser, getUser);
+  if (mode === 'consolidated') return buildConsolidatedInvoice(so, state, currentUser, getUser);
+  if ((so.invoices || []).length === 0 && so.invoice_no) return null;   // legacy direct invoice → done
   const sel = opts && opts.selections;
-  const invoicedSub = (so.invoices || []).reduce((a, i) => a + (i.subtotal || 0), 0);
+  const invoicedSub = (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0);
   const remainingBilled = Math.max(0, _soBilled(so) - invoicedSub);
   if (remainingBilled <= 0.5) return null;
 
@@ -509,7 +622,7 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
     subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
-  const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: invoices.reduce((a, i) => a + (i.total || 0), 0), status: fully ? 'Invoiced' : so.status };
+  const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices), status: fully ? 'Invoiced' : so.status };
   return { so: nextSO, invoice, fully };
 }
 
@@ -537,7 +650,7 @@ function raiseSOInvoice(soId, opts, ctx, uiOpts) {
 // SO detail → Invoicing tab: live fulfilment + partial/final invoices, billed by
 // BUNDLE or by COMPONENT (user's choice). Both reconcile via the component ledger.
 function SOInvoicingTab({ so }) {
-  const { state, mutate, currentUser, getUser, getCategory, getProduct, soBilledSubtotal, soBillAdjustment } = useStore();
+  const { state, mutate, navigate, currentUser, getUser, getCategory, getProduct, soBilledSubtotal, soBillAdjustment } = useStore();
   const toast = useToast();
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canInvoice = ['Purchase', 'Billing', 'Collections', 'Org Admin'].includes(role);
@@ -551,7 +664,7 @@ function SOInvoicingTab({ so }) {
   const invoices = so.invoices || [];
   const billed = soBilledSubtotal(so);
   const legacyInvoiced = invoices.length === 0 && so.invoice_no;
-  const invoicedSub = legacyInvoiced ? billed : invoices.reduce((a, i) => a + (i.subtotal || 0), 0);
+  const invoicedSub = legacyInvoiced ? billed : invoices.filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0);
   const remaining = legacyInvoiced ? 0 : Math.max(0, billed - invoicedSub);
   const invoiceableBundles = st.reduce((a, x) => a + x.invoiceableNow, 0);
   const invoiceableComps = comps.reduce((a, x) => a + x.invoiceable, 0);
@@ -623,19 +736,20 @@ function SOInvoicingTab({ so }) {
             </table>
           ) : invoices.length === 0 ? <div className="empty">No invoices yet. Partial invoices auto-appear as material is received; or raise one above.</div> : (
             <table className="t">
-              <thead><tr><th>Invoice</th><th>Type</th><th>Date</th><th className="num">Subtotal</th><th className="num">Total</th></tr></thead>
+              <thead><tr><th>Invoice</th><th>Type</th><th className="num">Qty</th><th>Date</th><th className="num">Subtotal</th><th className="num">Total</th></tr></thead>
               <tbody>
                 {invoices.map(inv => (
-                  <tr key={inv.id}>
+                  <tr key={inv.id} onClick={() => navigate(`invoices/${so.id}/${inv.id}`)} style={{ cursor: 'pointer' }}>
                     <td className="mono">{inv.no}</td>
-                    <td>{inv.type === 'Final' ? <span className="badge success dot">Final</span> : <span className="badge accent dot">Partial</span>}</td>
+                    <td>{inv.consolidated ? <span className="badge success dot">Consolidated</span> : inv.type === 'Final' ? <span className="badge success dot">Final</span> : <span className="badge accent dot">Partial</span>}</td>
+                    <td className="num mono">{(inv.lines || []).reduce((a, l) => a + (Number(l.qty) || 0), 0) || '—'}</td>
                     <td className="mono small">{fmtDate(inv.date)}</td>
                     <td className="num">{inr(inv.subtotal)}</td>
-                    <td className="num"><strong>{inr(inv.total)}</strong></td>
+                    <td className="num"><strong>{inr(inv.total)}</strong>{inv.consolidated && <div className="tiny muted">summary</div>}</td>
                   </tr>
                 ))}
               </tbody>
-              <tfoot><tr><td colSpan="4" className="right small">Total invoiced</td><td className="num mono"><strong>{inr(invoices.reduce((a, i) => a + i.total, 0))}</strong></td></tr></tfoot>
+              <tfoot><tr><td colSpan="5" className="right small">Total billed (excl. consolidated)</td><td className="num mono"><strong>{inr(_nonConsolidatedTotal(invoices))}</strong></td></tr></tfoot>
             </table>
           )}
         </div>
@@ -644,8 +758,87 @@ function SOInvoicingTab({ so }) {
   );
 }
 
+// SO detail → GRN tab: this SO's GRNs, an invoice-creation button, and the
+// client invoices (partial + consolidated), each opening in the shareable template.
+function SOGrnTab({ so }) {
+  const { state, navigate, mutate, currentUser, getUser, getProduct } = useStore();
+  const toast = useToast();
+  const role = currentUser ? getUser(currentUser)?.role : '';
+  const canInvoice = ['Purchase', 'Billing', 'Collections', 'Project Manager', 'Org Admin'].includes(role);
+  const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id);
+  const soPoIds = new Set(soPOs.map(p => p.id));
+  const grns = (state.grns || []).filter(g => soPoIds.has(g.po_id));
+  const invoices = so.invoices || [];
+  const frac = window.soBundleFraction ? window.soBundleFraction(so, state) : {};
+  const overallFrac = (so.lines || []).length ? (so.lines.reduce((a, l) => a + (frac[l.id] || 0), 0) / so.lines.length) : 0;
+  const createInvoice = () => {
+    const made = window.autoInvoiceSO ? window.autoInvoiceSO(so.id, { mutate, toast: null, currentUser, getUser, getProduct }) : null;
+    toast(made ? `${made.invoice.no} created (${made.invoice.type})` : 'Nothing new to invoice yet — receive more items first', made ? 'success' : '');
+  };
+  return (
+    <div className="stack">
+      <div className="mb-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">GRNs posted</div><div style={{ fontSize: 18, fontWeight: 700 }} className="mono">{grns.length}</div></div></div>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Received (by item count)</div><div style={{ fontSize: 18, fontWeight: 700 }} className="mono">{Math.round(overallFrac * 100)}%</div></div></div>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Client invoices</div><div style={{ fontSize: 18, fontWeight: 700 }} className="mono">{invoices.length}</div></div></div>
+      </div>
+      {canInvoice && (
+        <div className="card"><div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="grow"><strong className="small">Create client invoice for received items</strong><div className="tiny muted">Bills the newly-received fraction (e.g. 0.8 then 0.2); the consolidated qty-1 final auto-creates once everything is in. Saved here and in the Invoicing tab.</div></div>
+          <button className="btn btn-primary" onClick={createInvoice}><Icon name="receipt" size={13}/>Create client invoice</button>
+        </div></div>
+      )}
+      <div className="card">
+        <div className="card-header"><h3 className="card-title">GRNs for this SO</h3></div>
+        <div className="card-body flush">
+          {grns.length === 0 ? <div className="empty">No GRNs yet — receive items in the Virtual Godown.</div> : (
+            <table className="t">
+              <thead><tr><th>GRN</th><th>Vendor PO</th><th>Date</th><th className="num">Lines</th><th></th></tr></thead>
+              <tbody>{grns.map(g => { const po = soPOs.find(p => p.id === g.po_id); return (
+                <tr key={g.id} onClick={() => navigate(`grn/${g.id}`)} style={{ cursor: 'pointer' }}>
+                  <td className="mono">{g.grn_no}</td><td className="mono small">{po ? po.po_no : ''}</td><td className="mono small">{fmtDate(g.date)}</td><td className="num">{(g.items || []).length}</td><td><Icon name="chevronRight" size={12}/></td>
+                </tr>); })}</tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      <div className="card">
+        <div className="card-header"><h3 className="card-title">Client Invoices</h3><span className="card-sub">partial + consolidated · click to open the template</span></div>
+        <div className="card-body flush">
+          {invoices.length === 0 ? <div className="empty">No invoices yet.</div> : (
+            <table className="t">
+              <thead><tr><th>Invoice</th><th>Type</th><th className="num">Qty</th><th>Date</th><th className="num">Total</th></tr></thead>
+              <tbody>{invoices.map(inv => (
+                <tr key={inv.id} onClick={() => navigate(`invoices/${so.id}/${inv.id}`)} style={{ cursor: 'pointer' }}>
+                  <td className="mono">{inv.no}</td>
+                  <td>{inv.consolidated ? <span className="badge success dot">Consolidated</span> : inv.type === 'Final' ? <span className="badge success dot">Final</span> : <span className="badge accent dot">Partial</span>}</td>
+                  <td className="num mono">{(inv.lines || []).reduce((a, l) => a + (Number(l.qty) || 0), 0)}</td>
+                  <td className="mono small">{fmtDate(inv.date)}</td>
+                  <td className="num"><strong>{inr(inv.total)}</strong>{inv.consolidated && <div className="tiny muted">summary</div>}</td>
+                </tr>))}</tbody>
+              <tfoot><tr><td colSpan="4" className="right small">Billed (excl. consolidated)</td><td className="num mono"><strong>{inr(_nonConsolidatedTotal(invoices))}</strong></td></tr></tfoot>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Auto client invoicing on receipt: raise the item-count fractional partial
+// (0.8, then 0.2…), then — if the order is now fully received & billed — raise
+// the consolidated qty-1 final. Both are separate, real, shareable invoices.
+function autoInvoiceSO(soId, ctx) {
+  const made = raiseSOInvoice(soId, { mode: 'itemfraction' }, ctx, { silent: true });
+  raiseSOInvoice(soId, { mode: 'consolidated' }, ctx, { silent: true });
+  return made;
+}
+
+window.soBundleFraction = soBundleFraction;
 window.soInvoiceState = soInvoiceState;
 window.raiseSOInvoice = raiseSOInvoice;
+window.autoInvoiceSO = autoInvoiceSO;
+window.SOGrnTab = SOGrnTab;
 window.SOInvoicingTab = SOInvoicingTab;
 window.InvoiceList = InvoiceList;
 window.InvoiceDetail = InvoiceDetail;
