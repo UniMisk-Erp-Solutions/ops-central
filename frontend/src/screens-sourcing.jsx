@@ -191,7 +191,7 @@ function SourcingList() {
               {rows.length === 0 && (
                 <tr><td colSpan="7"><div className="empty">
                   <div className="empty-title">No inquiries yet</div>
-                  Sales floats an inquiry here; Purchase compares vendors and returns a margin; then you raise the Sales Order.
+                  Sales floats an inquiry here; Pre-sales compares vendors and returns a margin; then you raise the Sales Order.
                   {canCreate && <div className="mt-2"><button className="btn btn-primary" onClick={() => navigate('sourcing/new')}><Icon name="plus" size={13}/>New Inquiry</button></div>}
                 </div></td></tr>
               )}
@@ -245,7 +245,7 @@ function SourcingNew() {
     const src = {
       id: 'src-' + Date.now(),
       src_no: `INQ/FY26/${String(1 + (state.sourcings || []).length).padStart(4, '0')}`,
-      customer_id: customer, ref: ref || null, date: TODAY, status: 'Sent to Purchase',
+      customer_id: customer, ref: ref || null, date: TODAY, status: 'Sent to Pre-sales',
       client_req_price: clientReqPrice === '' ? null : Number(clientReqPrice),
       our_price: ourPrice === '' ? null : Number(ourPrice),
       notes: notes || null, created_by: currentUser || null,
@@ -254,9 +254,9 @@ function SourcingNew() {
     mutate(s => ({
       ...s,
       sourcings: [src, ...(s.sourcings || [])],
-      notifications: [{ id: 'n-src-' + Date.now(), kind: 'sourcing', text: `${src.src_no} sent to Purchase for vendor sourcing · ${cust.name}`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications],
+      notifications: [{ id: 'n-src-' + Date.now(), kind: 'sourcing', text: `${src.src_no} sent to Pre-sales for vendor sourcing · ${cust.name}`, date: TODAY, read: false, role: 'Pre-sales' }, ...s.notifications],
     }), { action: 'create', entity: 'Sourcing', entity_id: src.id });
-    toast(`${src.src_no} sent to Purchase`, 'success');
+    toast(`${src.src_no} sent to Pre-sales`, 'success');
     navigate(`sourcing/${src.id}`);
   };
 
@@ -268,11 +268,11 @@ function SourcingNew() {
             <Icon name="chevronLeft" size={12}/> Sourcing
           </div>
           <h1 className="page-title">New Inquiry</h1>
-          <div className="page-sub">Float the customer's requirement to Purchase for vendor costing — no commitment yet</div>
+          <div className="page-sub">Float the customer's requirement to Pre-sales for vendor costing — no commitment yet</div>
         </div>
         <div className="page-actions">
           <button className="btn" onClick={() => navigate('sourcing')}>Cancel</button>
-          <button className="btn btn-primary" disabled={!canSubmit} onClick={submit}>Send to Purchase <Icon name="arrowRight" size={13}/></button>
+          <button className="btn btn-primary" disabled={!canSubmit} onClick={submit}>Send to Pre-sales <Icon name="arrowRight" size={13}/></button>
         </div>
       </div>
 
@@ -300,12 +300,12 @@ function SourcingNew() {
                 <div className="field">
                   <label className="field-label">Client's req price</label>
                   <input type="number" min="0" className="input mono" placeholder="what the client asked (optional)" value={clientReqPrice} onChange={e => setClientReqPrice(e.target.value)}/>
-                  <div className="field-hint">Shown to Purchase as the client's target</div>
+                  <div className="field-hint">Shown to Pre-sales as the client's target</div>
                 </div>
                 <div className="field">
                   <label className="field-label">Our price</label>
                   <input type="number" min="0" className="input mono" placeholder="our intended quote (optional)" value={ourPrice} onChange={e => setOurPrice(e.target.value)}/>
-                  <div className="field-hint">If set, Purchase uses this as the quote budget (else the indicative total)</div>
+                  <div className="field-hint">If set, Pre-sales uses this as the quote budget (else the indicative total)</div>
                 </div>
               </div>
             </div>
@@ -377,8 +377,8 @@ function SourcingNew() {
 
           <div className="card">
             <div className="form-section">
-              <div className="form-section-title">Notes for Purchase</div>
-              <textarea className="textarea" placeholder="Anything Purchase should know (target price, deadline, preferred vendor…)" value={notes} onChange={e => setNotes(e.target.value)}/>
+              <div className="form-section-title">Notes for Pre-sales</div>
+              <textarea className="textarea" placeholder="Anything Pre-sales should know (target price, deadline, preferred vendor…)" value={notes} onChange={e => setNotes(e.target.value)}/>
             </div>
           </div>
         </div>
@@ -393,7 +393,7 @@ function SourcingNew() {
                 {clientReqPrice !== '' && <><dt>Client's req price</dt><dd className="num mono right">{inr(Number(clientReqPrice))}</dd></>}
                 {ourPrice !== '' && <><dt>Our price (budget)</dt><dd className="num mono right"><strong>{inr(Number(ourPrice))}</strong></dd></>}
               </div>
-              <div className="tiny muted mt-2">Purchase sees the quote budget ({ourPrice !== '' ? 'your "our price"' : 'the indicative total'}) and sources each component from vendors to hit a good margin. Nothing is committed until you raise the Sales Order.</div>
+              <div className="tiny muted mt-2">Pre-sales sees the quote budget ({ourPrice !== '' ? 'your "our price"' : 'the indicative total'}) and sources each component from vendors to hit a good margin. Nothing is committed until you raise the Sales Order.</div>
             </div>
           </div>
         </div>
@@ -409,7 +409,7 @@ function SourcingDetail({ srcId }) {
   const toast = useToast();
   const src = (state.sourcings || []).find(x => x.id === srcId);
   const role = currentUser ? getUser(currentUser)?.role : '';
-  const canSource = ['Purchase', 'Org Admin'].includes(role);
+  const canSource = ['Pre-sales', 'Purchase', 'Org Admin'].includes(role);
   const canConvert = ['Sales', 'Pre-sales', 'Org Admin'].includes(role);
   const [showConvert, setShowConvert] = React.useState(false);
   const [showAddVendor, setShowAddVendor] = React.useState(false);
@@ -469,7 +469,7 @@ function SourcingDetail({ srcId }) {
   };
 
   const saveQuotation = () => {
-    persist({ picks, prices: buildPrices(), margin, status: src.status === 'Sent to Purchase' ? 'Sourced' : src.status },
+    persist({ picks, prices: buildPrices(), margin, status: (src.status === 'Sent to Pre-sales' || src.status === 'Sent to Purchase') ? 'Sourced' : src.status },
       { action: 'source', entity: 'Sourcing', entity_id: src.id }, 'Vendor quotation saved');
   };
 

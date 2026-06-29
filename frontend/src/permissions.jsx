@@ -19,9 +19,11 @@ const PERMISSIONS = {
     },
   },
   'Pre-sales': {
-    nav: ['dashboard','inbox','sourcing','sales-orders','customers','products'],
+    nav: ['dashboard','inbox','sourcing','sales-orders','customers','vendors','products'],
     primary: { route: 'sourcing', label: 'Sourcing / Inquiries' },
-    can: { createSourcing: true, viewProducts: true, viewCustomers: true },
+    // Pre-sales now does the inquiry vendor sourcing + margin (the step Purchase
+    // used to do on inquiries). Purchase keeps post-SO procurement unchanged.
+    can: { createSourcing: true, doSourcing: true, selectVendor: true, viewVendors: true, viewCost: true, viewProducts: true, viewCustomers: true },
   },
   'Project Manager': {
     nav: ['dashboard','inbox','sourcing','sales-orders','customers','godown','pool','transfers','rfq','vendor-pos','grn','invoices'],
@@ -156,20 +158,21 @@ function buildTasks(state, mutate, navigate, toast) {
     });
   });
 
-  // 2b. Sourcing inquiries sent to Purchase → Purchase to compare vendors
-  (state.sourcings || []).filter(x => x.status === 'Sent to Purchase').forEach(src => {
+  // 2b. Sourcing inquiries → Pre-sales compares vendors & returns the margin.
+  // Accepts the legacy 'Sent to Purchase' status too, so older inquiries still surface.
+  (state.sourcings || []).filter(x => x.status === 'Sent to Pre-sales' || x.status === 'Sent to Purchase').forEach(src => {
     const cust = state.customers.find(c => c.id === src.customer_id);
     const value = (src.lines || []).reduce((sum, l) => sum + (l.bundle_qty || 0) * (l.unit_price || 0), 0);
     tasks.push({
       id: `task-src-${src.id}`,
-      role: 'Purchase',
+      role: 'Pre-sales',
       kind: 'Vendor Sourcing',
       ref: src.src_no,
       refId: src.id,
       by: state.users.find(u => u.role === 'Sales')?.name || 'Sales',
       amount: value,
       detail: `${cust?.name || ''} · compare vendors per item & return the margin`,
-      gate: 'Purchase action',
+      gate: 'Pre-sales action',
       icon: 'bookmark',
       navigateTo: `sourcing/${src.id}`,
       approve: () => navigate(`sourcing/${src.id}`),
