@@ -185,7 +185,16 @@ function SalesOrderNew() {
     }
   }, [cust]);
 
-  const addLine = (categoryId) => {
+  const [catSearch, setCatSearch] = React.useState('');
+  // 1-to-1 mapping: match the typed client term against category name + aliases.
+  const catResults = catSearch.trim() ? state.categories.map(c => {
+    const q = catSearch.trim().toLowerCase();
+    const nameHit = c.name.toLowerCase().includes(q);
+    const aliasHit = (c.aliases || []).find(a => a.toLowerCase().includes(q));
+    return (nameHit || aliasHit) ? { ...c, _aliasHit: nameHit ? null : aliasHit } : null;
+  }).filter(Boolean).slice(0, 8) : [];
+
+  const addLine = (categoryId, clientName) => {
     const cat = getCategory(categoryId);
     const bom = state.boms[categoryId] || [];
     // Default unit price = sum of components default sell price
@@ -196,6 +205,7 @@ function SalesOrderNew() {
     const newLine = {
       id: 'l' + Date.now() + Math.random().toString(36).slice(2,5),
       category_id: categoryId,
+      client_name: (clientName || '').trim(),   // the name the client gave (maps 1:1 to this bundle)
       bundle_qty: 1,
       unit_price: defaultPrice,
       components: bom.map(c => ({ product_id: c.product_id, qty: c.qty, override: false, original_qty: c.qty })),
@@ -383,11 +393,26 @@ function SalesOrderNew() {
           <div className="card">
             <div className="card-header">
               <h3 className="card-title">Line Items</h3>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <select className="select" style={{ width: 200, height: 26, fontSize: 12 }}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div style={{ position: 'relative' }}>
+                  <input className="input" style={{ width: 250, height: 28, fontSize: 12.5 }}
+                    placeholder="Type the client's item name… e.g. rack server"
+                    value={catSearch} onChange={e => setCatSearch(e.target.value)}/>
+                  {catSearch.trim() && (
+                    <div style={{ position: 'absolute', zIndex: 30, top: 31, left: 0, width: 300, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 6px 18px rgba(0,0,0,.12)', maxHeight: 260, overflow: 'auto' }}>
+                      {catResults.length === 0 ? <div className="tiny muted" style={{ padding: 10 }}>No matching item. Try another name.</div> : catResults.map(c => (
+                        <div key={c.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => { addLine(c.id, catSearch.trim()); setCatSearch(''); }}>
+                          <div className="grow"><div className="small"><strong>{c.name}</strong></div><div className="tiny muted">{c._aliasHit ? `matched alias "${c._aliasHit}"` : 'matched name'} · {(state.boms[c.id] || []).length} components</div></div>
+                          <Icon name="plus" size={12}/>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <select className="select" style={{ width: 170, height: 28, fontSize: 12 }}
                         value=""
                         onChange={e => { if (e.target.value) addLine(e.target.value); e.target.value = ''; }}>
-                  <option value="">+ Add line by category…</option>
+                  <option value="">or browse…</option>
                   {state.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
@@ -396,7 +421,7 @@ function SalesOrderNew() {
               {lines.length === 0 ? (
                 <div className="empty">
                   <div className="empty-title">No lines yet</div>
-                  Pick a category above. Components from the BOM template will auto-load — you can override quantities per component.
+                  Type the client's item name above (e.g. "rack server") — it maps 1-to-1 to the internal bundle and its BOM auto-loads. You can override quantities per component.
                 </div>
               ) : (
                 <table className="t">
@@ -422,8 +447,8 @@ function SalesOrderNew() {
                               <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12}/>
                             </td>
                             <td>
-                              <div style={{ fontWeight: 500 }}>{cat.name}</div>
-                              <div className="tiny muted">HSN <span className="mono">{cat.hsn}</span> · {l.components.length} components</div>
+                              <input className="input" value={l.client_name || ''} onChange={e => updateLine(l.id, { client_name: e.target.value })} placeholder="Client's name for this item" style={{ height: 24, fontSize: 12.5, fontWeight: 500, marginBottom: 3, width: 220 }}/>
+                              <div className="tiny muted">Maps to <strong>{cat.name}</strong> · HSN <span className="mono">{cat.hsn}</span> · {l.components.length} components</div>
                             </td>
                             <td className="num">
                               <input type="number" className="input mono" min="1" value={l.bundle_qty}

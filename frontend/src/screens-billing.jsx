@@ -176,7 +176,9 @@ function InvoiceDetail({ soId, invId }) {
               {docLines ? docLines.map((l, i) => {
                 const cat = l.category_id ? getCategory(l.category_id) : null;
                 const prod = !cat && l.ref_id ? getProduct(l.ref_id) : null;
-                const name = cat ? cat.name : (l.label || (prod && prod.name) || 'Item');
+                const soLine = l.ref_id ? (so.lines || []).find(x => x.id === l.ref_id) : null;
+                const clientName = soLine && soLine.client_name;
+                const name = clientName || (cat ? cat.name : (l.label || (prod && prod.name) || 'Item'));
                 const hsn = cat ? cat.hsn : (prod && prod.hsn) || '—';
                 return (
                   <tr key={i}>
@@ -194,7 +196,7 @@ function InvoiceDetail({ soId, invId }) {
                   <tr key={l.id}>
                     <td>{i+1}</td>
                     <td>
-                      <strong>{cat.name}</strong>
+                      <strong>{l.client_name || cat.name}</strong>
                       <div className="tiny muted">{cat.bundle_desc}</div>
                       {/* Internal BOM NOT shown to customer — that's the point */}
                     </td>
