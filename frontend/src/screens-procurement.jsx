@@ -210,6 +210,30 @@ function SOVendorPOsTab({ so }) {
   const pos = state.vendor_pos.filter(p => p.so_id === so.id);
   const grnsFor = (poId) => state.grns.filter(g => g.po_id === poId);
   const viFor = (poId) => (state.vendor_invoices || []).filter(v => v.po_id === poId);
+  const PoolPanel = window.VGAddFromPoolPanel;   // smart pool-suggestion panel (reused)
+
+  // ===== Inline Vendor-PO editing (Purchase, after procurement starts) =====
+  // Editable only while a PO hasn't been received and isn't awaiting MD — so no
+  // GRN/e-Bill/3-way history is ever disturbed. Amount + MD gate recompute live.
+  const [expanded, setExpanded] = React.useState({});
+  const [addSel, setAddSel] = React.useState({});   // po.id -> product_id to add
+  const mdThreshold = state.config.vendor_po_md_threshold != null ? state.config.vendor_po_md_threshold : 500000;
+  const editablePO = (po) => canProcure && ['Issued', 'In Transit'].includes(po.status) && grnsFor(po.id).length === 0;
+  const recalc = (items) => items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+  const savePOItems = (po, items, vendorId) => {
+    const amount = Math.round(recalc(items));
+    const needsMD = amount > mdThreshold;
+    mutate(s => ({
+      ...s,
+      vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, items, amount, status: needsMD ? 'Pending MD Approval' : po.status, ...(vendorId ? { vendor_id: vendorId } : {}) } : p),
+      notifications: [{ id: 'n-poedit-' + Date.now(), kind: 'po', text: `${po.po_no} edited by Purchase · ${inrK(amount)}${needsMD ? ' · needs MD approval' : ''}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
+    }), { action: 'po-edit', entity: 'VendorPO', entity_id: po.id });
+  };
+  const setItemQty = (po, pid, qty) => savePOItems(po, (po.items || []).map(it => it.product_id === pid ? { ...it, qty: Math.max(0, Number(qty) || 0) } : it));
+  const setItemRate = (po, pid, rate) => savePOItems(po, (po.items || []).map(it => it.product_id === pid ? { ...it, rate: Math.max(0, Number(rate) || 0) } : it));
+  const removeItem = (po, pid) => savePOItems(po, (po.items || []).filter(it => it.product_id !== pid));
+  const addItemToPO = (po) => { const pid = addSel[po.id]; if (!pid || (po.items || []).some(it => it.product_id === pid)) return; const p = getProduct(pid); const rate = window.vendorUnitPrice ? window.vendorUnitPrice(po.vendor_id, p) : (p ? p.buy || 0 : 0); savePOItems(po, [...(po.items || []), { product_id: pid, qty: 1, rate }]); setAddSel(m => ({ ...m, [po.id]: '' })); };
+  const changePOVendor = (po, vid) => { if (!vid || vid === po.vendor_id) return; const items = (po.items || []).map(it => { const p = getProduct(it.product_id); const rate = window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : it.rate; return { ...it, rate }; }); savePOItems(po, items, vid); };
 
   // Aggregate received / on-PO / required per product across this SO.
   const receivedByProd = {}, onPOByProd = {};
@@ -288,6 +312,9 @@ function SOVendorPOsTab({ so }) {
         <span>{awaiting === 0 ? <span style={{ color: 'var(--success)' }}>✓ nothing awaiting receipt</span> : <span style={{ color: 'var(--accent)' }}>{awaiting} item(s) awaiting receipt (GRN)</span>}</span>
       </div></div>
 
+      {/* Smart pool suggestions — add stock from the Master Pool & cut vendor need */}
+      {PoolPanel && canProcure && <PoolPanel so={so}/>}
+
       {/* Vendor mapping */}
       <div className="card">
         <div className="card-header">
@@ -315,9 +342,11 @@ function SOVendorPOsTab({ so }) {
                 const rec = grnsFor(po.id).reduce((a, g) => a + (g.items || []).reduce((b, it) => b + (it.accepted || 0), 0), 0);
                 const recPct = ordered > 0 ? Math.round(rec / ordered * 100) : 0;
                 const vis = viFor(po.id); const booked = vis.filter(x => x.status === 'Booked').length;
+                const open = !!expanded[po.id]; const canEdit = editablePO(po);
                 return (
-                  <tr key={po.id} onClick={() => navigate(`vendor-pos/${po.id}`)} style={{ cursor: 'pointer' }}>
-                    <td><strong>{v ? v.name : po.vendor_id}</strong><div className="tiny muted mono">{po.po_no}</div></td>
+                  <Fragment key={po.id}>
+                  <tr onClick={() => setExpanded(e => ({ ...e, [po.id]: !open }))} style={{ cursor: 'pointer' }}>
+                    <td><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={12}/><div><strong>{v ? v.name : po.vendor_id}</strong><div className="tiny muted mono">{po.po_no} · {(po.items || []).length} item(s)</div></div></div></td>
                     <td className="num mono">{inr(po.amount)}</td>
                     <td className="num mono">{inr(our)}</td>
                     <td className="num mono" style={{ color: m >= 0 ? 'var(--success)' : 'var(--danger)' }}>{inr(m)}<div className="tiny">{mp >= 0 ? '+' : ''}{mp.toFixed(1)}%</div></td>
@@ -344,6 +373,58 @@ function SOVendorPOsTab({ so }) {
                               : rec >= ordered && ordered > 0 ? <span className="badge success dot">Received</span> : null}
                     </td>
                   </tr>
+                  {open && (
+                    <tr className="subrow"><td colSpan="9" style={{ background: 'var(--surface-2)', padding: 0 }}>
+                      <div style={{ padding: '8px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                          <strong className="small">Line items on {po.po_no} → {v ? v.name : po.vendor_id}</strong>
+                          {canEdit ? <span className="badge accent tiny">editable</span> : <span className="badge tiny" title="Locked once received / awaiting MD">read-only</span>}
+                          <div className="grow"/>
+                          {canEdit && (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span className="tiny muted">Replace vendor:</span>
+                              <select className="select" style={{ height: 24, fontSize: 12 }} value={po.vendor_id} onChange={e => changePOVendor(po, e.target.value)}>
+                                {state.vendors.map(vd => <option key={vd.id} value={vd.id}>{vd.name}</option>)}
+                              </select>
+                            </span>
+                          )}
+                          <button className="btn btn-sm btn-ghost" onClick={() => navigate(`vendor-pos/${po.id}`)}><Icon name="arrowRight" size={11}/>Open PO</button>
+                        </div>
+                        <table className="t" style={{ background: 'var(--surface)' }}>
+                          <thead><tr><th>Line item</th><th>Code</th><th className="num">Qty</th><th className="num">Rate ₹</th><th className="num">Line ₹</th><th className="num">Received</th>{canEdit && <th style={{ width: 28 }}></th>}</tr></thead>
+                          <tbody>
+                            {(po.items || []).map(it => {
+                              const p = getProduct(it.product_id) || { name: it.product_id, code: it.product_id };
+                              const itRec = grnsFor(po.id).reduce((a, g) => a + (g.items || []).filter(y => y.product_id === it.product_id).reduce((b, y) => b + (y.accepted || 0), 0), 0);
+                              return (
+                                <tr key={it.product_id}>
+                                  <td><strong>{p.name}</strong></td>
+                                  <td className="mono small muted">{p.code}</td>
+                                  <td className="num">{canEdit ? <input type="number" min="0" className="input mono" value={it.qty} onChange={e => setItemQty(po, it.product_id, e.target.value)} style={{ width: 64, height: 24, textAlign: 'right' }}/> : it.qty}</td>
+                                  <td className="num">{canEdit ? <input type="number" min="0" className="input mono" value={it.rate} onChange={e => setItemRate(po, it.product_id, e.target.value)} style={{ width: 84, height: 24, textAlign: 'right' }}/> : inr(it.rate)}</td>
+                                  <td className="num mono">{inr((Number(it.qty) || 0) * (Number(it.rate) || 0))}</td>
+                                  <td className="num">{itRec || <span className="muted">0</span>}</td>
+                                  {canEdit && <td><button className="btn btn-ghost btn-sm" title="Remove item from this PO" onClick={() => removeItem(po, it.product_id)}><Icon name="x" size={11} color="var(--danger)"/></button></td>}
+                                </tr>
+                              );
+                            })}
+                            {(po.items || []).length === 0 && <tr><td colSpan={canEdit ? 7 : 6}><div className="empty">No items.</div></td></tr>}
+                          </tbody>
+                        </table>
+                        {canEdit && (
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                            <select className="select" style={{ height: 26, fontSize: 12, width: 240 }} value={addSel[po.id] || ''} onChange={e => setAddSel(m => ({ ...m, [po.id]: e.target.value }))}>
+                              <option value="">+ Add line item to this vendor…</option>
+                              {state.products.filter(p => !(po.items || []).some(it => it.product_id === p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                            <button className="btn btn-sm" disabled={!addSel[po.id]} onClick={() => addItemToPO(po)}><Icon name="plus" size={11}/>Add</button>
+                            <span className="tiny muted">Edits recompute the PO amount & re-check the MD approval threshold. Received POs are locked.</span>
+                          </div>
+                        )}
+                      </div>
+                    </td></tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>

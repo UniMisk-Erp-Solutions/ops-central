@@ -996,12 +996,24 @@ function SalesOrderDetail({ soId }) {
         </div>
       )}
 
-      {tab === 'lines' && (
-        <div className="card">
+      {tab === 'lines' && (() => {
+        const bomPOs = state.vendor_pos.filter(p => p.so_id === so.id);
+        const vendorsForProd = (pid) => bomPOs.filter(po => (po.items || []).some(it => it.product_id === pid))
+          .map(po => { const v = state.vendors.find(x => x.id === po.vendor_id); const it = (po.items || []).find(y => y.product_id === pid); return `${v ? v.name : po.vendor_id} (${it ? it.qty : 0})`; });
+        return (
+        <div className="stack">
+          {canEditSO && !billingLocked && (
+            <div className="card"><div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div className="grow"><strong className="small">Bill of Materials</strong><div className="tiny muted">Purchase / PM can adjust line items, quantities and components here after approval — flows into procurement & the Virtual Godown.</div></div>
+              <button className="btn btn-primary" onClick={() => setShowEdit(true)}><Icon name="edit" size={13}/>Edit line items</button>
+            </div></div>
+          )}
+          {typeof VGAddFromPoolPanel !== 'undefined' && <VGAddFromPoolPanel so={so}/>}
+          <div className="card">
           <div className="card-body flush">
             <table className="t">
               <thead><tr>
-                <th>Bundle</th><th className="num">Qty</th><th className="num">Unit ₹</th><th className="num">Line ₹</th>
+                <th>Bundle / Component · Vendor</th><th className="num">Qty</th><th className="num">Unit ₹</th><th className="num">Line ₹</th>
               </tr></thead>
               <tbody>
                 {so.lines.map(l => {
@@ -1009,16 +1021,19 @@ function SalesOrderDetail({ soId }) {
                   return (
                     <Fragment key={l.id}>
                       <tr>
-                        <td><div style={{ fontWeight: 500 }}>{cat.name}</div><div className="tiny muted">HSN {cat.hsn}</div></td>
+                        <td><div style={{ fontWeight: 500 }}>{l.client_name ? `${l.client_name} ` : ''}{cat.name}</div><div className="tiny muted">HSN {cat.hsn}</div></td>
                         <td className="num">{l.bundle_qty}</td>
                         <td className="num">{inr(l.unit_price)}</td>
                         <td className="num"><strong>{inr(l.bundle_qty * l.unit_price)}</strong></td>
                       </tr>
                       {l.components.map(c => {
                         const p = getProduct(c.product_id);
+                        const vs = vendorsForProd(c.product_id);
                         return (
                           <tr key={c.product_id} className="subrow">
-                            <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}{transferredIn[c.product_id] ? <span className="badge info" style={{ marginLeft: 4 }} title="Received via cross-SO transfer">+{transferredIn[c.product_id]} transferred in</span> : null}</td>
+                            <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}{transferredIn[c.product_id] ? <span className="badge info" style={{ marginLeft: 4 }} title="Received via cross-SO transfer">+{transferredIn[c.product_id]} transferred in</span> : null}
+                              <div className="tiny" style={{ color: vs.length ? 'var(--accent)' : 'var(--text-muted)', marginTop: 1 }}>{vs.length ? <><Icon name="cart" size={10}/> {vs.join(' · ')}</> : 'No vendor assigned yet'}</div>
+                            </td>
                             <td className="num">{c.qty * l.bundle_qty} {p.uom}{l.bundle_qty > 1 && <div className="tiny muted">{c.qty} × {l.bundle_qty}</div>}</td>
                             <td className="num muted">@{inr(p.buy)}</td>
                             <td className="num muted">{inr(p.buy * c.qty * l.bundle_qty)}</td>
@@ -1031,8 +1046,10 @@ function SalesOrderDetail({ soId }) {
               </tbody>
             </table>
           </div>
+          </div>
         </div>
-      )}
+        );
+      })()}
 
       {tab === 'procurement' && <ProcurementTab so={so}/>}
 

@@ -165,10 +165,13 @@ function StoreProvider({ children }) {
         const blob = data.data || {};
         const { org, ...rest } = blob;
         if (rest.permissions) window.__opcPerms = rest.permissions;
+        const customProds = Array.isArray(rest.custom_products) ? rest.custom_products : [];
         setState(prev => ({
           ...prev,
           org: { ...prev.org, ...(org || {}) },
           config: { ...prev.config, ...rest },
+          // Merge admin-added custom components (Master Pool → Add) into the catalogue.
+          products: customProds.length ? [...prev.products, ...customProds.filter(cp => !prev.products.some(p => p.id === cp.id))] : prev.products,
         }));
       } catch (e) {
         console.warn('[OPC] config load failed; using local defaults', e);

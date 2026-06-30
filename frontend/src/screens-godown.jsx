@@ -673,7 +673,10 @@ function VirtualGodownView({ soId, embedded }) {
 
 // ===== Master Pool =====
 function MasterPool() {
-  const { state, getProduct, getCustomer } = useStore();
+  const { state, getProduct, getCustomer, getUser, currentUser } = useStore();
+  const [showAdd, setShowAdd] = React.useState(false);
+  const role = getUser(currentUser)?.role;
+  const canAdd = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role);
   const pool = state.pool;
   const enriched = pool.map(p => ({ ...p, product: getProduct(p.product_id), age: daysBetween(p.received_date, TODAY) }));
   const totalValue = enriched.reduce((s, p) => s + p.product.buy * p.qty, 0);
@@ -686,10 +689,13 @@ function MasterPool() {
           <div className="page-sub">Leftover inventory from closed SOs · checked first by every new VG before procurement</div>
         </div>
         <div className="page-actions">
+          {canAdd && <button className="btn btn-primary" onClick={() => setShowAdd(true)}><Icon name="plus" size={13}/>Add to pool</button>}
           <button className="btn"><Icon name="filter" size={13}/>Filter by age</button>
           <button className="btn"><Icon name="download" size={13}/>Export</button>
         </div>
       </div>
+
+      {showAdd && <AddToPoolModal onClose={() => setShowAdd(false)}/>}
 
       <div className="kpi-grid mb-3">
         <div className="kpi"><div className="kpi-label">Pool SKUs</div><div className="kpi-value">{pool.length}</div><div className="kpi-delta">distinct products</div></div>
@@ -755,6 +761,100 @@ function MasterPool() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Manually add stock to the Master Pool — pick a catalogue product, or create a
+// custom component (persisted as a custom product in config, no schema change).
+function AddToPoolModal({ onClose }) {
+  const { state, mutate, addToPool, saveConfig, getProduct, getUser, currentUser } = useStore();
+  const toast = useToast();
+  // Custom components persist to the config singleton, which is admin-write-only
+  // (RLS). So only Org Admin can create reusable custom components; everyone can
+  // add catalogue items to the pool.
+  const canCustom = getUser(currentUser)?.role === 'Org Admin';
+  const [mode, setMode] = React.useState('catalogue');
+  const [q, setQ] = React.useState('');
+  const [pid, setPid] = React.useState('');
+  const [qty, setQty] = React.useState(1);
+  const [source, setSource] = React.useState('Manual add');
+  const [cust, setCust] = React.useState({ name: '', code: '', unit_cost: '', sell: '', hsn: '', uom: 'Piece' });
+  const [busy, setBusy] = React.useState(false);
+  const results = q.trim() ? state.products.filter(p => `${p.name} ${p.code}`.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 8) : [];
+  const chosen = pid ? getProduct(pid) : null;
+  const setC = (k, v) => setCust(c => ({ ...c, [k]: v }));
+
+  const submit = async () => {
+    const n = Math.max(0, Number(qty) || 0);
+    if (n <= 0) { toast('Enter a quantity'); return; }
+    setBusy(true);
+    if (mode === 'catalogue') {
+      if (!pid) { setBusy(false); toast('Pick a product'); return; }
+      await addToPool([{ product_id: pid, qty: n, source_so: source || null, received_date: TODAY }]);
+      setBusy(false); onClose();
+      toast(`${n}× ${chosen ? chosen.name : pid} added to the Master Pool`, 'success');
+    } else {
+      if (!canCustom) { setBusy(false); toast('Only an Org Admin can create custom components'); return; }
+      if (!cust.name.trim()) { setBusy(false); toast('Component name is required'); return; }
+      const cp = { id: 'cp-' + Date.now().toString(36), code: cust.code.trim() || ('CP-' + Date.now().toString(36).slice(-4).toUpperCase()), name: cust.name.trim(), hsn: cust.hsn.trim() || '', uom: cust.uom || 'Piece', gst: 18, sell: Number(cust.sell) || Number(cust.unit_cost) || 0, buy: Number(cust.unit_cost) || 0, custom: true };
+      // Persist the custom product in config (merged into the catalogue on load)…
+      const res = await saveConfig({ custom_products: [...(state.config.custom_products || []), cp] });
+      if (res && res.ok === false) { setBusy(false); toast('Could not save the custom component (config write denied)'); return; }
+      // …and add it locally now so it resolves immediately (products aren't diff-synced).
+      mutate(s => ({ ...s, products: s.products.some(p => p.id === cp.id) ? s.products : [...s.products, cp] }), { action: 'add-custom-product', entity: 'Product', entity_id: cp.id });
+      await addToPool([{ product_id: cp.id, qty: n, source_so: source || null, received_date: TODAY }]);
+      setBusy(false); onClose();
+      toast(`Custom component ${cp.name} created & ${n} added to the pool`, 'success');
+    }
+  };
+
+  return (
+    <Modal title="Add to Master Pool" onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? 'Adding…' : 'Add to pool'}</button>
+      </>
+    }>
+      <div className="tabs mb-2" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 2, width: 'fit-content' }}>
+        <button className={`tab ${mode === 'catalogue' ? 'active' : ''}`} onClick={() => setMode('catalogue')}>From catalogue</button>
+        {canCustom && <button className={`tab ${mode === 'custom' ? 'active' : ''}`} onClick={() => setMode('custom')}>Custom component</button>}
+      </div>
+
+      {mode === 'catalogue' ? (
+        <div className="stack">
+          <div className="field">
+            <label className="field-label">Search product</label>
+            <input className="input" placeholder="Search by name or code…" value={q} onChange={e => { setQ(e.target.value); setPid(''); }}/>
+            {results.length > 0 && !pid && (
+              <div style={{ border: '1px solid var(--border)', borderRadius: 6, marginTop: 4, maxHeight: 200, overflow: 'auto' }}>
+                {results.map(p => (
+                  <div key={p.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => { setPid(p.id); setQ(p.name); }}>
+                    <div className="grow"><div className="small">{p.name}</div><div className="tiny muted mono">{p.code} · buy {inr(p.buy)}</div></div>
+                    <Icon name="check" size={12}/>
+                  </div>
+                ))}
+              </div>
+            )}
+            {chosen && <div className="tiny muted mt-1">Selected: <strong>{chosen.name}</strong> · {chosen.code} · unit cost {inr(chosen.buy)}</div>}
+          </div>
+        </div>
+      ) : (
+        <div className="field-row-3">
+          <div className="field"><label className="field-label">Component name *</label><input className="input" value={cust.name} onChange={e => setC('name', e.target.value)}/></div>
+          <div className="field"><label className="field-label">Code</label><input className="input mono" value={cust.code} onChange={e => setC('code', e.target.value)} placeholder="auto if blank"/></div>
+          <div className="field"><label className="field-label">HSN</label><input className="input mono" value={cust.hsn} onChange={e => setC('hsn', e.target.value)}/></div>
+          <div className="field"><label className="field-label">Unit cost (buy) *</label><input type="number" min="0" className="input mono" value={cust.unit_cost} onChange={e => setC('unit_cost', e.target.value)}/></div>
+          <div className="field"><label className="field-label">Sell price</label><input type="number" min="0" className="input mono" value={cust.sell} onChange={e => setC('sell', e.target.value)} placeholder="optional"/></div>
+          <div className="field"><label className="field-label">UOM</label><input className="input" value={cust.uom} onChange={e => setC('uom', e.target.value)}/></div>
+        </div>
+      )}
+
+      <div className="field-row mt-2">
+        <div className="field"><label className="field-label">Quantity *</label><input type="number" min="1" className="input mono" value={qty} onChange={e => setQty(e.target.value)}/></div>
+        <div className="field"><label className="field-label">Source / note</label><input className="input" value={source} onChange={e => setSource(e.target.value)} placeholder="e.g. Manual add, surplus from SO/…"/></div>
+      </div>
+      <div className="tiny muted mt-2">Catalogue items use the product's cost; custom components are saved to your catalogue and reusable across SOs. Added stock becomes available to every SO's pool suggestions.</div>
+    </Modal>
   );
 }
 
@@ -1021,5 +1121,6 @@ window.VGPoolSendPanel = VGPoolSendPanel;
 window.VirtualGodownList = VirtualGodownList;
 window.VirtualGodownView = VirtualGodownView;
 window.MasterPool = MasterPool;
+window.AddToPoolModal = AddToPoolModal;
 window.CrossSOTransfers = CrossSOTransfers;
 window.NewTransferModal = NewTransferModal;
