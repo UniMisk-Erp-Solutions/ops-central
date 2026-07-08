@@ -91,6 +91,10 @@ function canAccess(role, route) {
   // Strip subpaths
   const root = route.split('/')[0];
   const allowed = perm(role).nav;
+  // A specific SO's invoice (invoices/<soId>[/<invId>]) is opened from the SO or
+  // its Virtual Godown, so anyone who can see the SO / VG may view it — even
+  // without the Invoices list in their nav. The bare 'invoices' list stays gated.
+  if (root === 'invoices' && route.indexOf('/') !== -1 && (allowed.includes('sales-orders') || allowed.includes('godown'))) return true;
   // Allow detail routes of any allowed parent
   return allowed.includes(root) || allowed.includes(route);
 }
