@@ -68,7 +68,7 @@ const PERMISSIONS = {
   // Site supervisor for Supply+Implementation / Implementation-only orders. Sees
   // ONLY the SOs assigned to them (enforced by filtering on extra.implementation.supervisor_id).
   'Supervisor': {
-    nav: ['dashboard','inbox','sales-orders'],
+    nav: ['dashboard','inbox','sourcing','sales-orders','godown'],
     primary: { route: 'sales-orders', label: 'My Sites', icon: 'briefcase' },
     can: { superviseImpl: true, viewProducts: true },
   },

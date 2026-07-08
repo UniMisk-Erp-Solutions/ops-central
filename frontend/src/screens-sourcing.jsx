@@ -150,7 +150,10 @@ function SourcingList() {
   const { state, navigate, getCustomer, getUser, currentUser, getProduct } = useStore();
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canCreate = ['Sales', 'Pre-sales', 'Org Admin'].includes(role);
-  const rows = state.sourcings || [];
+  // A Supervisor only sees the inquiries whose implementation is assigned to them.
+  const rows = role === 'Supervisor'
+    ? (state.sourcings || []).filter(x => x.implementation && x.implementation.supervisor_id === currentUser)
+    : (state.sourcings || []);
 
   return (
     <div className="page">
@@ -593,6 +596,8 @@ function SourcingDetail({ srcId }) {
         </div></div>
       </div>
 
+      {src.implementation && <ImplBOQPanel src={src}/>}
+
       {/* Multi-vendor allocation summary (per-vendor margin + grand total) */}
       {srcHasAlloc(src) && (() => {
         const sum = srcVendorSummary(src, getProduct);
@@ -845,6 +850,70 @@ function AddVendorQuoteModal({ src, comps, onClose }) {
 }
 
 // ---- convert inquiry → Sales Order (one click) -----------------------------
+
+// Site BOQ (bill of quantities) built by the assigned Supervisor on the inquiry,
+// then sent to Sales. Mobile-friendly (wraps, no wide fixed tables).
+function ImplBOQPanel({ src }) {
+  const { state, mutate, getUser, currentUser } = useStore();
+  const toast = useToast();
+  const im = src.implementation || {};
+  const boq = im.boq || [];
+  const role = getUser(currentUser)?.role;
+  const isSupervisor = currentUser === im.supervisor_id;
+  const canEdit = (isSupervisor || role === 'Org Admin') && src.status !== 'Converted';
+  const sup = getUser(im.supervisor_id);
+  const [q, setQ] = React.useState('');
+  const [customName, setCustomName] = React.useState('');
+  const [qty, setQty] = React.useState(1);
+  const results = q.trim() ? state.products.filter(p => `${p.name} ${p.code}`.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 6) : [];
+
+  const saveBoq = (nextBoq, extra) => mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, implementation: { ...(x.implementation || {}), boq: nextBoq, ...(extra || {}) } } : x) }), { action: 'boq', entity: 'Sourcing', entity_id: src.id });
+  const addProduct = (p) => { saveBoq([...boq, { id: 'b' + Date.now(), product_id: p.id, name: p.name, qty: Math.max(1, Number(qty) || 1), uom: p.uom || '' }]); setQ(''); setQty(1); toast(`${p.name} added to BOQ`, 'success'); };
+  const addCustom = () => { if (!customName.trim()) return; saveBoq([...boq, { id: 'b' + Date.now(), product_id: null, name: customName.trim(), qty: Math.max(1, Number(qty) || 1), uom: '' }]); setCustomName(''); setQty(1); toast('Item added to BOQ', 'success'); };
+  const setItemQty = (id, v) => saveBoq(boq.map(b => b.id === id ? { ...b, qty: Math.max(0, Number(v) || 0) } : b));
+  const removeItem = (id) => saveBoq(boq.filter(b => b.id !== id));
+  const sendToSales = () => {
+    if (!boq.length) { toast('Add at least one BOQ item'); return; }
+    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, implementation: { ...(x.implementation || {}), status: 'BOQ Ready' } } : x), notifications: [{ id: 'n-boq-' + Date.now(), kind: 'sourcing', text: `${src.src_no}: site BOQ ready (${boq.length} item(s)) from ${sup ? sup.name : 'Supervisor'}`, date: TODAY, read: false, role: 'Sales' }, ...s.notifications] }), { action: 'boq-send', entity: 'Sourcing', entity_id: src.id });
+    toast('BOQ sent to Sales', 'success');
+  };
+
+  return (
+    <div className="card mb-2" style={{ borderLeft: '3px solid var(--accent)' }}>
+      <div className="card-header">
+        <div><h3 className="card-title">Implementation BOQ</h3><span className="card-sub">Supervisor: {sup ? sup.name : '—'} · {im.status || 'BOQ Pending'} · {boq.length} item(s)</span></div>
+        {canEdit && <button className="btn btn-sm btn-primary" onClick={sendToSales}><Icon name="mail" size={12}/>Send BOQ to Sales</button>}
+      </div>
+      <div className="card-body">
+        {(im.address || im.description) && <div className="tiny muted mb-2">{im.address && <div><strong>Site:</strong> {im.address}</div>}{im.description && <div><strong>Scope:</strong> {im.description}</div>}<div><strong>Billing:</strong> {inr(im.hourly_rate || 0)}/hr (hours from daily logs)</div></div>}
+        {boq.length === 0 ? <div className="empty">No BOQ items yet.{canEdit ? ' Add what the site needs below.' : ''}</div> : (
+          <table className="t"><thead><tr><th>Item</th><th className="num">Qty</th>{canEdit && <th style={{ width: 28 }}></th>}</tr></thead>
+            <tbody>{boq.map(b => (
+              <tr key={b.id}><td>{b.name}{b.product_id ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>custom</span>}{b.uom ? <span className="tiny muted"> · {b.uom}</span> : ''}</td>
+                <td className="num">{canEdit ? <input type="number" min="0" className="input mono" value={b.qty} onChange={e => setItemQty(b.id, e.target.value)} style={{ width: 64, height: 24, textAlign: 'right' }}/> : b.qty}</td>
+                {canEdit && <td><button className="btn btn-ghost btn-sm" onClick={() => removeItem(b.id)}><Icon name="x" size={11} color="var(--danger)"/></button></td>}
+              </tr>))}</tbody>
+          </table>
+        )}
+        {canEdit && (
+          <div className="mt-2" style={{ display: 'grid', gap: 8 }}>
+            <div style={{ position: 'relative' }}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input className="input" placeholder="Search catalogue item…" value={q} onChange={e => setQ(e.target.value)} style={{ flex: '1 1 180px', minWidth: 0 }}/>
+                <input type="number" min="1" className="input mono" value={qty} onChange={e => setQty(e.target.value)} style={{ width: 70 }} title="Qty"/>
+              </div>
+              {results.length > 0 && <div style={{ border: '1px solid var(--border)', borderRadius: 6, marginTop: 4 }}>{results.map(p => (<div key={p.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => addProduct(p)}><div className="grow"><div className="small">{p.name}</div><div className="tiny muted mono">{p.code}</div></div><Icon name="plus" size={12}/></div>))}</div>}
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <input className="input" placeholder="…or type a custom item (labour, cement…)" value={customName} onChange={e => setCustomName(e.target.value)} style={{ flex: '1 1 180px', minWidth: 0 }}/>
+              <button className="btn btn-sm" disabled={!customName.trim()} onClick={addCustom}><Icon name="plus" size={11}/>Add custom</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function ConvertToSOModal({ src, margin, onClose }) {
   const { state, mutate, navigate, getCustomer, currentUser } = useStore();
