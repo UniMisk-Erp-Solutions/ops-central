@@ -1,8 +1,10 @@
 // OP Central — Virtual Godown, Master Surplus Pool, Cross-SO Transfer
 
 function VirtualGodownList() {
-  const { state, navigate, getCustomer, soSubtotal, getProduct } = useStore();
-  const orders = state.sales_orders.filter(s => !['Closed','Cancelled'].includes(s.status));
+  const { state, navigate, getCustomer, soSubtotal, getProduct, getUser, currentUser } = useStore();
+  const role = getUser(currentUser)?.role;
+  const orders = state.sales_orders.filter(s => !['Closed','Cancelled'].includes(s.status))
+    .filter(s => role !== 'Supervisor' || (s.extra && s.extra.implementation && s.extra.implementation.supervisor_id === currentUser));
 
   return (
     <div className="page">
@@ -425,6 +427,173 @@ function VGPoolSendPanel({ so }) {
   );
 }
 
+// Implementation section on the same VG page: BOQ items (received/used/remaining),
+// the supervisor's daily usage logs (item + qty + hours + date), and mid-flow item
+// requests to Purchase. Mobile-friendly. Realtime via synced state.
+function VGImplPanel({ so }) {
+  const { state, mutate, getProduct, getUser, currentUser } = useStore();
+  const toast = useToast();
+  const im = so.extra && so.extra.implementation;
+  const role = getUser(currentUser)?.role;
+  const isSup = currentUser === (im && im.supervisor_id);
+  const canLog = isSup || role === 'Org Admin';
+  const canFulfil = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const boq = (im && im.boq) || [];
+  const logs = (im && im.daily_logs) || [];
+  const requests = (im && im.requests) || [];
+  const sup = getUser(im && im.supervisor_id);
+
+  const soPoIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
+  const recvByProd = {};
+  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { recvByProd[it.product_id] = (recvByProd[it.product_id] || 0) + (it.accepted || 0); }); });
+  const usedByBoq = {};
+  logs.forEach(lg => (lg.items || []).forEach(it => { usedByBoq[it.boq_id] = (usedByBoq[it.boq_id] || 0) + (Number(it.qty) || 0); }));
+  const totalHours = logs.reduce((a, l) => a + (Number(l.hours) || 0), 0);
+  const rows = boq.map(b => {
+    const required = Number(b.qty) || 0;
+    const received = b.product_id ? (recvByProd[b.product_id] || 0) : required;
+    const used = usedByBoq[b.id] || 0;
+    return { ...b, required, received, used, onSite: Math.max(0, received - used), procurable: !!b.product_id };
+  });
+
+  const updImpl = (patch, action, notifs) => mutate(s => ({
+    ...s,
+    sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), implementation: { ...((x.extra && x.extra.implementation) || {}), ...patch } } } : x),
+    ...(notifs ? { notifications: [...notifs, ...s.notifications] } : {}),
+  }), { action, entity: 'SalesOrder', entity_id: so.id });
+
+  const [logDate, setLogDate] = React.useState(TODAY);
+  const [logHours, setLogHours] = React.useState('');
+  const [logNotes, setLogNotes] = React.useState('');
+  const [logItems, setLogItems] = React.useState({});
+  const setLI = (id, v) => setLogItems(m => ({ ...m, [id]: v }));
+  const postLog = () => {
+    const items = boq.filter(b => Number(logItems[b.id]) > 0).map(b => ({ boq_id: b.id, name: b.name, qty: Number(logItems[b.id]) }));
+    if (!items.length && !(Number(logHours) > 0)) { toast('Add hours worked and/or items used today'); return; }
+    const log = { id: 'dl' + Date.now(), date: logDate, hours: Number(logHours) || 0, notes: logNotes || '', by: currentUser, items };
+    updImpl({ daily_logs: [log, ...logs] }, 'daily-log', [{ id: 'n-dl-' + Date.now(), kind: 'so', text: `${so.so_no}: site update by ${sup ? sup.name : 'supervisor'} · ${Number(logHours) || 0}h · ${items.length} item(s) used`, date: TODAY, read: false, role: 'Project Manager' }]);
+    setLogHours(''); setLogNotes(''); setLogItems({});
+    toast('Daily update posted · VG updated', 'success');
+  };
+
+  const [reqName, setReqName] = React.useState('');
+  const [reqQty, setReqQty] = React.useState(1);
+  const [reqSearch, setReqSearch] = React.useState('');
+  const reqResults = reqSearch.trim() ? state.products.filter(p => `${p.name} ${p.code}`.toLowerCase().includes(reqSearch.trim().toLowerCase())).slice(0, 5) : [];
+  const addRequest = (product) => {
+    const name = product ? product.name : reqName.trim();
+    if (!name) { toast('Enter an item to request'); return; }
+    const rq = { id: 'rq' + Date.now(), date: TODAY, name, product_id: product ? product.id : null, qty: Math.max(1, Number(reqQty) || 1), status: 'Requested', by: currentUser };
+    updImpl({ requests: [rq, ...requests] }, 'impl-request', [{ id: 'n-rq-' + Date.now(), kind: 'so', text: `${so.so_no}: supervisor requested ${rq.qty}× ${name} for the site`, date: TODAY, read: false, role: 'Purchase' }]);
+    setReqName(''); setReqSearch(''); setReqQty(1);
+    toast('Item requested · Purchase notified', 'success');
+  };
+  const fulfilRequest = (rq) => {
+    const newBoq = [...boq, { id: 'b' + Date.now(), product_id: rq.product_id, name: rq.name, qty: rq.qty, uom: '' }];
+    updImpl({ boq: newBoq, requests: requests.map(r => r.id === rq.id ? { ...r, status: 'Fulfilled' } : r) }, 'impl-req-fulfil', [{ id: 'n-rqf-' + Date.now(), kind: 'so', text: `${so.so_no}: ${rq.qty}× ${rq.name} added to BOQ for procurement`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
+    toast('Added to BOQ · procure via the Vendor PO tab (pool-first)', 'success');
+  };
+
+  const openReqs = requests.filter(r => r.status !== 'Fulfilled');
+  return (
+    <div className="card mt-2" style={{ borderLeft: '3px solid var(--accent)' }}>
+      <div className="card-header">
+        <div><h3 className="card-title">Implementation — site tracking</h3><span className="card-sub">Supervisor: {sup ? sup.name : '—'} · {totalHours}h logged · billed {inr(im ? im.hourly_rate || 0 : 0)}/hr</span></div>
+        <span className="badge accent dot">{im ? im.status || 'BOQ Pending' : ''}</span>
+      </div>
+      <div className="card-body flush">
+        {rows.length === 0 ? <div className="empty">No BOQ items yet — the supervisor prepares the BOQ on the inquiry.</div> : (
+          <table className="t">
+            <thead><tr><th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Used</th><th className="num">On site</th><th>Status</th></tr></thead>
+            <tbody>{rows.map(r => (
+              <tr key={r.id}>
+                <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}</td>
+                <td className="num">{r.required}</td>
+                <td className="num">{r.procurable ? r.received : <span className="muted">—</span>}</td>
+                <td className="num">{r.used || <span className="muted">0</span>}</td>
+                <td className="num"><strong style={{ color: r.onSite > 0 ? 'var(--success)' : 'var(--text-muted)' }}>{r.onSite}</strong></td>
+                <td>{r.procurable && r.received < r.required ? <span className="badge warning dot">Procuring</span> : r.onSite > 0 ? <span className="badge success dot">On site</span> : r.used >= r.required && r.required > 0 ? <span className="badge dot">Consumed</span> : <span className="badge dot">—</span>}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Item requests (supervisor → Purchase) */}
+      <div className="card-body" style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Item requests {openReqs.length > 0 && <span className="badge warning">{openReqs.length} open</span>}</div>
+        {requests.length > 0 && (
+          <div className="stack" style={{ gap: 4, marginBottom: 8 }}>
+            {requests.map(r => (
+              <div key={r.id} className="queue-item">
+                <div className="grow"><div className="small">{r.qty}× {r.name}</div><div className="tiny muted">{fmtDate(r.date)} · {r.status}</div></div>
+                {r.status !== 'Fulfilled' && canFulfil && <button className="btn btn-sm btn-primary" onClick={() => fulfilRequest(r)}><Icon name="plus" size={11}/>Add to BOQ</button>}
+                {r.status === 'Fulfilled' && <span className="badge success dot">Fulfilled</span>}
+              </div>
+            ))}
+          </div>
+        )}
+        {canLog && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 0 }}>
+              <input className="input" placeholder="Request an item (search catalogue or type)…" value={reqSearch || reqName} onChange={e => { setReqSearch(e.target.value); setReqName(e.target.value); }} style={{ width: '100%' }}/>
+              {reqResults.length > 0 && <div style={{ position: 'absolute', zIndex: 20, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, marginTop: 2, width: '100%' }}>{reqResults.map(p => <div key={p.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => addRequest(p)}><div className="grow small">{p.name}</div><Icon name="plus" size={11}/></div>)}</div>}
+            </div>
+            <input type="number" min="1" className="input mono" value={reqQty} onChange={e => setReqQty(e.target.value)} style={{ width: 64 }} title="Qty"/>
+            <button className="btn btn-sm" onClick={() => addRequest(null)}><Icon name="plus" size={11}/>Request</button>
+          </div>
+        )}
+      </div>
+
+      {/* Daily usage log (supervisor) */}
+      {canLog && (
+        <div className="card-body" style={{ borderTop: '1px solid var(--border)' }}>
+          <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Post today's update</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
+            <input type="date" className="input mono" value={logDate} onChange={e => setLogDate(e.target.value)} style={{ width: 150 }}/>
+            <input type="number" min="0" className="input mono" placeholder="hours worked" value={logHours} onChange={e => setLogHours(e.target.value)} style={{ width: 120 }}/>
+          </div>
+          {rows.length > 0 && (
+            <div className="stack" style={{ gap: 4, marginBottom: 6 }}>
+              {rows.map(r => (
+                <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span className="small grow trunc">{r.name} <span className="tiny muted">(on site {r.onSite})</span></span>
+                  <input type="number" min="0" className="input mono" placeholder="used" value={logItems[r.id] || ''} onChange={e => setLI(r.id, e.target.value)} style={{ width: 72, height: 26 }}/>
+                </div>
+              ))}
+            </div>
+          )}
+          <textarea className="textarea" rows="2" placeholder="Notes (optional)…" value={logNotes} onChange={e => setLogNotes(e.target.value)} style={{ marginBottom: 6 }}/>
+          <button className="btn btn-primary btn-sm" onClick={postLog}><Icon name="check" size={12}/>Post daily update</button>
+        </div>
+      )}
+
+      {/* Day-by-day report */}
+      <div className="card-body" style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Daily reports ({logs.length}) · {totalHours}h total</div>
+        {logs.length === 0 ? <div className="tiny muted">No updates yet.</div> : (
+          <div className="stack" style={{ gap: 6 }}>
+            {logs.map(lg => {
+              const by = getUser(lg.by);
+              return (
+                <div key={lg.id} style={{ padding: 8, border: '1px solid var(--border)', borderRadius: 6 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <strong className="small mono">{fmtDate(lg.date)}</strong>
+                    <span className="badge accent tiny">{lg.hours || 0}h</span>
+                    {by && <span className="tiny muted">· {by.name}</span>}
+                  </div>
+                  {(lg.items || []).length > 0 && <div className="tiny" style={{ marginTop: 3 }}>Used: {lg.items.map(it => `${it.qty}× ${it.name}`).join(' · ')}</div>}
+                  {lg.notes && <div className="tiny muted" style={{ marginTop: 2 }}>{lg.notes}</div>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function VirtualGodownView({ soId, embedded }) {
   const { state, navigate, getSO, getCustomer, getProduct, mutate, getUser, currentUser, addToPool, getVendor } = useStore();
   const toast = useToast();
@@ -668,6 +837,7 @@ function VirtualGodownView({ soId, embedded }) {
           </div>
         </div>
       </div>
+      {so.extra && so.extra.implementation && <VGImplPanel so={so}/>}
     </Wrap>
   );
 }
@@ -1117,6 +1287,7 @@ window.soFullyReceived = function (state, so) {
 
 window.VGReceivePanel = VGReceivePanel;
 window.VGAddFromPoolPanel = VGAddFromPoolPanel;
+window.VGImplPanel = VGImplPanel;
 window.VGInvoicesCard = VGInvoicesCard;
 window.VGPoolSendPanel = VGPoolSendPanel;
 window.VirtualGodownList = VirtualGodownList;
