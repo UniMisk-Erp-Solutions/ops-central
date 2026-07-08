@@ -494,12 +494,22 @@ function VGImplPanel({ so }) {
     toast('Added to BOQ · procure via the Vendor PO tab (pool-first)', 'success');
   };
 
+  const markDone = () => {
+    if (!window.confirm(`Mark implementation done? This bills ${totalHours} logged hour(s) at ${inr(im ? im.hourly_rate || 0 : 0)}/hr to the client and finalises the invoice once supply is complete.`)) return;
+    mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), implementation: { ...((x.extra && x.extra.implementation) || {}), status: 'Done' } } } : x), notifications: [{ id: 'n-impldone-' + Date.now(), kind: 'so', text: `${so.so_no}: implementation marked done by ${sup ? sup.name : 'supervisor'} · ${totalHours}h · billing raised`, date: TODAY, read: false, role: 'Billing' }, ...s.notifications] }), { action: 'impl-done', entity: 'SalesOrder', entity_id: so.id });
+    if (window.autoInvoiceSO) window.autoInvoiceSO(so.id, { mutate, toast: null, currentUser, getUser, getProduct });
+    toast(`Implementation done · ${totalHours}h billed to the client`, 'success');
+  };
   const openReqs = requests.filter(r => r.status !== 'Fulfilled');
+  const isDone = im && im.status === 'Done';
   return (
     <div className="card mt-2" style={{ borderLeft: '3px solid var(--accent)' }}>
       <div className="card-header">
-        <div><h3 className="card-title">Implementation — site tracking</h3><span className="card-sub">Supervisor: {sup ? sup.name : '—'} · {totalHours}h logged · billed {inr(im ? im.hourly_rate || 0 : 0)}/hr</span></div>
-        <span className="badge accent dot">{im ? im.status || 'BOQ Pending' : ''}</span>
+        <div><h3 className="card-title">Implementation — site tracking</h3><span className="card-sub">Supervisor: {sup ? sup.name : '—'} · {totalHours}h logged · billed {inr(im ? im.hourly_rate || 0 : 0)}/hr = {inr((im ? im.hourly_rate || 0 : 0) * totalHours)}</span></div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span className="badge accent dot">{im ? im.status || 'BOQ Pending' : ''}</span>
+          {canLog && !isDone && <button className="btn btn-sm btn-primary" onClick={markDone}><Icon name="check" size={12}/>Mark done &amp; bill</button>}
+        </div>
       </div>
       <div className="card-body flush">
         {rows.length === 0 ? <div className="empty">No BOQ items yet — the supervisor prepares the BOQ on the inquiry.</div> : (

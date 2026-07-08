@@ -518,6 +518,27 @@ function soLineInvoicedFraction(so) {
 }
 const _nonConsolidatedTotal = (invs) => (invs || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.total || 0), 0);
 
+// ===== Implementation billing (hourly rate × hours summed from the supervisor's
+// daily logs). Billed as a single 'Implementation services' line on the client
+// invoice — the BOQ items themselves never appear on it. =====
+function soImplHours(so) { const im = so.extra && so.extra.implementation; return im ? (im.daily_logs || []).reduce((a, l) => a + (Number(l.hours) || 0), 0) : 0; }
+function soImplCharge(so) { const im = so.extra && so.extra.implementation; return im ? Math.round((Number(im.hourly_rate) || 0) * soImplHours(so)) : 0; }
+function soImplInvoiced(so) { return (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.lines || []).filter(l => l.kind === 'impl').reduce((b, l) => b + (l.amount || 0), 0), 0); }
+function soImplInvoicedHours(so) { return (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.lines || []).filter(l => l.kind === 'impl').reduce((b, l) => b + (Number(l.qty) || 0), 0), 0); }
+// Supply-only invoiced subtotal (strip implementation lines) — for the supply cap.
+function soSupplyInvoicedSub(so) { return (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0) - soImplInvoiced(so); }
+// The newly-billable implementation line (delta hours since last invoice), if any.
+function _implDeltaLine(so) {
+  const im = so.extra && so.extra.implementation;
+  if (!im) return null;
+  const deltaHrs = Math.max(0, soImplHours(so) - soImplInvoicedHours(so));
+  if (deltaHrs <= 0) return null;
+  const rate = Number(im.hourly_rate) || 0;
+  const amount = Math.round(deltaHrs * rate);
+  if (amount <= 0) return null;
+  return { kind: 'impl', ref_id: 'impl', label: `Implementation services — ${deltaHrs} hr(s) @ ${inr(rate)}/hr`, qty: deltaHrs, unit_price: rate, amount };
+}
+
 // Item-count fractional invoice: bills the newly-fulfilled fraction of each
 // bundle (e.g. 0.8 then 0.2). Always type 'Partial'; the consolidated final is
 // raised separately once everything is in.
@@ -537,13 +558,14 @@ function buildFractionInvoice(so, state, currentUser, getUser) {
     subtotal += amount;
     (l.components || []).forEach(c => { comp[c.product_id] = (comp[c.product_id] || 0) + (c.qty || 0) * qty; });
   });
-  if (subtotal <= 0.5) return null;
-  // Never bill beyond the order's remaining billable value (guards against mixed
-  // manual/auto invoicing and rounding drift).
-  const invoicedSub = (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0);
-  const remainingBilled = Math.max(0, _soBilled(so) - invoicedSub);
-  if (remainingBilled <= 0.5) return null;
+  // Cap SUPPLY billing to the order's remaining supply value (guards against
+  // mixed manual/auto invoicing and rounding drift). Implementation is separate.
+  const remainingBilled = Math.max(0, _soBilled(so) - soSupplyInvoicedSub(so));
   subtotal = Math.min(subtotal, Math.round(remainingBilled));
+  // Implementation rides on the SAME invoice — the hours logged since the last one.
+  const implLine = _implDeltaLine(so);
+  if (implLine) { lines.push(implLine); subtotal += implLine.amount; }
+  if (subtotal <= 0.5) return null;
   const total = Math.round(subtotal * 1.18);
   const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
@@ -561,10 +583,15 @@ function buildConsolidatedInvoice(so, state, currentUser, getUser) {
   const frac = soBundleFraction(so, state);
   const invF = soLineInvoicedFraction(so);
   const lines = so.lines || [];
-  if (!lines.length) return null;
+  if (!lines.length) return null;   // impl-only SOs don't get a consolidated (the impl invoice is the bill)
   const allDone = lines.every(l => (frac[l.id] || 0) >= 0.999 && (invF[l.id] || 0) >= 0.999);
   if (!allDone) return null;
+  // Only finalise once implementation is marked done AND every logged hour is billed.
+  const im = so.extra && so.extra.implementation;
+  if (im && !(im.status === 'Done' && (soImplHours(so) - soImplInvoicedHours(so)) <= 0)) return null;
   const invLines = lines.map(l => ({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty: l.bundle_qty || 1, unit_price: l.unit_price || 0, amount: Math.round((l.bundle_qty || 1) * (l.unit_price || 0)) }));
+  // The final main invoice shows supply + the whole implementation (total hours) in one doc.
+  if (im && soImplCharge(so) > 0) invLines.push({ kind: 'impl', ref_id: 'impl', label: `Implementation services — ${soImplHours(so)} hr(s) @ ${inr(Number(im.hourly_rate) || 0)}/hr`, qty: soImplHours(so), unit_price: Number(im.hourly_rate) || 0, amount: soImplCharge(so) });
   const subtotal = invLines.reduce((a, x) => a + x.amount, 0);
   if (subtotal <= 0.5) return null;
   const total = Math.round(subtotal * 1.18);
@@ -664,7 +691,7 @@ function SOInvoicingTab({ so }) {
   const st = soInvoiceState(so, state);
   const comps = soComponentState(so, state, getProduct);
   const invoices = so.invoices || [];
-  const billed = soBilledSubtotal(so);
+  const billed = soBilledSubtotal(so) + soImplCharge(so);   // supply + implementation (rate × logged hours)
   const legacyInvoiced = invoices.length === 0 && so.invoice_no;
   const invoicedSub = legacyInvoiced ? billed : invoices.filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0);
   const remaining = legacyInvoiced ? 0 : Math.max(0, billed - invoicedSub);
