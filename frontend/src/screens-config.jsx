@@ -523,6 +523,7 @@ const DEFAULT_TEAMS = [
   { name: 'Stores', desc: 'GRN + QC + surplus' },
   { name: 'Billing', desc: '3-way match + invoices' },
   { name: 'Collections', desc: 'Overdue follow-ups' },
+  { name: 'Supervisor', desc: 'Site implementation · BOQ + daily usage' },
   { name: 'Managing Director', desc: 'High-value approvals' },
   { name: 'Org Admin', desc: 'Customisation + billing' },
 ];

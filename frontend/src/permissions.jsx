@@ -65,6 +65,13 @@ const PERMISSIONS = {
     primary: { route: 'collections', label: 'Collections', icon: 'cash' },
     can: { logFollowup: true, viewCustomers: true },
   },
+  // Site supervisor for Supply+Implementation / Implementation-only orders. Sees
+  // ONLY the SOs assigned to them (enforced by filtering on extra.implementation.supervisor_id).
+  'Supervisor': {
+    nav: ['dashboard','inbox','sales-orders'],
+    primary: { route: 'sales-orders', label: 'My Sites', icon: 'briefcase' },
+    can: { superviseImpl: true, viewProducts: true },
+  },
 };
 
 // Resolve a role's permissions. DB-backed config (window.__opcPerms, loaded from

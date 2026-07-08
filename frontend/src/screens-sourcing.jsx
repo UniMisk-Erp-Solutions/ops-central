@@ -215,6 +215,11 @@ function SourcingNew() {
   const [notes, setNotes] = React.useState('');
   const [lines, setLines] = React.useState([]);
   const [expanded, setExpanded] = React.useState({});
+  const [orderType, setOrderType] = React.useState('Supply');
+  const [impl, setImpl] = React.useState({ description: '', address: '', supervisor_id: '', hourly_rate: '', hours: '' });
+  const hasImpl = orderType !== 'Supply';   // Supply+Implementation or Implementation-only
+  const supervisors = state.users.filter(u => u.role === 'Supervisor');
+  const setImplF = (k, v) => setImpl(m => ({ ...m, [k]: v }));
 
   const addLine = (categoryId) => {
     const bom = state.boms[categoryId] || [];
@@ -238,10 +243,18 @@ function SourcingNew() {
 
   const cust = customer ? getCustomer(customer) : null;
   const sell = lines.reduce((s, l) => s + l.bundle_qty * l.unit_price, 0);
-  const canSubmit = customer && lines.length > 0;
+  const implOnly = orderType === 'Service / Implementation';
+  const canSubmit = customer && (lines.length > 0 || implOnly);
 
   const submit = () => {
-    if (!canSubmit) { toast('Pick a customer and add at least one bundle'); return; }
+    if (!canSubmit) { toast(implOnly ? 'Pick a customer' : 'Pick a customer and add at least one bundle'); return; }
+    if (hasImpl && !impl.supervisor_id) { toast('Select a supervisor for the implementation'); return; }
+    if (hasImpl && !(Number(impl.hourly_rate) > 0)) { toast('Set the implementation hourly rate'); return; }
+    const implementation = hasImpl ? {
+      description: impl.description || '', address: impl.address || '',
+      supervisor_id: impl.supervisor_id, hourly_rate: Number(impl.hourly_rate) || 0, hours: Number(impl.hours) || 0,
+      status: 'BOQ Pending', boq: [], daily_logs: [], requests: [],
+    } : null;
     const src = {
       id: 'src-' + Date.now(),
       src_no: `INQ/FY26/${String(1 + (state.sourcings || []).length).padStart(4, '0')}`,
@@ -249,14 +262,19 @@ function SourcingNew() {
       client_req_price: clientReqPrice === '' ? null : Number(clientReqPrice),
       our_price: ourPrice === '' ? null : Number(ourPrice),
       notes: notes || null, created_by: currentUser || null,
+      order_type: orderType, implementation,
       lines, picks: {}, prices: {}, alloc: {}, margin: {}, converted_so_id: null,
     };
+    const supName = implementation ? (state.users.find(u => u.id === implementation.supervisor_id)?.name || 'Supervisor') : '';
     mutate(s => ({
       ...s,
       sourcings: [src, ...(s.sourcings || [])],
-      notifications: [{ id: 'n-src-' + Date.now(), kind: 'sourcing', text: `${src.src_no} sent to Pre-sales for vendor sourcing · ${cust.name}`, date: TODAY, read: false, role: 'Pre-sales' }, ...s.notifications],
+      notifications: [
+        ...(implOnly ? [] : [{ id: 'n-src-' + Date.now(), kind: 'sourcing', text: `${src.src_no} sent to Pre-sales for vendor sourcing · ${cust.name}`, date: TODAY, read: false, role: 'Pre-sales' }]),
+        ...(implementation ? [{ id: 'n-sup-' + Date.now(), kind: 'sourcing', text: `${src.src_no}: implementation assigned to you · prepare the site BOQ · ${cust.name}`, date: TODAY, read: false, user_id: implementation.supervisor_id }] : []),
+      ].concat(s.notifications),
     }), { action: 'create', entity: 'Sourcing', entity_id: src.id });
-    toast(`${src.src_no} sent to Pre-sales`, 'success');
+    toast(implOnly ? `${src.src_no} created · ${supName} to prepare BOQ` : `${src.src_no} sent to Pre-sales`, 'success');
     navigate(`sourcing/${src.id}`);
   };
 
@@ -374,6 +392,54 @@ function SourcingNew() {
               )}
             </div>
           </div>
+
+          <div className="card">
+            <div className="form-section">
+              <div className="form-section-title">Order type</div>
+              <select className="select" value={orderType} onChange={e => setOrderType(e.target.value)} style={{ maxWidth: 320 }}>
+                <option>Supply</option>
+                <option>Supply + Implementation</option>
+                <option>Service / Implementation</option>
+              </select>
+              <div className="field-hint">{orderType === 'Supply' ? 'Goods only — the normal supply flow.' : orderType === 'Supply + Implementation' ? 'Goods + on-site implementation by a supervisor.' : 'Implementation only — no supply bundles needed.'}</div>
+            </div>
+          </div>
+
+          {hasImpl && (
+            <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
+              <div className="form-section">
+                <div className="form-section-title">Implementation brief</div>
+                <div className="field-row">
+                  <div className="field">
+                    <label className="field-label">Supervisor *</label>
+                    <select className="select" value={impl.supervisor_id} onChange={e => setImplF('supervisor_id', e.target.value)}>
+                      <option value="">Select supervisor…</option>
+                      {supervisors.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
+                    {supervisors.length === 0 && <div className="field-hint" style={{ color: 'var(--warning)' }}>No supervisors yet — create one in Settings → Users (role Supervisor).</div>}
+                  </div>
+                  <div className="field">
+                    <label className="field-label">Hourly rate (₹) *</label>
+                    <input type="number" min="0" className="input mono" value={impl.hourly_rate} onChange={e => setImplF('hourly_rate', e.target.value)} placeholder="e.g. 1200"/>
+                    <div className="field-hint">The client is billed for implementation by the hour.</div>
+                  </div>
+                  <div className="field">
+                    <label className="field-label">Estimated hours</label>
+                    <input type="number" min="0" className="input mono" value={impl.hours} onChange={e => setImplF('hours', e.target.value)} placeholder="optional"/>
+                  </div>
+                </div>
+                <div className="field mt-2">
+                  <label className="field-label">Site address</label>
+                  <textarea className="textarea" rows="2" value={impl.address} onChange={e => setImplF('address', e.target.value)} placeholder="Where the implementation happens…"/>
+                </div>
+                <div className="field mt-2">
+                  <label className="field-label">Implementation description / scope</label>
+                  <textarea className="textarea" rows="3" value={impl.description} onChange={e => setImplF('description', e.target.value)} placeholder="What needs to be done on site…"/>
+                </div>
+                <div className="tiny muted mt-1">On submit, the supervisor is assigned and asked to prepare the site BOQ. {impl.hourly_rate && impl.hours ? `Est. implementation value: ${inr((Number(impl.hourly_rate) || 0) * (Number(impl.hours) || 0))}.` : ''}</div>
+              </div>
+            </div>
+          )}
 
           <div className="card">
             <div className="form-section">
@@ -789,10 +855,10 @@ function ConvertToSOModal({ src, margin, onClose }) {
   const [date, setDate] = React.useState(TODAY);
   const [expected, setExpected] = React.useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() + 14); return d.toISOString().slice(0, 10); });
   const [priority, setPriority] = React.useState('Standard');
-  const [orderType, setOrderType] = React.useState('Supply');
+  const [orderType, setOrderType] = React.useState(src.order_type || 'Supply');
   const [paymentTerms, setPaymentTerms] = React.useState(['Advance', 'Net 7', 'Net 15', 'Net 30', 'Net 45', 'Net 60'].includes(cust && cust.terms) ? cust.terms : 'Net 30');
   const [pm, setPm] = React.useState('');
-  const [shipTo, setShipTo] = React.useState(cust ? cust.address : '');
+  const [shipTo, setShipTo] = React.useState((src.implementation && src.implementation.address) || (cust ? cust.address : ''));
 
   const create = () => {
     if (!poRef.trim()) { toast('Customer PO reference is required (the SO unique id)'); return; }
@@ -804,7 +870,9 @@ function ConvertToSOModal({ src, margin, onClose }) {
       customer_id: src.customer_id, customer_po: poRef.trim(), date, expected,
       priority, order_type: orderType, pm, ship_to: shipTo,
       payment_terms: paymentTerms, status: 'Pending Approval',
-      lines, notes: src.notes || `Raised from inquiry ${src.src_no} · expected margin ${pct1(margin.marginPct)}`, extra: {},
+      lines, notes: src.notes || `Raised from inquiry ${src.src_no} · expected margin ${pct1(margin.marginPct)}`,
+      // Carry the implementation brief (supervisor, site, hourly rate, BOQ) into the SO.
+      extra: src.implementation ? { implementation: src.implementation } : {},
     };
     mutate(s => ({
       ...s,
@@ -851,7 +919,7 @@ function ConvertToSOModal({ src, margin, onClose }) {
         <div className="field">
           <label className="field-label">Order Type</label>
           <select className="select" value={orderType} onChange={e => setOrderType(e.target.value)}>
-            <option>Supply</option><option>Supply + Implementation</option><option>Service / AMC</option>
+            <option>Supply</option><option>Supply + Implementation</option><option>Service / Implementation</option>
           </select>
         </div>
       </div>

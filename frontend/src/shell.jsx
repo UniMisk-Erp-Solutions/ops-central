@@ -94,8 +94,8 @@ function Topbar({ onOpenTweaks }) {
   const realUser = getUser(realUserId);           // who is actually logged in
   const isAdmin = realUser && realUser.role === 'Org Admin';
   const impersonating = currentUser !== realUserId;
-  // Filter notifications to current role
-  const myNotifs = state.notifications.filter(n => !n.role || n.role === (u && u.role));
+  // Filter notifications to the current role OR a specific assigned user.
+  const myNotifs = state.notifications.filter(n => (!n.role && !n.user_id) || (n.role && n.role === (u && u.role)) || (n.user_id && n.user_id === currentUser));
   const unread = myNotifs.filter(n => !n.read).length;
 
   // Admin impersonation for flow testing — change persona AND jump to that
@@ -206,8 +206,8 @@ function Topbar({ onOpenTweaks }) {
 }
 
 function NotificationsDrawer({ onClose, role }) {
-  const { state, mutate, navigate } = useStore();
-  const items = state.notifications.filter(n => !n.role || n.role === role);
+  const { state, mutate, navigate, currentUser } = useStore();
+  const items = state.notifications.filter(n => (!n.role && !n.user_id) || (n.role && n.role === role) || (n.user_id && n.user_id === currentUser));
   return (
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: 80 }} onClick={onClose}/>

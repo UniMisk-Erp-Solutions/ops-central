@@ -7,7 +7,11 @@ function SalesOrdersList() {
   const [filter, setFilter] = React.useState('all');
   const [search, setSearch] = React.useState('');
 
-  const filtered = state.sales_orders.filter(s => {
+  // A Supervisor only ever sees the SOs whose implementation is assigned to them.
+  const visibleSOs = role === 'Supervisor'
+    ? state.sales_orders.filter(s => s.extra && s.extra.implementation && s.extra.implementation.supervisor_id === currentUser)
+    : state.sales_orders;
+  const filtered = visibleSOs.filter(s => {
     if (filter === 'open' && ['Closed','Fully Paid','Cancelled'].includes(s.status)) return false;
     if (filter === 'hold' && !s.on_hold) return false;
     if (filter === 'overdue' && !(s.days_overdue > 0)) return false;
@@ -21,11 +25,11 @@ function SalesOrdersList() {
   });
 
   const tabs = [
-    { id: 'all', label: 'All', count: state.sales_orders.length },
-    { id: 'open', label: 'Open', count: state.sales_orders.filter(s => !['Closed','Fully Paid','Cancelled'].includes(s.status)).length },
-    { id: 'hold', label: 'On Hold', count: state.sales_orders.filter(s => s.on_hold).length },
-    { id: 'overdue', label: 'Overdue', count: state.sales_orders.filter(s => s.days_overdue > 0).length },
-    { id: 'closed', label: 'Closed', count: state.sales_orders.filter(s => ['Closed','Fully Paid'].includes(s.status)).length },
+    { id: 'all', label: 'All', count: visibleSOs.length },
+    { id: 'open', label: 'Open', count: visibleSOs.filter(s => !['Closed','Fully Paid','Cancelled'].includes(s.status)).length },
+    { id: 'hold', label: 'On Hold', count: visibleSOs.filter(s => s.on_hold).length },
+    { id: 'overdue', label: 'Overdue', count: visibleSOs.filter(s => s.days_overdue > 0).length },
+    { id: 'closed', label: 'Closed', count: visibleSOs.filter(s => ['Closed','Fully Paid'].includes(s.status)).length },
   ];
 
   return (
@@ -346,7 +350,7 @@ function SalesOrderNew() {
                 <div className="field">
                   <label className="field-label">Order Type</label>
                   <select className="select" value={orderType} onChange={e => setOrderType(e.target.value)}>
-                    <option>Supply</option><option>Supply + Implementation</option><option>Service / AMC</option>
+                    <option>Supply</option><option>Supply + Implementation</option><option>Service / Implementation</option>
                   </select>
                 </div>
               </div>
@@ -914,6 +918,26 @@ function SalesOrderDetail({ soId }) {
                 </div>
               </div>
             </div>
+            {so.extra && so.extra.implementation && (() => {
+              const im = so.extra.implementation;
+              const sup = getUser(im.supervisor_id);
+              return (
+                <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
+                  <div className="card-header"><h3 className="card-title">Implementation</h3><span className="badge accent dot">{so.order_type}</span></div>
+                  <div className="card-body">
+                    <div className="dl">
+                      <dt>Supervisor</dt><dd>{sup ? <><Avatar user={sup} size={18}/> {sup.name}</> : 'Unassigned'}</dd>
+                      <dt>Hourly rate</dt><dd className="mono">{inr(im.hourly_rate || 0)}/hr</dd>
+                      <dt>Hours</dt><dd className="mono">{im.hours || 0}</dd>
+                      <dt>Implementation value</dt><dd className="mono"><strong>{inr((im.hourly_rate || 0) * (im.hours || 0))}</strong></dd>
+                      {im.address && <><dt>Site address</dt><dd>{im.address}</dd></>}
+                      {im.description && <><dt>Scope</dt><dd>{im.description}</dd></>}
+                      <dt>BOQ status</dt><dd><span className="badge dot">{im.status || 'BOQ Pending'}</span> · {(im.boq || []).length} item(s)</dd>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
             {(so.pool_alloc || []).length > 0 && (
               <div className="card" style={{ borderLeft: '3px solid var(--success)' }}>
                 <div className="card-header"><h3 className="card-title">♻ Reused from Master Surplus Pool</h3></div>
