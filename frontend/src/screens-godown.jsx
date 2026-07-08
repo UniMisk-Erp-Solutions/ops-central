@@ -453,7 +453,9 @@ function VGImplPanel({ so }) {
     const required = Number(b.qty) || 0;
     const received = b.product_id ? (recvByProd[b.product_id] || 0) : required;
     const used = usedByBoq[b.id] || 0;
-    return { ...b, required, received, used, onSite: Math.max(0, received - used), procurable: !!b.product_id };
+    // Once Purchase hands the item over, the supervisor has the full qty on site.
+    const base = b.sent ? required : received;
+    return { ...b, required, received, used, onSite: Math.max(0, base - used), procurable: !!b.product_id, sent: !!b.sent };
   });
 
   const updImpl = (patch, action, notifs) => mutate(s => ({
@@ -500,6 +502,23 @@ function VGImplPanel({ so }) {
     if (window.autoInvoiceSO) window.autoInvoiceSO(so.id, { mutate, toast: null, currentUser, getUser, getProduct });
     toast(`Implementation done · ${totalHours}h billed to the client`, 'success');
   };
+  // Purchase hands a BOQ item over to the supervisor → Fulfilled + supervisor notified.
+  const sendToSupervisor = (b) => {
+    updImpl({ boq: boq.map(x => x.id === b.id ? { ...x, sent: true } : x) }, 'boq-sent', [{ id: 'n-boqs-' + Date.now(), kind: 'so', text: `${so.so_no}: ${b.qty}× ${b.name} sent to supervisor · ready to use on site`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
+    toast(`${b.name} sent to supervisor`, 'success');
+  };
+  const editBoqQty = (b, v) => updImpl({ boq: boq.map(x => x.id === b.id ? { ...x, qty: Math.max(0, Number(v) || 0) } : x) }, 'boq-qty');
+  const removeBoq = (b) => updImpl({ boq: boq.filter(x => x.id !== b.id) }, 'boq-remove');
+  const [pAddSearch, setPAddSearch] = React.useState('');
+  const [pAddQty, setPAddQty] = React.useState(1);
+  const pAddResults = pAddSearch.trim() ? state.products.filter(p => `${p.name} ${p.code}`.toLowerCase().includes(pAddSearch.trim().toLowerCase())).slice(0, 5) : [];
+  const purchaseAddBoq = (product) => {
+    const name = product ? product.name : pAddSearch.trim();
+    if (!name) { toast('Enter an item to add'); return; }
+    updImpl({ boq: [...boq, { id: 'b' + Date.now(), product_id: product ? product.id : null, name, qty: Math.max(1, Number(pAddQty) || 1), uom: product ? product.uom || '' : '' }] }, 'boq-add', [{ id: 'n-boqa-' + Date.now(), kind: 'so', text: `${so.so_no}: ${name} added to the site BOQ`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
+    setPAddSearch(''); setPAddQty(1);
+    toast(`${name} added to BOQ`, 'success');
+  };
   const openReqs = requests.filter(r => r.status !== 'Fulfilled');
   const isDone = im && im.status === 'Done';
   return (
@@ -514,18 +533,33 @@ function VGImplPanel({ so }) {
       <div className="card-body flush">
         {rows.length === 0 ? <div className="empty">No BOQ items yet — the supervisor prepares the BOQ on the inquiry.</div> : (
           <table className="t">
-            <thead><tr><th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Used</th><th className="num">On site</th><th>Status</th></tr></thead>
+            <thead><tr><th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
             <tbody>{rows.map(r => (
               <tr key={r.id}>
                 <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}</td>
-                <td className="num">{r.required}</td>
+                <td className="num">{canFulfil && !r.sent ? <input type="number" min="0" className="input mono" value={r.qty} onChange={e => editBoqQty(r, e.target.value)} style={{ width: 56, height: 24, textAlign: 'right' }}/> : r.required}</td>
                 <td className="num">{r.procurable ? r.received : <span className="muted">—</span>}</td>
                 <td className="num">{r.used || <span className="muted">0</span>}</td>
                 <td className="num"><strong style={{ color: r.onSite > 0 ? 'var(--success)' : 'var(--text-muted)' }}>{r.onSite}</strong></td>
-                <td>{r.procurable && r.received < r.required ? <span className="badge warning dot">Procuring</span> : r.onSite > 0 ? <span className="badge success dot">On site</span> : r.used >= r.required && r.required > 0 ? <span className="badge dot">Consumed</span> : <span className="badge dot">—</span>}</td>
+                <td>{r.sent ? <span className="badge success dot">Fulfilled</span> : r.procurable && r.received < r.required ? <span className="badge warning dot">Procuring</span> : r.onSite > 0 ? <span className="badge success dot">On site</span> : r.used >= r.required && r.required > 0 ? <span className="badge dot">Consumed</span> : <span className="badge dot">Ready</span>}</td>
+                {canFulfil && <td style={{ whiteSpace: 'nowrap' }}>
+                  {!r.sent
+                    ? <><button className="btn btn-sm btn-primary" title="Hand this item over to the supervisor" onClick={() => sendToSupervisor(r)}><Icon name="arrowRight" size={11}/>Send to supervisor</button><button className="btn btn-ghost btn-sm" title="Remove" onClick={() => removeBoq(r)}><Icon name="x" size={11} color="var(--danger)"/></button></>
+                    : <span className="tiny muted">✓ with supervisor</span>}
+                </td>}
               </tr>
             ))}</tbody>
           </table>
+        )}
+        {canFulfil && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--border)' }}>
+            <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 0 }}>
+              <input className="input" placeholder="Add an item to the site BOQ (search or type)…" value={pAddSearch} onChange={e => setPAddSearch(e.target.value)} style={{ width: '100%' }}/>
+              {pAddResults.length > 0 && <div style={{ position: 'absolute', zIndex: 20, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, marginTop: 2, width: '100%' }}>{pAddResults.map(p => <div key={p.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => purchaseAddBoq(p)}><div className="grow small">{p.name}<span className="tiny muted mono"> · {p.code}</span></div><Icon name="plus" size={11}/></div>)}</div>}
+            </div>
+            <input type="number" min="1" className="input mono" value={pAddQty} onChange={e => setPAddQty(e.target.value)} style={{ width: 64 }} title="Qty"/>
+            <button className="btn btn-sm" onClick={() => purchaseAddBoq(null)}><Icon name="plus" size={11}/>Add item</button>
+          </div>
         )}
       </div>
 
