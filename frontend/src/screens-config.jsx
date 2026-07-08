@@ -1111,7 +1111,9 @@ function ReportsPane() {
 function UsersPane() {
   const { state, createUser, setUserActive, removeUser, realUserId } = useStore();
   const toast = useToast();
-  const roles = (state.config.roles && state.config.roles.length) ? state.config.roles : Object.keys(PERMISSIONS);
+  // Always include every defined role (code PERMISSIONS + any saved custom roles),
+  // so newly added roles like Supervisor always appear even if a roles list was saved.
+  const roles = [...new Set([...(state.config.roles || []), ...Object.keys(PERMISSIONS), ...(state.config.permissions ? Object.keys(state.config.permissions) : [])])];
   const [form, setForm] = React.useState({ name: '', email: '', password: '', role: 'Sales' });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
