@@ -245,6 +245,7 @@ function VGAddFromPoolPanel({ so }) {
   const poolByProd = {};
   (state.pool || []).forEach(p => { const b = (poolByProd[p.product_id] = poolByProd[p.product_id] || { qty: 0, srcs: [] }); b.qty += Number(p.qty) || 0; b.srcs.push({ id: p.id, qty: Number(p.qty) || 0, date: p.received_date }); });
   const need = {}; (so.lines || []).forEach(l => (l.components || []).forEach(c => { need[c.product_id] = (need[c.product_id] || 0) + (c.qty || 0) * (l.bundle_qty || 1); }));
+  const _impl = window.soImplReq ? window.soImplReq(so) : {}; Object.keys(_impl).forEach(pid => { need[pid] = (need[pid] || 0) + _impl[pid]; });   // include implementation BOQ
   // What this SO already holds (GRN-accepted + committed pool − diverted), so we
   // only suggest filling the real remaining gap, ranked by cost saved.
   const soPoIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));

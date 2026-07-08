@@ -250,11 +250,16 @@ function SOVendorPOsTab({ so }) {
   const marginPct = projectSell > 0 ? (projectMargin / projectSell) * 100 : 0;
   const payableBooked = pos.reduce((s, p) => s + viFor(p.id).filter(v => v.status === 'Booked').reduce((a, v) => a + (v.amount || 0), 0), 0);
 
+  // Supply vs Implementation classification for the split view.
+  const supplySet = new Set(); (so.lines || []).forEach(l => (l.components || []).forEach(c => supplySet.add(c.product_id)));
+  const implReq = soImplReq(so); const implSet = new Set(Object.keys(implReq));
+  const im = so.extra && so.extra.implementation;
+  const typeOf = (pid) => (supplySet.has(pid) && implSet.has(pid)) ? 'Both' : implSet.has(pid) ? 'Impl' : 'Supply';
   const prodIds = Array.from(new Set([...Object.keys(required), ...Object.keys(onPOByProd), ...Object.keys(receivedByProd)]));
   const track = prodIds.map(pid => {
     const p = getProduct(pid);
     const req = required[pid] || 0, onPO = onPOByProd[pid] || 0, recv = receivedByProd[pid] || 0;
-    return { pid, p, req, onPO, recv, remaining: Math.max(0, onPO - recv), shortfall: Math.max(0, req - onPO) };
+    return { pid, p, req, onPO, recv, remaining: Math.max(0, onPO - recv), shortfall: Math.max(0, req - onPO), type: typeOf(pid) };
   }).filter(r => !q || (r.p && (r.p.name.toLowerCase().includes(q.toLowerCase()) || (r.p.code || '').toLowerCase().includes(q.toLowerCase()))));
   const shortfalls = track.filter(r => r.shortfall > 0).length;
   const awaiting = track.filter(r => r.remaining > 0).length;
@@ -442,11 +447,12 @@ function SOVendorPOsTab({ so }) {
         </div>
         <div className="card-body flush">
           <table className="t">
-            <thead><tr><th>Item</th><th className="num">Required</th><th className="num">On PO</th><th className="num">Received</th><th className="num">Remaining</th><th>Status</th></tr></thead>
+            <thead><tr><th>Item</th>{im && <th>For</th>}<th className="num">Required</th><th className="num">On PO</th><th className="num">Received</th><th className="num">Remaining</th><th>Status</th></tr></thead>
             <tbody>
               {track.map(r => (
                 <tr key={r.pid}>
                   <td>{r.p ? r.p.name : r.pid}<div className="tiny muted mono">{r.p ? r.p.code : ''}</div></td>
+                  {im && <td><span className={`badge tiny ${r.type === 'Supply' ? '' : 'accent'}`}>{r.type}</span></td>}
                   <td className="num">{r.req}</td>
                   <td className="num">{r.onPO}{r.shortfall > 0 && <div className="tiny" style={{ color: 'var(--warning)' }}>short {r.shortfall}</div>}</td>
                   <td className="num">{r.recv}</td>
@@ -454,11 +460,48 @@ function SOVendorPOsTab({ so }) {
                   <td>{r.shortfall > 0 ? <span className="badge warning dot">Add PO</span> : r.remaining > 0 ? <span className="badge accent dot">Awaiting</span> : <span className="badge success dot">Complete</span>}</td>
                 </tr>
               ))}
-              {track.length === 0 && <tr><td colSpan="6"><div className="empty">No items match.</div></td></tr>}
+              {track.length === 0 && <tr><td colSpan={im ? 7 : 6}><div className="empty">No items match.</div></td></tr>}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Implementation BOQ — the site items the supervisor listed, tracked have vs remaining */}
+      {im && (() => {
+        const boq = im.boq || [];
+        const rows = boq.map(b => {
+          const req = Number(b.qty) || 0;
+          const recv = b.product_id ? (receivedByProd[b.product_id] || 0) : 0;
+          const onPO = b.product_id ? (onPOByProd[b.product_id] || 0) : 0;
+          return { ...b, req, recv, onPO, remaining: Math.max(0, req - recv), procurable: !!b.product_id };
+        });
+        const done = rows.filter(r => !r.procurable || r.remaining <= 0).length;
+        return (
+          <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
+            <div className="card-header">
+              <div><h3 className="card-title">Implementation BOQ</h3><span className="card-sub">{im.status || 'BOQ Pending'} · {done}/{rows.length} handled · billed {inr(im.hourly_rate || 0)}/hr (hours from daily logs)</span></div>
+            </div>
+            <div className="card-body flush">
+              {rows.length === 0 ? <div className="empty">No BOQ yet — the supervisor prepares it on the inquiry.</div> : (
+                <table className="t">
+                  <thead><tr><th>Site item</th><th className="num">Required</th><th className="num">On PO</th><th className="num">Received</th><th className="num">Remaining</th><th>Status</th></tr></thead>
+                  <tbody>{rows.map(r => (
+                    <tr key={r.id}>
+                      <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service / manual</span>}{r.uom ? <span className="tiny muted"> · {r.uom}</span> : ''}</td>
+                      <td className="num">{r.req}</td>
+                      <td className="num">{r.procurable ? r.onPO : <span className="muted">—</span>}</td>
+                      <td className="num">{r.procurable ? r.recv : <span className="muted">—</span>}</td>
+                      <td className="num">{r.procurable ? (r.remaining > 0 ? <strong style={{ color: 'var(--accent)' }}>{r.remaining}</strong> : <span className="muted">0</span>) : <span className="muted">n/a</span>}</td>
+                      <td>{!r.procurable ? <span className="badge dot">Tracked on site</span> : r.remaining <= 0 ? <span className="badge success dot">Received</span> : r.onPO >= r.req ? <span className="badge accent dot">Awaiting</span> : <span className="badge warning dot">Procure</span>}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </div>
+            <div className="card-body" style={{ borderTop: '1px solid var(--border)' }}><div className="tiny muted">Catalogue BOQ items are procured with the supply items above (pool-first, then vendor PO). Service/manual items (labour, etc.) are tracked via the supervisor's daily usage. Everything lands in the same Virtual Godown.</div></div>
+          </div>
+        );
+      })()}
 
       {showSplit && <SplitAllocatorModal so={so} onClose={() => setShowSplit(false)}/>}
       {receivePo && <ReceiveModal po={receivePo} onClose={() => setReceivePo(null)}/>}
@@ -1604,16 +1647,30 @@ function soSourcing(state, soId) {
 }
 
 // True required component qty for an SO (bundle_qty × component qty), per product.
+// Implementation BOQ requirement (catalogue items only — custom/service items
+// have no product_id and are not procured through vendor POs). product_id → qty.
+function soImplReq(so) {
+  const m = {};
+  const boq = (so.extra && so.extra.implementation && so.extra.implementation.boq) || [];
+  boq.forEach(b => { if (b.product_id) m[b.product_id] = (m[b.product_id] || 0) + (Number(b.qty) || 0); });
+  return m;
+}
+window.soImplReq = soImplReq;
+
 function soReqComponents(so) {
   const m = {};
   (so.lines || []).forEach(l => (l.components || []).forEach(c => {
     m[c.product_id] = (m[c.product_id] || 0) + (c.qty || 0) * (l.bundle_qty || 1);
   }));
+  // Implementation BOQ (catalogue items) is procured alongside supply on the same SO.
+  const impl = soImplReq(so);
+  Object.keys(impl).forEach(pid => { m[pid] = (m[pid] || 0) + impl[pid]; });
   // Subtract anything fulfilled from the Master Surplus Pool so we never re-buy it.
   (so.pool_alloc || []).forEach(a => { if (m[a.product_id] != null) m[a.product_id] = m[a.product_id] - (Number(a.qty) || 0); });
   Object.keys(m).forEach(k => { if (m[k] <= 0) delete m[k]; });
   return m;
 }
+window.soReqComponents = soReqComponents;
 
 // Group an SO's required components by the vendor chosen during sourcing, each at
 // the sourced unit price. Components without a saved pick fall back to the
