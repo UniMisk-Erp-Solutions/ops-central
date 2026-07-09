@@ -449,13 +449,19 @@ function VGImplPanel({ so }) {
   const usedByBoq = {};
   logs.forEach(lg => (lg.items || []).forEach(it => { usedByBoq[it.boq_id] = (usedByBoq[it.boq_id] || 0) + (Number(it.qty) || 0); }));
   const totalHours = logs.reduce((a, l) => a + (Number(l.hours) || 0), 0);
+  // Qty already handed to the supervisor. (Legacy rows used a boolean `sent`.)
+  const sentOf = (b) => { const n = Number(b.sent_qty); if (n > 0) return n; return b.sent === true ? (Number(b.qty) || 0) : 0; };
   const rows = boq.map(b => {
     const required = Number(b.qty) || 0;
-    const received = b.product_id ? (recvByProd[b.product_id] || 0) : required;
+    const procurable = !!b.product_id;
+    const received = procurable ? (recvByProd[b.product_id] || 0) : 0;   // GRN-accepted by Purchase
+    const sentQty = sentOf(b);
     const used = usedByBoq[b.id] || 0;
-    // Once Purchase hands the item over, the supervisor has the full qty on site.
-    const base = b.sent ? required : received;
-    return { ...b, required, received, used, onSite: Math.max(0, base - used), procurable: !!b.product_id, sent: !!b.sent };
+    // Purchase can only hand over what it has actually received and not yet sent.
+    const available = procurable ? Math.max(0, received - sentQty) : 0;
+    // The supervisor only holds what was handed to them (service items are on-site by nature).
+    const onSite = procurable ? Math.max(0, sentQty - used) : Math.max(0, required - used);
+    return { ...b, required, procurable, received, sentQty, used, available, onSite };
   });
 
   const updImpl = (patch, action, notifs) => mutate(s => ({
@@ -502,10 +508,17 @@ function VGImplPanel({ so }) {
     if (window.autoInvoiceSO) window.autoInvoiceSO(so.id, { mutate, toast: null, currentUser, getUser, getProduct });
     toast(`Implementation done · ${totalHours}h billed to the client`, 'success');
   };
-  // Purchase hands a BOQ item over to the supervisor → Fulfilled + supervisor notified.
-  const sendToSupervisor = (b) => {
-    updImpl({ boq: boq.map(x => x.id === b.id ? { ...x, sent: true } : x) }, 'boq-sent', [{ id: 'n-boqs-' + Date.now(), kind: 'so', text: `${so.so_no}: ${b.qty}× ${b.name} sent to supervisor · ready to use on site`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
-    toast(`${b.name} sent to supervisor`, 'success');
+  // Purchase hands over ONLY what it has received (GRN) and not yet sent. Qty-based.
+  const [sendQty, setSendQty] = React.useState({});
+  const sendToSupervisor = (r) => {
+    const raw = (sendQty[r.id] === undefined || sendQty[r.id] === '') ? r.available : Number(sendQty[r.id]);
+    const n = Math.max(0, Math.min(Number(raw) || 0, r.available));
+    if (n <= 0) { toast('Nothing available to send — mark the item received first'); return; }
+    const next = r.sentQty + n;
+    updImpl({ boq: boq.map(x => x.id === r.id ? { ...x, sent_qty: next, sent: next >= (Number(x.qty) || 0) } : x) }, 'boq-sent',
+      [{ id: 'n-boqs-' + Date.now(), kind: 'so', text: `${so.so_no}: ${n}× ${r.name} sent to you · ready to use on site`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
+    setSendQty(m => ({ ...m, [r.id]: '' }));
+    toast(`${n}× ${r.name} sent to supervisor`, 'success');
   };
   const editBoqQty = (b, v) => updImpl({ boq: boq.map(x => x.id === b.id ? { ...x, qty: Math.max(0, Number(v) || 0) } : x) }, 'boq-qty');
   const removeBoq = (b) => updImpl({ boq: boq.filter(x => x.id !== b.id) }, 'boq-remove');
@@ -533,19 +546,31 @@ function VGImplPanel({ so }) {
       <div className="card-body flush">
         {rows.length === 0 ? <div className="empty">No BOQ items yet — the supervisor prepares the BOQ on the inquiry.</div> : (
           <table className="t">
-            <thead><tr><th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
+            <thead><tr><th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Sent</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
             <tbody>{rows.map(r => (
               <tr key={r.id}>
                 <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}</td>
-                <td className="num">{canFulfil && !r.sent ? <input type="number" min="0" className="input mono" value={r.qty} onChange={e => editBoqQty(r, e.target.value)} style={{ width: 56, height: 24, textAlign: 'right' }}/> : r.required}</td>
+                <td className="num">{canFulfil && r.sentQty === 0 ? <input type="number" min="0" className="input mono" value={r.qty} onChange={e => editBoqQty(r, e.target.value)} style={{ width: 56, height: 24, textAlign: 'right' }}/> : r.required}</td>
                 <td className="num">{r.procurable ? r.received : <span className="muted">—</span>}</td>
+                <td className="num">{r.procurable ? (r.sentQty || <span className="muted">0</span>) : <span className="muted">—</span>}</td>
                 <td className="num">{r.used || <span className="muted">0</span>}</td>
                 <td className="num"><strong style={{ color: r.onSite > 0 ? 'var(--success)' : 'var(--text-muted)' }}>{r.onSite}</strong></td>
-                <td>{r.sent ? <span className="badge success dot">Fulfilled</span> : r.procurable && r.received < r.required ? <span className="badge warning dot">Procuring</span> : r.onSite > 0 ? <span className="badge success dot">On site</span> : r.used >= r.required && r.required > 0 ? <span className="badge dot">Consumed</span> : <span className="badge dot">Ready</span>}</td>
+                <td>{!r.procurable
+                  ? (r.required > 0 && r.used >= r.required ? <span className="badge dot">Consumed</span> : <span className="badge success dot">On site</span>)
+                  : r.required > 0 && r.sentQty >= r.required ? <span className="badge success dot">Fulfilled</span>
+                    : r.sentQty > 0 ? <span className="badge accent dot">Partially sent {r.sentQty}/{r.required}</span>
+                      : r.available > 0 ? <span className="badge accent dot">Ready to send</span>
+                        : <span className="badge warning dot">Procuring</span>}</td>
                 {canFulfil && <td style={{ whiteSpace: 'nowrap' }}>
-                  {!r.sent
-                    ? <><button className="btn btn-sm btn-primary" title="Hand this item over to the supervisor" onClick={() => sendToSupervisor(r)}><Icon name="arrowRight" size={11}/>Send to supervisor</button><button className="btn btn-ghost btn-sm" title="Remove" onClick={() => removeBoq(r)}><Icon name="x" size={11} color="var(--danger)"/></button></>
-                    : <span className="tiny muted">✓ with supervisor</span>}
+                  {r.procurable && r.available > 0 ? (
+                    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                      <input type="number" min="1" max={r.available} className="input mono" placeholder={String(r.available)} value={sendQty[r.id] || ''} onChange={e => setSendQty(m => ({ ...m, [r.id]: e.target.value }))} style={{ width: 52, height: 24, textAlign: 'right' }} title={`Up to ${r.available} available`}/>
+                      <button className="btn btn-sm btn-primary" title="Send received stock to the supervisor" onClick={() => sendToSupervisor(r)}><Icon name="arrowRight" size={11}/>Send</button>
+                    </span>
+                  ) : r.procurable && r.required > 0 && r.sentQty >= r.required ? <span className="tiny muted">✓ with supervisor</span>
+                    : r.procurable ? <span className="tiny muted">receive first</span>
+                      : <span className="tiny muted">—</span>}
+                  {r.sentQty === 0 && <button className="btn btn-ghost btn-sm" title="Remove from BOQ" onClick={() => removeBoq(r)}><Icon name="x" size={11} color="var(--danger)"/></button>}
                 </td>}
               </tr>
             ))}</tbody>
