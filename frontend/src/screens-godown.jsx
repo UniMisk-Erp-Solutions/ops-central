@@ -444,24 +444,32 @@ function VGImplPanel({ so }) {
   const sup = getUser(im && im.supervisor_id);
 
   const soPoIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
-  const recvByProd = {};
-  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { recvByProd[it.product_id] = (recvByProd[it.product_id] || 0) + (it.accepted || 0); }); });
+  const grnByProd = {};
+  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { grnByProd[it.product_id] = (grnByProd[it.product_id] || 0) + (it.accepted || 0); }); });
+  // Pool stock committed to this SO ("Add from Master Pool") is already in hand for
+  // the site, so it counts as received AND as handed over → the item reads Fulfilled.
+  const poolAllocByProd = {};
+  (so.pool_alloc || []).forEach(a => { poolAllocByProd[a.product_id] = (poolAllocByProd[a.product_id] || 0) + (Number(a.qty) || 0); });
   const usedByBoq = {};
   logs.forEach(lg => (lg.items || []).forEach(it => { usedByBoq[it.boq_id] = (usedByBoq[it.boq_id] || 0) + (Number(it.qty) || 0); }));
   const totalHours = logs.reduce((a, l) => a + (Number(l.hours) || 0), 0);
-  // Qty already handed to the supervisor. (Legacy rows used a boolean `sent`.)
+  // Qty manually handed to the supervisor. (Legacy rows used a boolean `sent`.)
   const sentOf = (b) => { const n = Number(b.sent_qty); if (n > 0) return n; return b.sent === true ? (Number(b.qty) || 0) : 0; };
   const rows = boq.map(b => {
     const required = Number(b.qty) || 0;
     const procurable = !!b.product_id;
-    const received = procurable ? (recvByProd[b.product_id] || 0) : 0;   // GRN-accepted by Purchase
-    const sentQty = sentOf(b);
+    const grn = procurable ? (grnByProd[b.product_id] || 0) : 0;        // GRN-accepted by Purchase
+    const fromPool = procurable ? (poolAllocByProd[b.product_id] || 0) : 0;  // taken from the Master Pool
+    const received = grn + fromPool;
+    const sentManual = sentOf(b);
+    // Pool-allocated stock needs no handover — it's already available to the site.
+    const sentQty = procurable ? sentManual + fromPool : sentManual;
     const used = usedByBoq[b.id] || 0;
-    // Purchase can only hand over what it has actually received and not yet sent.
-    const available = procurable ? Math.max(0, received - sentQty) : 0;
-    // The supervisor only holds what was handed to them (service items are on-site by nature).
+    // Purchase can only hand over GRN stock it has received and not yet sent.
+    const available = procurable ? Math.max(0, grn - sentManual) : 0;
+    // The supervisor only holds what reached them (service items are on-site by nature).
     const onSite = procurable ? Math.max(0, sentQty - used) : Math.max(0, required - used);
-    return { ...b, required, procurable, received, sentQty, used, available, onSite };
+    return { ...b, required, procurable, grn, fromPool, received, sentManual, sentQty, used, available, onSite };
   });
 
   const updImpl = (patch, action, notifs) => mutate(s => ({
@@ -508,17 +516,30 @@ function VGImplPanel({ so }) {
     if (window.autoInvoiceSO) window.autoInvoiceSO(so.id, { mutate, toast: null, currentUser, getUser, getProduct });
     toast(`Implementation done · ${totalHours}h billed to the client`, 'success');
   };
-  // Purchase hands over ONLY what it has received (GRN) and not yet sent. Qty-based.
-  const [sendQty, setSendQty] = React.useState({});
-  const sendToSupervisor = (r) => {
-    const raw = (sendQty[r.id] === undefined || sendQty[r.id] === '') ? r.available : Number(sendQty[r.id]);
-    const n = Math.max(0, Math.min(Number(raw) || 0, r.available));
-    if (n <= 0) { toast('Nothing available to send — mark the item received first'); return; }
-    const next = r.sentQty + n;
-    updImpl({ boq: boq.map(x => x.id === r.id ? { ...x, sent_qty: next, sent: next >= (Number(x.qty) || 0) } : x) }, 'boq-sent',
-      [{ id: 'n-boqs-' + Date.now(), kind: 'so', text: `${so.so_no}: ${n}× ${r.name} sent to you · ready to use on site`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
-    setSendQty(m => ({ ...m, [r.id]: '' }));
-    toast(`${n}× ${r.name} sent to supervisor`, 'success');
+  // Purchase ticks the received items and sends them across in one action.
+  const [sel, setSel] = React.useState({});
+  const sendable = rows.filter(r => r.available > 0);
+  const allTicked = sendable.length > 0 && sendable.every(r => sel[r.id] != null);
+  const toggleAllSend = () => setSel(allTicked ? {} : Object.fromEntries(sendable.map(r => [r.id, r.available])));
+  const toggleSend = (r) => setSel(m => { const n = { ...m }; if (n[r.id] != null) delete n[r.id]; else n[r.id] = r.available; return n; });
+  const setSendQty = (r, v) => setSel(m => ({ ...m, [r.id]: Math.max(0, Math.min(Number(v) || 0, r.available)) }));
+  const picked = rows.filter(r => sel[r.id] != null && Number(sel[r.id]) > 0);
+  const sendSelected = () => {
+    if (!picked.length) { toast('Tick the received items you are sending'); return; }
+    let units = 0;
+    const nextBoq = boq.map(x => {
+      const r = picked.find(p => p.id === x.id);
+      if (!r) return x;
+      const n = Math.max(0, Math.min(Number(sel[x.id]) || 0, r.available));
+      if (n <= 0) return x;
+      units += n;
+      const next = r.sentManual + n;
+      return { ...x, sent_qty: next, sent: (next + r.fromPool) >= (Number(x.qty) || 0) };
+    });
+    updImpl({ boq: nextBoq }, 'boq-sent',
+      [{ id: 'n-boqs-' + Date.now(), kind: 'so', text: `${so.so_no}: ${units} unit(s) across ${picked.length} item(s) sent to you · ready to use on site`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
+    setSel({});
+    toast(`${units} unit(s) sent to supervisor`, 'success');
   };
   const editBoqQty = (b, v) => updImpl({ boq: boq.map(x => x.id === b.id ? { ...x, qty: Math.max(0, Number(v) || 0) } : x) }, 'boq-qty');
   const removeBoq = (b) => updImpl({ boq: boq.filter(x => x.id !== b.id) }, 'boq-remove');
@@ -540,18 +561,25 @@ function VGImplPanel({ so }) {
         <div><h3 className="card-title">Implementation — site tracking</h3><span className="card-sub">Supervisor: {sup ? sup.name : '—'} · {totalHours}h logged · billed {inr(im ? im.hourly_rate || 0 : 0)}/hr = {inr((im ? im.hourly_rate || 0 : 0) * totalHours)}</span></div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <span className="badge accent dot">{im ? im.status || 'BOQ Pending' : ''}</span>
+          {canFulfil && sendable.length > 0 && <button className="btn btn-sm btn-primary" disabled={picked.length === 0} onClick={sendSelected}><Icon name="arrowRight" size={12}/>Send to supervisor ({picked.length})</button>}
           {canLog && !isDone && <button className="btn btn-sm btn-primary" onClick={markDone}><Icon name="check" size={12}/>Mark done &amp; bill</button>}
         </div>
       </div>
       <div className="card-body flush">
         {rows.length === 0 ? <div className="empty">No BOQ items yet — the supervisor prepares the BOQ on the inquiry.</div> : (
           <table className="t">
-            <thead><tr><th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Sent</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
+            <thead><tr>{canFulfil && <th style={{ width: 56 }}><input type="checkbox" checked={allTicked} onChange={toggleAllSend} title="Select all received items to send"/></th>}<th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Sent</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
             <tbody>{rows.map(r => (
               <tr key={r.id}>
+                {canFulfil && <td>{r.available > 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="checkbox" checked={sel[r.id] != null} onChange={() => toggleSend(r)}/>
+                    {sel[r.id] != null && <input type="number" min="0" max={r.available} className="input mono" value={sel[r.id]} onChange={e => setSendQty(r, e.target.value)} style={{ width: 42, height: 22, textAlign: 'right', padding: '0 4px' }}/>}
+                  </div>
+                ) : (r.procurable && r.required > 0 && r.sentQty >= r.required) ? <Icon name="check" size={12} color="var(--success)"/> : <span className="muted tiny">—</span>}</td>}
                 <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}</td>
                 <td className="num">{canFulfil && r.sentQty === 0 ? <input type="number" min="0" className="input mono" value={r.qty} onChange={e => editBoqQty(r, e.target.value)} style={{ width: 56, height: 24, textAlign: 'right' }}/> : r.required}</td>
-                <td className="num">{r.procurable ? r.received : <span className="muted">—</span>}</td>
+                <td className="num">{r.procurable ? <>{r.received}{r.fromPool > 0 && <div className="tiny muted">{r.fromPool} from pool</div>}</> : <span className="muted">—</span>}</td>
                 <td className="num">{r.procurable ? (r.sentQty || <span className="muted">0</span>) : <span className="muted">—</span>}</td>
                 <td className="num">{r.used || <span className="muted">0</span>}</td>
                 <td className="num"><strong style={{ color: r.onSite > 0 ? 'var(--success)' : 'var(--text-muted)' }}>{r.onSite}</strong></td>
@@ -562,14 +590,6 @@ function VGImplPanel({ so }) {
                       : r.available > 0 ? <span className="badge accent dot">Ready to send</span>
                         : <span className="badge warning dot">Procuring</span>}</td>
                 {canFulfil && <td style={{ whiteSpace: 'nowrap' }}>
-                  {r.procurable && r.available > 0 ? (
-                    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                      <input type="number" min="1" max={r.available} className="input mono" placeholder={String(r.available)} value={sendQty[r.id] || ''} onChange={e => setSendQty(m => ({ ...m, [r.id]: e.target.value }))} style={{ width: 52, height: 24, textAlign: 'right' }} title={`Up to ${r.available} available`}/>
-                      <button className="btn btn-sm btn-primary" title="Send received stock to the supervisor" onClick={() => sendToSupervisor(r)}><Icon name="arrowRight" size={11}/>Send</button>
-                    </span>
-                  ) : r.procurable && r.required > 0 && r.sentQty >= r.required ? <span className="tiny muted">✓ with supervisor</span>
-                    : r.procurable ? <span className="tiny muted">receive first</span>
-                      : <span className="tiny muted">—</span>}
                   {r.sentQty === 0 && <button className="btn btn-ghost btn-sm" title="Remove from BOQ" onClick={() => removeBoq(r)}><Icon name="x" size={11} color="var(--danger)"/></button>}
                 </td>}
               </tr>
@@ -714,22 +734,27 @@ function VirtualGodownView({ soId, embedded }) {
   (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { recvByProd[it.product_id] = (recvByProd[it.product_id] || 0) + (it.accepted || 0); }); });
   (so.pool_alloc || []).forEach(a => { recvByProd[a.product_id] = (recvByProd[a.product_id] || 0) + (Number(a.qty) || 0); });   // committed pool stock counts as in-hand
   const pooledOut = window.soPoolOut ? window.soPoolOut(so) : {};   // units diverted to the Master Pool
+  // Pool stock COMMITTED to this SO (via "Add from Master Pool"). Merely having a
+  // product sitting in the global Master Pool must NOT count as in-hand here —
+  // that made components show as fulfilled without ever being allocated/received.
+  const poolAllocByProd = {};
+  (so.pool_alloc || []).forEach(a => { poolAllocByProd[a.product_id] = (poolAllocByProd[a.product_id] || 0) + (Number(a.qty) || 0); });
 
   // Pool check + transfer reflection
   const pool = state.pool;
   const enriched = allComponents.map(c => {
     const poolItem = pool.find(p => p.product_id === c.product_id);
-    const poolQty = poolItem ? poolItem.qty : 0;
+    const poolQty = poolItem ? poolItem.qty : 0;              // global availability (informational only)
     const tIn = transferredIn[c.product_id] || 0;
     const tOut = transferredOut[c.product_id] || 0;
-    const fromPool = Math.min(poolQty, c.qty);
-    const toProcure = Math.max(0, c.qty - fromPool - tIn);   // transfer-in reduces fresh procurement
+    const fromPool = poolAllocByProd[c.product_id] || 0;      // allocated to this SO (already inside grossReceived)
+    const toProcure = Math.max(0, c.qty - fromPool - tIn);    // pool alloc + transfer-in reduce fresh procurement
     const product = getProduct(c.product_id) || { name: c.product_id, code: c.product_id };
-    const grossReceived = recvByProd[c.product_id] || 0;     // procured + GRN-accepted into this VG
-    const sentToPool = pooledOut[c.product_id] || 0;         // later diverted to Master Pool
+    const grossReceived = recvByProd[c.product_id] || 0;      // GRN-accepted + committed pool stock
+    const sentToPool = pooledOut[c.product_id] || 0;          // later diverted to Master Pool
     const received = Math.max(0, grossReceived - sentToPool);
-    const available = Math.max(0, fromPool + tIn - tOut);    // pool/transfer stock this VG holds
-    const inHand = Math.max(0, available + received);        // net stock this VG holds for the customer
+    const available = Math.max(0, tIn - tOut);                // transfers only; pool alloc already counted above
+    const inHand = Math.max(0, available + received);         // net stock this VG holds for the customer
     const remaining = Math.max(0, c.qty - grossReceived - available);   // still to physically receive
     return { ...c, product, poolQty, fromPool, toProcure, transferredIn: tIn, transferredOut: tOut, available, received, grossReceived, sentToPool, inHand, remaining };
   });
