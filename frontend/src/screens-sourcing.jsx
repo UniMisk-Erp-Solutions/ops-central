@@ -261,7 +261,7 @@ function SourcingNew() {
     const src = {
       id: 'src-' + Date.now(),
       src_no: `INQ/FY26/${String(1 + (state.sourcings || []).length).padStart(4, '0')}`,
-      customer_id: customer, ref: ref || null, date: TODAY, status: 'Sent to Pre-sales',
+      customer_id: customer, ref: ref || null, date: TODAY, status: implOnly ? 'Sent to Supervisor' : 'Sent to Pre-sales',
       client_req_price: clientReqPrice === '' ? null : Number(clientReqPrice),
       our_price: ourPrice === '' ? null : Number(ourPrice),
       notes: notes || null, created_by: currentUser || null,
@@ -289,11 +289,11 @@ function SourcingNew() {
             <Icon name="chevronLeft" size={12}/> Sourcing
           </div>
           <h1 className="page-title">New Inquiry</h1>
-          <div className="page-sub">Float the customer's requirement to Pre-sales for vendor costing — no commitment yet</div>
+          <div className="page-sub">{implOnly ? 'Implementation only — assign a supervisor to prepare the site BOQ' : "Float the customer's requirement to Pre-sales for vendor costing — no commitment yet"}</div>
         </div>
         <div className="page-actions">
           <button className="btn" onClick={() => navigate('sourcing')}>Cancel</button>
-          <button className="btn btn-primary" disabled={!canSubmit} onClick={submit}>Send to Pre-sales <Icon name="arrowRight" size={13}/></button>
+          <button className="btn btn-primary" disabled={!canSubmit} onClick={submit}>{implOnly ? 'Send to Supervisor' : 'Send to Pre-sales'} <Icon name="arrowRight" size={13}/></button>
         </div>
       </div>
 
@@ -332,6 +332,7 @@ function SourcingNew() {
             </div>
           </div>
 
+          {!implOnly && (
           <div className="card">
             <div className="card-header">
               <h3 className="card-title">Requirement</h3>
@@ -395,6 +396,7 @@ function SourcingNew() {
               )}
             </div>
           </div>
+          )}
 
           <div className="card">
             <div className="form-section">
@@ -446,23 +448,36 @@ function SourcingNew() {
 
           <div className="card">
             <div className="form-section">
-              <div className="form-section-title">Notes for Pre-sales</div>
-              <textarea className="textarea" placeholder="Anything Pre-sales should know (target price, deadline, preferred vendor…)" value={notes} onChange={e => setNotes(e.target.value)}/>
+              <div className="form-section-title">{implOnly ? 'Notes for the Supervisor' : 'Notes for Pre-sales'}</div>
+              <textarea className="textarea" placeholder={implOnly ? 'Anything the supervisor should know (site access, deadline, constraints…)' : 'Anything Pre-sales should know (target price, deadline, preferred vendor…)'} value={notes} onChange={e => setNotes(e.target.value)}/>
             </div>
           </div>
         </div>
 
         <div className="stack" style={{ position: 'sticky', top: 0, alignSelf: 'flex-start' }}>
           <div className="card">
-            <div className="card-header"><h3 className="card-title">Indicative quote</h3></div>
+            <div className="card-header"><h3 className="card-title">{implOnly ? 'Implementation estimate' : 'Indicative quote'}</h3></div>
             <div className="card-body">
-              <div className="dl">
-                <dt>Bundles</dt><dd className="num mono right">{lines.length}</dd>
-                <dt>Indicative sell value</dt><dd className="num mono right">{inr(sell)}</dd>
-                {clientReqPrice !== '' && <><dt>Client's req price</dt><dd className="num mono right">{inr(Number(clientReqPrice))}</dd></>}
-                {ourPrice !== '' && <><dt>Our price (budget)</dt><dd className="num mono right"><strong>{inr(Number(ourPrice))}</strong></dd></>}
-              </div>
-              <div className="tiny muted mt-2">Pre-sales sees the quote budget ({ourPrice !== '' ? 'your "our price"' : 'the indicative total'}) and sources each component from vendors to hit a good margin. Nothing is committed until you raise the Sales Order.</div>
+              {implOnly ? (
+                <>
+                  <div className="dl">
+                    <dt>Hourly rate</dt><dd className="num mono right">{inr(Number(impl.hourly_rate) || 0)}</dd>
+                    <dt>Estimated hours</dt><dd className="num mono right">{Number(impl.hours) || 0}</dd>
+                    <dt>Estimated value</dt><dd className="num mono right"><strong>{inr((Number(impl.hourly_rate) || 0) * (Number(impl.hours) || 0))}</strong></dd>
+                  </div>
+                  <div className="tiny muted mt-2">The supervisor prepares the site BOQ and logs daily hours. The client is billed by the hour — the final value comes from the hours actually logged.</div>
+                </>
+              ) : (
+                <>
+                  <div className="dl">
+                    <dt>Bundles</dt><dd className="num mono right">{lines.length}</dd>
+                    <dt>Indicative sell value</dt><dd className="num mono right">{inr(sell)}</dd>
+                    {clientReqPrice !== '' && <><dt>Client's req price</dt><dd className="num mono right">{inr(Number(clientReqPrice))}</dd></>}
+                    {ourPrice !== '' && <><dt>Our price (budget)</dt><dd className="num mono right"><strong>{inr(Number(ourPrice))}</strong></dd></>}
+                  </div>
+                  <div className="tiny muted mt-2">Pre-sales sees the quote budget ({ourPrice !== '' ? 'your "our price"' : 'the indicative total'}) and sources each component from vendors to hit a good margin. Nothing is committed until you raise the Sales Order.</div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -510,6 +525,8 @@ function SourcingDetail({ srcId }) {
   const margin = computeMargin(src, picks, getProduct);
   const locked = src.status === 'Converted';
   const hasQuotes = (src.quote_vendors || []).length > 0;
+  // Implementation-only inquiries have no supply bundles → no vendor sourcing step.
+  const hasSupply = (src.lines || []).length > 0;
 
   // Per-item vendor options from the candidate set, priced by entered quote
   // (or estimate), cheapest first.
@@ -562,10 +579,10 @@ function SourcingDetail({ srcId }) {
           <div className="page-sub">{cust ? cust.name : '—'}{src.ref ? ` · Ref ${src.ref}` : ''} · floated {fmtDate(src.date)}</div>
         </div>
         <div className="page-actions">
-          {canSource && !locked && <button className="btn btn-primary" onClick={() => setShowAddVendor(true)}><Icon name="plus" size={13}/>Add vendor &amp; quote</button>}
-          {canSource && !locked && <button className="btn" onClick={() => setShowAllocate(true)}><Icon name="arrowLeftRight" size={13}/>Allocate across vendors</button>}
-          {canSource && !locked && <button className="btn" onClick={saveQuotation}><Icon name="save" size={13}/>Save vendor quotation</button>}
-          {canSource && !locked && <button className="btn btn-primary" onClick={sendToSales}><Icon name="mail" size={13}/>Send to Sales</button>}
+          {hasSupply && canSource && !locked && <button className="btn btn-primary" onClick={() => setShowAddVendor(true)}><Icon name="plus" size={13}/>Add vendor &amp; quote</button>}
+          {hasSupply && canSource && !locked && <button className="btn" onClick={() => setShowAllocate(true)}><Icon name="arrowLeftRight" size={13}/>Allocate across vendors</button>}
+          {hasSupply && canSource && !locked && <button className="btn" onClick={saveQuotation}><Icon name="save" size={13}/>Save vendor quotation</button>}
+          {hasSupply && canSource && !locked && <button className="btn btn-primary" onClick={sendToSales}><Icon name="mail" size={13}/>Send to Sales</button>}
           {canConvert && !locked && (src.status === 'Sent to Sales' || src.status === 'Sourced') && (
             <button className="btn btn-primary" onClick={() => setShowConvert(true)}><Icon name="receipt" size={13}/>Create Sales Order</button>
           )}
@@ -573,7 +590,8 @@ function SourcingDetail({ srcId }) {
         </div>
       </div>
 
-      {/* Margin match — Customer sell ⟷ Vendor buy ⟷ Margin */}
+      {/* Margin match — Customer sell ⟷ Vendor buy ⟷ Margin (supply only) */}
+      {hasSupply && (
       <div className="split-3 mb-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}>
           <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Quote budget</div>
@@ -595,6 +613,7 @@ function SourcingDetail({ srcId }) {
           <div className="small" style={{ fontWeight: 600, color: margin.marginPct >= 0 ? 'var(--success)' : 'var(--danger)' }}>{pct1(margin.marginPct)} margin</div>
         </div></div>
       </div>
+      )}
 
       {src.implementation && <ImplBOQPanel src={src}/>}
 
@@ -872,9 +891,13 @@ function ImplBOQPanel({ src }) {
   const addCustom = () => { if (!customName.trim()) return; saveBoq([...boq, { id: 'b' + Date.now(), product_id: null, name: customName.trim(), qty: Math.max(1, Number(qty) || 1), uom: '' }]); setCustomName(''); setQty(1); toast('Item added to BOQ', 'success'); };
   const setItemQty = (id, v) => saveBoq(boq.map(b => b.id === id ? { ...b, qty: Math.max(0, Number(v) || 0) } : b));
   const removeItem = (id) => saveBoq(boq.filter(b => b.id !== id));
+  // Implementation-only inquiries never pass through Pre-sales vendor sourcing, so
+  // handing the BOQ back to Sales also moves the inquiry itself to 'Sent to Sales'
+  // (that's what unlocks "Create Sales Order"). Supply inquiries are untouched.
+  const implOnlySrc = (src.lines || []).length === 0;
   const sendToSales = () => {
     if (!boq.length) { toast('Add at least one BOQ item'); return; }
-    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, implementation: { ...(x.implementation || {}), status: 'BOQ Ready' } } : x), notifications: [{ id: 'n-boq-' + Date.now(), kind: 'sourcing', text: `${src.src_no}: site BOQ ready (${boq.length} item(s)) from ${sup ? sup.name : 'Supervisor'}`, date: TODAY, read: false, role: 'Sales' }, ...s.notifications] }), { action: 'boq-send', entity: 'Sourcing', entity_id: src.id });
+    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, implementation: { ...(x.implementation || {}), status: 'BOQ Ready' }, ...(implOnlySrc ? { status: 'Sent to Sales' } : {}) } : x), notifications: [{ id: 'n-boq-' + Date.now(), kind: 'sourcing', text: `${src.src_no}: site BOQ ready (${boq.length} item(s)) from ${sup ? sup.name : 'Supervisor'}`, date: TODAY, read: false, role: 'Sales' }, ...s.notifications] }), { action: 'boq-send', entity: 'Sourcing', entity_id: src.id });
     toast('BOQ sent to Sales', 'success');
   };
 
