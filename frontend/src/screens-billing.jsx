@@ -866,8 +866,11 @@ function SOGrnTab({ so }) {
 // the consolidated qty-1 final. Both are separate, real, shareable invoices.
 function autoInvoiceSO(soId, ctx) {
   const made = raiseSOInvoice(soId, { mode: 'itemfraction' }, ctx, { silent: true });
-  raiseSOInvoice(soId, { mode: 'consolidated' }, ctx, { silent: true });
-  return made;
+  // Always attempt the main/final invoice. Report it when the partial had nothing
+  // new to bill (e.g. everything was already invoiced) so callers don't say
+  // "nothing to invoice" after the main invoice was in fact created.
+  const final = raiseSOInvoice(soId, { mode: 'consolidated' }, ctx, { silent: true });
+  return made || final;
 }
 
 window.soBundleFraction = soBundleFraction;
