@@ -588,7 +588,14 @@ function buildConsolidatedInvoice(so, state, currentUser, getUser) {
   if (!allDone) return null;
   // Only finalise once implementation is marked done AND every logged hour is billed.
   const im = so.extra && so.extra.implementation;
-  if (im && !(im.status === 'Done' && (soImplHours(so) - soImplInvoicedHours(so)) <= 0)) return null;
+  if (im) {
+    // Every logged implementation hour must already be billed (the partial raised
+    // just before this one does that), otherwise the main invoice would understate.
+    if ((soImplHours(so) - soImplInvoicedHours(so)) > 0.0001) return null;
+    // Don't finalise before ANY hours exist unless the supervisor marked it done —
+    // that would silently omit the implementation from the main invoice.
+    if (im.status !== 'Done' && soImplHours(so) <= 0) return null;
+  }
   const invLines = lines.map(l => ({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty: l.bundle_qty || 1, unit_price: l.unit_price || 0, amount: Math.round((l.bundle_qty || 1) * (l.unit_price || 0)) }));
   // The final main invoice shows supply + the whole implementation (total hours) in one doc.
   if (im && soImplCharge(so) > 0) invLines.push({ kind: 'impl', ref_id: 'impl', label: `Implementation services — ${soImplHours(so)} hr(s) @ ${inr(Number(im.hourly_rate) || 0)}/hr`, qty: soImplHours(so), unit_price: Number(im.hourly_rate) || 0, amount: soImplCharge(so) });
