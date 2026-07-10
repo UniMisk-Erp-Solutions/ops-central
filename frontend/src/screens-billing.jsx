@@ -580,12 +580,16 @@ function buildFractionInvoice(so, state, currentUser, getUser) {
 function buildConsolidatedInvoice(so, state, currentUser, getUser) {
   if ((so.invoices || []).some(i => i.consolidated)) return null;
   if ((so.invoices || []).length === 0 && so.invoice_no) return null;
-  const frac = soBundleFraction(so, state);
-  const invF = soLineInvoicedFraction(so);
   const lines = so.lines || [];
   if (!lines.length) return null;   // impl-only SOs don't get a consolidated (the impl invoice is the bill)
-  const allDone = lines.every(l => (frac[l.id] || 0) >= 0.999 && (invF[l.id] || 0) >= 0.999);
-  if (!allDone) return null;
+  // Gate on AMOUNTS + actual receipt, not per-line fractions. The old per-line
+  // fraction test could stall forever: buildFractionInvoice skips lines whose
+  // rounded amount is 0 (so the invoiced fraction never reached 1.0), and
+  // soBundleFraction subtracts pool-out qty (so the received fraction never
+  // reached 1.0 once anything was sent to the Master Pool).
+  if (!(so.invoices || []).some(i => !i.consolidated)) return null;          // no partial raised yet
+  if ((_soBilled(so) - soSupplyInvoicedSub(so)) > 1) return null;            // supply not fully billed
+  if (window.soFullyReceived && !window.soFullyReceived(state, so)) return null;   // items still to receive
   // Only finalise once implementation is marked done AND every logged hour is billed.
   const im = so.extra && so.extra.implementation;
   if (im) {
