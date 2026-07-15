@@ -255,8 +255,9 @@ function StoreProvider({ children }) {
   const soSubtotal = (so) => so.lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0);
   // Items removed at GRN (not supplied) auto-reduce the customer bill.
   const soBillAdjustment = (so) => (so.bill_adjustments || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
-  // Value of lines Purchase flagged non-billable — excluded from the client bill.
-  const soNonBillable = (so) => (so.lines || []).filter(l => l.non_billable).reduce((s, l) => s + (l.bundle_qty || 0) * (l.unit_price || 0), 0);
+  // Value flagged non-billable (whole lines + individual components) — excluded
+  // from the client bill. Uses the shared billing helper (component sell values).
+  const soNonBillable = (so) => window.soNonBillableValue ? window.soNonBillableValue(so, state.products) : (so.lines || []).filter(l => l.non_billable).reduce((s, l) => s + (l.bundle_qty || 0) * (l.unit_price || 0), 0);
   const soBilledSubtotal = (so) => Math.max(0, soSubtotal(so) - soNonBillable(so) - soBillAdjustment(so));
   const soTotalWithGST = (so) => {
     const sub = soBilledSubtotal(so);

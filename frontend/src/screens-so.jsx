@@ -1028,6 +1028,7 @@ function SalesOrderDetail({ soId }) {
         // as non-billable → its value is excluded from the client bill.
         const canFlagBill = ['Purchase', 'Project Manager', 'Org Admin'].includes(role) && !billingLocked && !['Draft', 'Pending Approval'].includes(so.status);
         const toggleNonBillable = (lineId) => mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, lines: (x.lines || []).map(l => l.id === lineId ? { ...l, non_billable: !l.non_billable } : l) } : x) }), { action: 'non-billable', entity: 'SalesOrder', entity_id: so.id });
+        const toggleCompNonBillable = (lineId, pid) => mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, lines: (x.lines || []).map(l => l.id === lineId ? { ...l, components: (l.components || []).map(c => c.product_id === pid ? { ...c, non_billable: !c.non_billable } : c) } : l) } : x) }), { action: 'non-billable-comp', entity: 'SalesOrder', entity_id: so.id });
         return (
         <div className="stack">
           {canEditSO && !billingLocked && (
@@ -1062,12 +1063,15 @@ function SalesOrderDetail({ soId }) {
                         const fromPoolQty = (so.pool_alloc || []).filter(a => a.product_id === c.product_id).reduce((s2, a) => s2 + (Number(a.qty) || 0), 0);
                         return (
                           <tr key={c.product_id} className="subrow">
-                            <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}{fromPoolQty > 0 && <span className="badge accent" style={{ marginLeft: 4 }} title="Taken from the Master Surplus Pool — off the vendor PO"><Icon name="layers" size={9}/> {fromPoolQty} from master pool</span>}{transferredIn[c.product_id] ? <span className="badge info" style={{ marginLeft: 4 }} title="Received via cross-SO transfer">+{transferredIn[c.product_id]} transferred in</span> : null}
-                              <div className="tiny" style={{ color: vs.length ? 'var(--accent)' : 'var(--text-muted)', marginTop: 1 }}>{vs.length ? <><Icon name="cart" size={10}/> {vs.join(' · ')}</> : (fromPoolQty >= c.qty * l.bundle_qty ? 'Fully covered from Master Pool' : 'No vendor assigned yet')}</div>
+                            <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}{c.non_billable && <span className="badge warning tiny" style={{ marginLeft: 4 }}>non-billable</span>}{fromPoolQty > 0 && <span className="badge accent" style={{ marginLeft: 4 }} title="Taken from the Master Surplus Pool — off the vendor PO"><Icon name="layers" size={9}/> {fromPoolQty} from master pool</span>}{transferredIn[c.product_id] ? <span className="badge info" style={{ marginLeft: 4 }} title="Received via cross-SO transfer">+{transferredIn[c.product_id]} transferred in</span> : null}
+                              <div className="tiny" style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 1 }}>
+                                <span style={{ color: vs.length ? 'var(--accent)' : 'var(--text-muted)' }}>{vs.length ? <><Icon name="cart" size={10}/> {vs.join(' · ')}</> : (fromPoolQty >= c.qty * l.bundle_qty ? 'Fully covered from Master Pool' : 'No vendor assigned yet')}</span>
+                                {canFlagBill && !l.non_billable && <label style={{ cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center', color: 'var(--text-muted)' }}><input type="checkbox" checked={!!c.non_billable} onChange={() => toggleCompNonBillable(l.id, c.product_id)}/> non-billable</label>}
+                              </div>
                             </td>
                             <td className="num">{c.qty * l.bundle_qty} {p.uom}{l.bundle_qty > 1 && <div className="tiny muted">{c.qty} × {l.bundle_qty}</div>}</td>
                             <td className="num muted">@{inr(p.buy)}</td>
-                            <td className="num muted">{inr(p.buy * c.qty * l.bundle_qty)}</td>
+                            <td className="num muted">{c.non_billable ? <span style={{ textDecoration: 'line-through' }}>{inr(p.buy * c.qty * l.bundle_qty)}</span> : inr(p.buy * c.qty * l.bundle_qty)}</td>
                           </tr>
                         );
                       })}
