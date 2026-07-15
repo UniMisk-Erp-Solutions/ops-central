@@ -479,17 +479,16 @@ function VGImplPanel({ so }) {
   const rows = boq.map(b => {
     const required = Number(b.qty) || 0;
     const procurable = !!b.product_id;
-    const grn = procurable ? (grnByProd[b.product_id] || 0) : 0;        // GRN-accepted by Purchase
-    const fromPool = procurable ? (poolAllocByProd[b.product_id] || 0) : 0;  // taken from the Master Pool
+    const grn = procurable ? (grnByProd[b.product_id] || 0) : 0;        // GRN-accepted by Purchase (info)
+    const fromPool = procurable ? (poolAllocByProd[b.product_id] || 0) : 0;  // taken from the Master Pool (auto-sent)
     const received = grn + fromPool;
     const sentManual = sentOf(b);
-    // Pool-allocated stock needs no handover — it's already available to the site.
-    const sentQty = procurable ? sentManual + fromPool : sentManual;
+    // Total handed to the supervisor = manual sends + pool stock (already at the site).
+    const sentQty = Math.min(required, sentManual + fromPool);
     const used = usedByBoq[b.id] || 0;
-    // Purchase can only hand over GRN stock it has received and not yet sent.
-    const available = procurable ? Math.max(0, grn - sentManual) : 0;
-    // The supervisor only holds what reached them (service items are on-site by nature).
-    const onSite = procurable ? Math.max(0, sentQty - used) : Math.max(0, required - used);
+    // Purchase can hand over anything still outstanding (not gated on GRN receipt).
+    const available = Math.max(0, required - sentQty);
+    const onSite = Math.max(0, sentQty - used);   // what the supervisor holds now
     return { ...b, required, procurable, grn, fromPool, received, sentManual, sentQty, used, available, onSite };
   });
 
@@ -537,7 +536,8 @@ function VGImplPanel({ so }) {
     if (window.autoInvoiceSO) window.autoInvoiceSO(so.id, { mutate, toast: null, currentUser, getUser, getProduct });
     toast(`Implementation done · ${totalHours}h billed to the client`, 'success');
   };
-  // Purchase ticks the received items and sends them across in one action.
+  // Purchase ticks items (any qty still outstanding) and sends them to the
+  // supervisor, who then holds them on site. Not gated on GRN receipt.
   const [sel, setSel] = React.useState({});
   const sendable = rows.filter(r => r.available > 0);
   const allTicked = sendable.length > 0 && sendable.every(r => sel[r.id] != null);
@@ -545,23 +545,23 @@ function VGImplPanel({ so }) {
   const toggleSend = (r) => setSel(m => { const n = { ...m }; if (n[r.id] != null) delete n[r.id]; else n[r.id] = r.available; return n; });
   const setSendQty = (r, v) => setSel(m => ({ ...m, [r.id]: Math.max(0, Math.min(Number(v) || 0, r.available)) }));
   const picked = rows.filter(r => sel[r.id] != null && Number(sel[r.id]) > 0);
-  const sendSelected = () => {
-    if (!picked.length) { toast('Tick the received items you are sending'); return; }
-    let units = 0;
+  // Commit a set of {r, n} handovers in one mutate.
+  const commitSend = (handovers) => {
+    const map = {}; let units = 0;
+    handovers.forEach(({ r, n }) => { const q = Math.max(0, Math.min(Number(n) || 0, r.available)); if (q > 0) { map[r.id] = q; units += q; } });
+    if (units <= 0) { toast('Set a quantity to send'); return; }
     const nextBoq = boq.map(x => {
-      const r = picked.find(p => p.id === x.id);
-      if (!r) return x;
-      const n = Math.max(0, Math.min(Number(sel[x.id]) || 0, r.available));
-      if (n <= 0) return x;
-      units += n;
-      const next = r.sentManual + n;
+      if (map[x.id] == null) return x;
+      const r = rows.find(y => y.id === x.id);
+      const next = r.sentManual + map[x.id];
       return { ...x, sent_qty: next, sent: (next + r.fromPool) >= (Number(x.qty) || 0) };
     });
     updImpl({ boq: nextBoq }, 'boq-sent',
-      [{ id: 'n-boqs-' + Date.now(), kind: 'so', text: `${so.so_no}: ${units} unit(s) across ${picked.length} item(s) sent to you · ready to use on site`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
-    setSel({});
+      [{ id: 'n-boqs-' + Date.now(), kind: 'so', text: `${so.so_no}: ${units} unit(s) across ${Object.keys(map).length} item(s) sent to you · marked received on site`, date: TODAY, read: false, user_id: im && im.supervisor_id }]);
     toast(`${units} unit(s) sent to supervisor`, 'success');
   };
+  const sendSelected = () => { if (!picked.length) { toast('Tick the items you are sending'); return; } commitSend(picked.map(r => ({ r, n: sel[r.id] }))); setSel({}); };
+  const sendOne = (r) => { commitSend([{ r, n: sel[r.id] != null ? sel[r.id] : r.available }]); setSel(m => { const c = { ...m }; delete c[r.id]; return c; }); };
   const editBoqQty = (b, v) => updImpl({ boq: boq.map(x => x.id === b.id ? { ...x, qty: Math.max(0, Number(v) || 0) } : x) }, 'boq-qty');
   const removeBoq = (b) => updImpl({ boq: boq.filter(x => x.id !== b.id) }, 'boq-remove');
   const [pAddSearch, setPAddSearch] = React.useState('');
@@ -589,29 +589,27 @@ function VGImplPanel({ so }) {
       <div className="card-body flush">
         {rows.length === 0 ? <div className="empty">No BOQ items yet — the supervisor prepares the BOQ on the inquiry.</div> : (
           <table className="t">
-            <thead><tr>{canFulfil && <th style={{ width: 56 }}><input type="checkbox" checked={allTicked} onChange={toggleAllSend} title="Select all received items to send"/></th>}<th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Sent</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
+            <thead><tr>{canFulfil && <th style={{ width: 40 }}><input type="checkbox" checked={allTicked} onChange={toggleAllSend} title="Select all to send"/></th>}<th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Sent</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
             <tbody>{rows.map(r => (
               <tr key={r.id}>
-                {canFulfil && <td>{r.available > 0 ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <input type="checkbox" checked={sel[r.id] != null} onChange={() => toggleSend(r)}/>
-                    {sel[r.id] != null && <input type="number" min="0" max={r.available} className="input mono" value={sel[r.id]} onChange={e => setSendQty(r, e.target.value)} style={{ width: 42, height: 22, textAlign: 'right', padding: '0 4px' }}/>}
-                  </div>
-                ) : (r.procurable && r.required > 0 && r.sentQty >= r.required) ? <Icon name="check" size={12} color="var(--success)"/> : <span className="muted tiny">—</span>}</td>}
+                {canFulfil && <td>{r.available > 0
+                  ? <input type="checkbox" checked={sel[r.id] != null} onChange={() => toggleSend(r)}/>
+                  : <Icon name="check" size={12} color="var(--success)"/>}</td>}
                 <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}{r.fromPool > 0 && <span className="badge accent tiny" style={{ marginLeft: 4 }} title="Taken from the Master Surplus Pool — off the vendor PO"><Icon name="layers" size={9}/> {r.fromPool} from master pool</span>}</td>
                 <td className="num">{canFulfil && r.sentQty === 0 ? <input type="number" min="0" className="input mono" value={r.qty} onChange={e => editBoqQty(r, e.target.value)} style={{ width: 56, height: 24, textAlign: 'right' }}/> : r.required}</td>
                 <td className="num">{r.procurable ? <>{r.received}{r.fromPool > 0 && <div className="tiny muted">{r.fromPool} from pool</div>}</> : <span className="muted">—</span>}</td>
-                <td className="num">{r.procurable ? (r.sentQty || <span className="muted">0</span>) : <span className="muted">—</span>}</td>
+                <td className="num">{r.sentQty || <span className="muted">0</span>}</td>
                 <td className="num">{r.used || <span className="muted">0</span>}</td>
                 <td className="num"><strong style={{ color: r.onSite > 0 ? 'var(--success)' : 'var(--text-muted)' }}>{r.onSite}</strong></td>
-                <td>{!r.procurable
-                  ? (r.required > 0 && r.used >= r.required ? <span className="badge dot">Consumed</span> : <span className="badge success dot">On site</span>)
-                  : r.required > 0 && r.sentQty >= r.required ? <span className="badge success dot">Fulfilled</span>
-                    : r.sentQty > 0 ? <span className="badge accent dot">Partially sent {r.sentQty}/{r.required}</span>
-                      : r.available > 0 ? <span className="badge accent dot">Ready to send</span>
-                        : <span className="badge warning dot">Procuring</span>}</td>
+                <td>{r.required > 0 && r.sentQty >= r.required ? <span className="badge success dot">Fulfilled</span>
+                  : r.sentQty > 0 ? <span className="badge accent dot">Pending {r.sentQty}/{r.required}</span>
+                    : <span className="badge warning dot">Procuring</span>}</td>
                 {canFulfil && <td style={{ whiteSpace: 'nowrap' }}>
-                  {r.sentQty === 0 && <button className="btn btn-ghost btn-sm" title="Remove from BOQ" onClick={() => removeBoq(r)}><Icon name="x" size={11} color="var(--danger)"/></button>}
+                  {r.available > 0 && <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                    <input type="number" min="1" max={r.available} className="input mono" placeholder={String(r.available)} value={sel[r.id] != null ? sel[r.id] : ''} onChange={e => setSendQty(r, e.target.value)} style={{ width: 46, height: 24, textAlign: 'right' }} title={`Up to ${r.available}`}/>
+                    <button className="btn btn-sm btn-primary" title="Send to supervisor" onClick={() => sendOne(r)}><Icon name="arrowRight" size={11}/>Send</button>
+                  </span>}
+                  {r.sentQty === 0 && r.available > 0 && <button className="btn btn-ghost btn-sm" title="Remove from BOQ" onClick={() => removeBoq(r)}><Icon name="x" size={11} color="var(--danger)"/></button>}
                 </td>}
               </tr>
             ))}</tbody>
