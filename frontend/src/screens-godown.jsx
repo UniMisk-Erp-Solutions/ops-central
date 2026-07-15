@@ -273,11 +273,32 @@ function VGAddFromPoolPanel({ so }) {
     let rem = n; const consume = []; for (const s of srcs) { if (rem <= 0) break; const take = Math.min(rem, s.qty); if (take > 0) { consume.push({ id: s.id, qty: take }); rem -= take; } }
     const p = getProduct(pid);
     setBusy(true);
-    mutate(s => ({
-      ...s,
-      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, pool_alloc: [...(x.pool_alloc || []), { product_id: pid, qty: n, name: p ? p.name : pid }] } : x),
-      notifications: [{ id: 'n-pa-' + Date.now(), kind: 'transfer', text: `${n}× ${p ? p.name : pid} allocated to ${so.so_no} from Master Pool`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications],
-    }), { action: 'pool-allocate', entity: 'SalesOrder', entity_id: so.id });
+    mutate(s => {
+      // Pool now covers this qty, so pull it off any UN-received vendor PO for this
+      // SO (no GRN yet) — reduce the line qty, recompute the PO amount, drop lines/
+      // POs that hit zero. Received/invoiced POs are never touched, so vendor
+      // invoices stay correct. Amounts recompute automatically.
+      const grnPoIds = new Set((s.grns || []).map(g => g.po_id));
+      const viPoIds = new Set((s.vendor_invoices || []).map(v => v.po_id));   // never disturb an invoiced PO
+      let cut = n;
+      let removedFromPO = 0;
+      const vendor_pos = s.vendor_pos.map(po => {
+        if (cut <= 0 || po.so_id !== so.id || grnPoIds.has(po.id) || viPoIds.has(po.id) || ['Material Received', 'Partially Received', 'Rejected', 'Pending MD Approval'].includes(po.status)) return po;
+        if (!(po.items || []).some(it => it.product_id === pid)) return po;
+        const items = (po.items || []).map(it => {
+          if (it.product_id !== pid || cut <= 0) return it;
+          const take = Math.min(cut, it.qty || 0); cut -= take; removedFromPO += take;
+          return { ...it, qty: (it.qty || 0) - take };
+        }).filter(it => (it.qty || 0) > 0);
+        return { ...po, items, amount: Math.round(items.reduce((a, it) => a + (it.qty || 0) * (it.rate || 0), 0)) };
+      }).filter(po => !(po.so_id === so.id && (po.items || []).length === 0));   // drop emptied POs
+      return {
+        ...s,
+        vendor_pos,
+        sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, pool_alloc: [...(x.pool_alloc || []), { product_id: pid, qty: n, name: p ? p.name : pid, from_pool: true }] } : x),
+        notifications: [{ id: 'n-pa-' + Date.now(), kind: 'transfer', text: `${n}× ${p ? p.name : pid} taken from Master Pool for ${so.so_no}${removedFromPO ? ` · ${removedFromPO} removed from vendor PO(s)` : ''}`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications],
+      };
+    }, { action: 'pool-allocate', entity: 'SalesOrder', entity_id: so.id });
     await consumeFromPool(consume);
     setBusy(false); setQty(m => ({ ...m, [pid]: '' })); setQ('');
     toast(`Added ${n}× ${p ? p.name : pid} from Master Pool`, 'success');
@@ -577,7 +598,7 @@ function VGImplPanel({ so }) {
                     {sel[r.id] != null && <input type="number" min="0" max={r.available} className="input mono" value={sel[r.id]} onChange={e => setSendQty(r, e.target.value)} style={{ width: 42, height: 22, textAlign: 'right', padding: '0 4px' }}/>}
                   </div>
                 ) : (r.procurable && r.required > 0 && r.sentQty >= r.required) ? <Icon name="check" size={12} color="var(--success)"/> : <span className="muted tiny">—</span>}</td>}
-                <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}</td>
+                <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}{r.fromPool > 0 && <span className="badge accent tiny" style={{ marginLeft: 4 }} title="Taken from the Master Surplus Pool — off the vendor PO"><Icon name="layers" size={9}/> {r.fromPool} from master pool</span>}</td>
                 <td className="num">{canFulfil && r.sentQty === 0 ? <input type="number" min="0" className="input mono" value={r.qty} onChange={e => editBoqQty(r, e.target.value)} style={{ width: 56, height: 24, textAlign: 'right' }}/> : r.required}</td>
                 <td className="num">{r.procurable ? <>{r.received}{r.fromPool > 0 && <div className="tiny muted">{r.fromPool} from pool</div>}</> : <span className="muted">—</span>}</td>
                 <td className="num">{r.procurable ? (r.sentQty || <span className="muted">0</span>) : <span className="muted">—</span>}</td>

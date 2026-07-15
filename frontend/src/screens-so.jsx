@@ -1059,10 +1059,11 @@ function SalesOrderDetail({ soId }) {
                       {l.components.map(c => {
                         const p = getProduct(c.product_id);
                         const vs = vendorsForProd(c.product_id);
+                        const fromPoolQty = (so.pool_alloc || []).filter(a => a.product_id === c.product_id).reduce((s2, a) => s2 + (Number(a.qty) || 0), 0);
                         return (
                           <tr key={c.product_id} className="subrow">
-                            <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}{transferredIn[c.product_id] ? <span className="badge info" style={{ marginLeft: 4 }} title="Received via cross-SO transfer">+{transferredIn[c.product_id]} transferred in</span> : null}
-                              <div className="tiny" style={{ color: vs.length ? 'var(--accent)' : 'var(--text-muted)', marginTop: 1 }}>{vs.length ? <><Icon name="cart" size={10}/> {vs.join(' · ')}</> : 'No vendor assigned yet'}</div>
+                            <td>{p.name} <span className="muted tiny mono">· {p.code}</span> {c.override && <span className="badge warning" style={{ marginLeft: 4 }}>overridden</span>}{fromPoolQty > 0 && <span className="badge accent" style={{ marginLeft: 4 }} title="Taken from the Master Surplus Pool — off the vendor PO"><Icon name="layers" size={9}/> {fromPoolQty} from master pool</span>}{transferredIn[c.product_id] ? <span className="badge info" style={{ marginLeft: 4 }} title="Received via cross-SO transfer">+{transferredIn[c.product_id]} transferred in</span> : null}
+                              <div className="tiny" style={{ color: vs.length ? 'var(--accent)' : 'var(--text-muted)', marginTop: 1 }}>{vs.length ? <><Icon name="cart" size={10}/> {vs.join(' · ')}</> : (fromPoolQty >= c.qty * l.bundle_qty ? 'Fully covered from Master Pool' : 'No vendor assigned yet')}</div>
                             </td>
                             <td className="num">{c.qty * l.bundle_qty} {p.uom}{l.bundle_qty > 1 && <div className="tiny muted">{c.qty} × {l.bundle_qty}</div>}</td>
                             <td className="num muted">@{inr(p.buy)}</td>
