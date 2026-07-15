@@ -1024,6 +1024,10 @@ function SalesOrderDetail({ soId }) {
         const bomPOs = state.vendor_pos.filter(p => p.so_id === so.id);
         const vendorsForProd = (pid) => bomPOs.filter(po => (po.items || []).some(it => it.product_id === pid))
           .map(po => { const v = state.vendors.find(x => x.id === po.vendor_id); const it = (po.items || []).find(y => y.product_id === pid); return `${v ? v.name : po.vendor_id} (${it ? it.qty : 0})`; });
+        // Purchase (after PM approval, before billing is locked) can flag a bundle
+        // as non-billable → its value is excluded from the client bill.
+        const canFlagBill = ['Purchase', 'Project Manager', 'Org Admin'].includes(role) && !billingLocked && !['Draft', 'Pending Approval'].includes(so.status);
+        const toggleNonBillable = (lineId) => mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, lines: (x.lines || []).map(l => l.id === lineId ? { ...l, non_billable: !l.non_billable } : l) } : x) }), { action: 'non-billable', entity: 'SalesOrder', entity_id: so.id });
         return (
         <div className="stack">
           {canEditSO && !billingLocked && (
@@ -1045,10 +1049,12 @@ function SalesOrderDetail({ soId }) {
                   return (
                     <Fragment key={l.id}>
                       <tr>
-                        <td><div style={{ fontWeight: 500 }}>{l.client_name ? `${l.client_name} ` : ''}{cat.name}</div><div className="tiny muted">HSN {cat.hsn}</div></td>
+                        <td><div style={{ fontWeight: 500 }}>{l.client_name ? `${l.client_name} ` : ''}{cat.name}{l.non_billable && <span className="badge warning tiny" style={{ marginLeft: 6 }}>non-billable</span>}</div>
+                          <div className="tiny muted" style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>HSN {cat.hsn}</span>{canFlagBill && <label style={{ cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center' }}><input type="checkbox" checked={!!l.non_billable} onChange={() => toggleNonBillable(l.id)}/> Non-billable (exclude from client bill)</label>}</div>
+                        </td>
                         <td className="num">{l.bundle_qty}</td>
                         <td className="num">{inr(l.unit_price)}</td>
-                        <td className="num"><strong>{inr(l.bundle_qty * l.unit_price)}</strong></td>
+                        <td className="num">{l.non_billable ? <span className="muted" style={{ textDecoration: 'line-through' }}>{inr(l.bundle_qty * l.unit_price)}</span> : <strong>{inr(l.bundle_qty * l.unit_price)}</strong>}</td>
                       </tr>
                       {l.components.map(c => {
                         const p = getProduct(c.product_id);

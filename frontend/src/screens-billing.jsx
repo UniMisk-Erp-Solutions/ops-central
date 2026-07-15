@@ -439,7 +439,8 @@ function CollectionsDashboard() {
 // ===== Partial / Final invoicing engine =====
 // Pure helpers (usable inside a mutate updater with the latest state).
 function _soSub(so) { return (so.lines || []).reduce((a, l) => a + (l.bundle_qty || 0) * (l.unit_price || 0), 0); }
-function _soBilled(so) { return Math.max(0, _soSub(so) - (so.bill_adjustments || []).reduce((a, x) => a + (Number(x.amount) || 0), 0)); }
+function _soNonBillable(so) { return (so.lines || []).filter(l => l.non_billable).reduce((a, l) => a + (l.bundle_qty || 0) * (l.unit_price || 0), 0); }
+function _soBilled(so) { return Math.max(0, _soSub(so) - _soNonBillable(so) - (so.bill_adjustments || []).reduce((a, x) => a + (Number(x.amount) || 0), 0)); }
 
 // Accepted material received against this SO (GRNs of its POs) + pool stock in hand,
 // minus any units later diverted to the Master Pool (so the client is never billed
@@ -485,7 +486,7 @@ function soInvoiceState(so, state) {
     (l.components || []).forEach(c => { const per = c.qty || 0; if (per > 0) completable = Math.min(completable, Math.floor((avail[c.product_id] || 0) / per)); });
     completable = Math.max(0, Math.min(completable, l.bundle_qty || 0));
     (l.components || []).forEach(c => { avail[c.product_id] = (avail[c.product_id] || 0) - completable * (c.qty || 0); });
-    return { line_id: l.id, category_id: l.category_id, ordered: l.bundle_qty || 0, unit_price: l.unit_price || 0, components: l.components || [], invoiceableNow: completable };
+    return { line_id: l.id, category_id: l.category_id, ordered: l.bundle_qty || 0, unit_price: l.unit_price || 0, components: l.components || [], invoiceableNow: l.non_billable ? 0 : completable, non_billable: !!l.non_billable };
   });
 }
 
@@ -548,6 +549,7 @@ function buildFractionInvoice(so, state, currentUser, getUser) {
   const invF = soLineInvoicedFraction(so);
   const lines = []; const comp = {}; let subtotal = 0;
   (so.lines || []).forEach(l => {
+    if (l.non_billable) return;   // Purchase flagged this line non-billable — never invoice it
     const newF = Math.max(0, (frac[l.id] || 0) - (invF[l.id] || 0));
     if (newF <= 0.0005) return;
     const qty = Math.round(newF * (l.bundle_qty || 1) * 1000) / 1000;
@@ -600,7 +602,7 @@ function buildConsolidatedInvoice(so, state, currentUser, getUser) {
     // that would silently omit the implementation from the main invoice.
     if (im.status !== 'Done' && soImplHours(so) <= 0) return null;
   }
-  const invLines = lines.map(l => ({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty: l.bundle_qty || 1, unit_price: l.unit_price || 0, amount: Math.round((l.bundle_qty || 1) * (l.unit_price || 0)) }));
+  const invLines = lines.filter(l => !l.non_billable).map(l => ({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty: l.bundle_qty || 1, unit_price: l.unit_price || 0, amount: Math.round((l.bundle_qty || 1) * (l.unit_price || 0)) }));
   // The final main invoice shows supply + the whole implementation (total hours) in one doc.
   if (im && soImplCharge(so) > 0) invLines.push({ kind: 'impl', ref_id: 'impl', label: `Implementation services — ${soImplHours(so)} hr(s) @ ${inr(Number(im.hourly_rate) || 0)}/hr`, qty: soImplHours(so), unit_price: Number(im.hourly_rate) || 0, amount: soImplCharge(so) });
   const subtotal = invLines.reduce((a, x) => a + x.amount, 0);
