@@ -1195,13 +1195,13 @@ function CrossSOTransfers() {
       <tr key={t.id}>
         <td><div className="mono">{fromSO?.so_no || '—'}</div>{fromSO && <div className="tiny muted trunc">{getCustomer(fromSO.customer_id)?.name}</div>}</td>
         <td><div className="mono">{toSO?.so_no || '—'}</div>{toSO && <div className="tiny muted trunc">{getCustomer(toSO.customer_id)?.name}</div>}</td>
-        <td>{t.items.map((it, i) => { const p = getProduct(it.product_id); return <div key={i} className="small">{p?.name || it.product_id} <span className="mono muted">× {it.qty}</span></div>; })}</td>
+        <td>{(t.challan?.items || t.items).map((it, i) => { const p = getProduct(it.product_id); const req = it.requested != null ? it.requested : it.qty; const partial = it.requested != null && it.qty < it.requested; return <div key={i} className="small">{p?.name || it.product_id} <span className="mono muted">× {it.qty}{partial ? `/${req}` : ''}</span>{partial && <span className="badge warning tiny" style={{ marginLeft: 4 }}>partial</span>}</div>; })}</td>
         <td>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Avatar user={byUser} size={18}/> <span className="tiny">{byUser?.name?.split(' ')[0] || '—'}</span></div>
           {appr && <div className="tiny muted mt-1" title={`Approved ${fmtDate(t.approved_date)}`}>✓ {appr.name?.split(' ')[0]} ({t.approved_role})</div>}
           {conf && <div className="tiny" style={{ color: 'var(--success)' }} title={`Confirmed ${fmtDate(t.confirmed_date)}`}>↓ received by {conf.name?.split(' ')[0]}</div>}
         </td>
-        <td>{t.status === 'Pending' ? <span className="badge warning dot">Awaiting approval</span> : t.status === 'Approved' ? <span className="badge accent dot">Approved · awaiting receipt</span> : t.status === 'Confirmed' ? <span className="badge success dot">Confirmed · moved</span> : <span className="badge danger dot">Rejected</span>}</td>
+        <td>{t.status === 'Pending' ? <span className="badge warning dot">Awaiting approval</span> : t.status === 'Approved' ? <span className="badge accent dot">Approved · awaiting receipt</span> : t.status === 'Confirmed' ? <span className="badge success dot">Confirmed · moved</span> : <span className="badge danger dot">Rejected</span>}{t.challan?.fulfillment === 'Partial' && <div className="tiny muted mt-1" title="Not all requested units were sent">{t.challan.sent_total}/{t.challan.requested_total} sent · balance pending</div>}</td>
         <td style={{ whiteSpace: 'nowrap' }}>
           {t.challan && <button className="btn btn-ghost btn-sm" title="View delivery challan" onClick={() => setViewChallan(t)}><Icon name="file" size={11}/>Challan</button>}
           {t.status === 'Pending' && (canApproveT(t) ? <><button className="btn btn-sm btn-primary" onClick={() => setApproveT(t)}><Icon name="check" size={11}/>Approve</button><button className="btn btn-sm" onClick={() => reject(t)}><Icon name="x" size={11}/>Reject</button></> : <span className="tiny muted">awaiting {getSO(t.from_so)?.pm ? getUser(getSO(t.from_so).pm)?.name?.split(' ')[0] + ' / MD' : 'source PM / MD'}</span>)}
@@ -1266,7 +1266,11 @@ function ApproveTransferModal({ transfer, onClose }) {
   const toast = useToast();
   const role = getUser(currentUser).role;
   const fromSO = getSO(transfer.from_so); const toSO = getSO(transfer.to_so);
-  const [items, setItems] = React.useState(transfer.items.map(it => { const p = getProduct(it.product_id); return { product_id: it.product_id, name: p ? p.name : it.product_id, code: p ? p.code : '', hsn: p ? p.hsn || '' : '', qty: Number(it.qty) || 0, rate: p ? (p.buy || 0) : 0 }; }));
+  // Line details are auto-detected from the request (name/code/HSN/rate + requested qty).
+  // `requested` is fixed (what was asked); `qty` = how much is actually being sent
+  // (editable, defaults to full) so partial dispatches are tracked end-to-end.
+  const [items, setItems] = React.useState(transfer.items.map(it => { const p = getProduct(it.product_id); return { product_id: it.product_id, name: p ? p.name : it.product_id, code: p ? p.code : '', hsn: p ? p.hsn || '' : '', requested: Number(it.qty) || 0, qty: Number(it.qty) || 0, rate: p ? (p.buy || 0) : 0 }; }));
+  const lineStatus = (it) => { const r = Number(it.requested) || 0, s = Number(it.qty) || 0; return s <= 0 ? 'Pending' : (s < r ? 'Partial' : 'Full'); };
   const [deliveryCost, setDeliveryCost] = React.useState('');
   const [transport, setTransport] = React.useState('Road');
   const [vehicle, setVehicle] = React.useState('');
@@ -1284,14 +1288,19 @@ function ApproveTransferModal({ transfer, onClose }) {
   const total = subtotal + dc + gst;
 
   const submit = () => {
-    if (items.some(it => (Number(it.qty) || 0) <= 0)) { toast('Every item needs a quantity'); return; }
+    if (items.every(it => (Number(it.qty) || 0) <= 0)) { toast('Send at least one unit'); return; }
+    if (items.some(it => (Number(it.qty) || 0) > (Number(it.requested) || 0))) { toast('Sent qty can’t exceed the requested qty'); return; }
     const seq = (state.transfer_requests || []).filter(t => t.challan).length;
+    const chItems = items.map(it => ({ ...it, requested: Number(it.requested) || 0, qty: Number(it.qty) || 0, rate: Number(it.rate) || 0, amount: Math.round((Number(it.qty) || 0) * (Number(it.rate) || 0)), status: lineStatus(it) }));
+    const totReq = chItems.reduce((a, it) => a + it.requested, 0);
+    const totSent = chItems.reduce((a, it) => a + it.qty, 0);
+    const fulfillment = totSent <= 0 ? 'Pending' : (totSent < totReq ? 'Partial' : 'Full');
     const challan = {
       no: `DC/FY26/${String(1 + seq).padStart(4, '0')}`, date: TODAY,
       reason: 'Cross-SO stock transfer — internal re-allocation (not a sale)',
       transport, vehicle, lr, delivery_cost: dc, notes,
       delivery_type: deliveryType, carrier: carrier.trim(), tracking: tracking.trim(), contact: contact.trim(),
-      items: items.map(it => ({ ...it, qty: Number(it.qty) || 0, rate: Number(it.rate) || 0, amount: Math.round((Number(it.qty) || 0) * (Number(it.rate) || 0)) })),
+      items: chItems, requested_total: totReq, sent_total: totSent, fulfillment,
       subtotal: Math.round(subtotal), gst, total: Math.round(total), apply_gst: applyGst,
     };
     const destPm = toSO && toSO.pm;   // confirmation goes to the DESTINATION SO's PM (auto-detected)
@@ -1307,18 +1316,20 @@ function ApproveTransferModal({ transfer, onClose }) {
 
   return (
     <Modal title={`Approve transfer & issue delivery challan`} onClose={onClose} size="lg" footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={submit}><Icon name="check" size={13}/>Approve &amp; generate challan</button></>}>
-      <div className="tiny muted mb-2">{fromSO?.so_no} <Icon name="arrowRight" size={10}/> {toSO?.so_no} · approving as <strong>{role}</strong>. Fill the movement details; the destination PM confirms receipt against this challan.</div>
+      <div className="tiny muted mb-2">{fromSO?.so_no} <Icon name="arrowRight" size={10}/> {toSO?.so_no} · approving as <strong>{role}</strong>. Item details are auto-filled from the request — just set how much you’re <strong>sending</strong> (edit if you can’t send the full qty); the rest stays pending. Then fill delivery type &amp; tracking below.</div>
       <table className="t">
-        <thead><tr><th>Item</th><th>HSN</th><th className="num">Qty</th><th className="num">Rate ₹</th><th className="num">Value</th></tr></thead>
-        <tbody>{items.map((it, i) => (
+        <thead><tr><th>Item</th><th>HSN</th><th className="num">Requested</th><th className="num">Sending</th><th>Status</th><th className="num">Rate ₹</th><th className="num">Value</th></tr></thead>
+        <tbody>{items.map((it, i) => { const st = lineStatus(it); return (
           <tr key={i}>
             <td>{it.name}<div className="tiny muted mono">{it.code}</div></td>
             <td><input className="input mono" value={it.hsn} onChange={e => setItem(i, { hsn: e.target.value })} style={{ width: 72, height: 24 }}/></td>
-            <td className="num"><input type="number" min="0" className="input mono" value={it.qty} onChange={e => setItem(i, { qty: e.target.value })} style={{ width: 60, height: 24, textAlign: 'right' }}/></td>
+            <td className="num mono muted">{it.requested}</td>
+            <td className="num"><input type="number" min="0" max={it.requested} className="input mono" value={it.qty} onChange={e => setItem(i, { qty: e.target.value })} style={{ width: 64, height: 24, textAlign: 'right' }}/></td>
+            <td>{st === 'Full' ? <span className="badge success dot">Full</span> : st === 'Partial' ? <span className="badge warning dot">Partial {it.qty}/{it.requested}</span> : <span className="badge dot">Pending</span>}</td>
             <td className="num"><input type="number" min="0" className="input mono" value={it.rate} onChange={e => setItem(i, { rate: e.target.value })} style={{ width: 84, height: 24, textAlign: 'right' }}/></td>
             <td className="num mono">{inr((Number(it.qty) || 0) * (Number(it.rate) || 0))}</td>
           </tr>
-        ))}</tbody>
+        ); })}</tbody>
       </table>
       <div className="field-row-3 mt-2">
         <div className="field"><label className="field-label">Transport mode</label><select className="select" value={transport} onChange={e => setTransport(e.target.value)}><option>Road</option><option>Rail</option><option>Hand delivery</option><option>Courier</option></select></div>
@@ -1361,7 +1372,7 @@ function DeliveryChallanModal({ transfer, onClose }) {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><div className="brand-mark" style={{ width: 30, height: 30, fontSize: 15 }}>B</div><div><h2 style={{ margin: 0, fontSize: 16 }}>{state.org.name}</h2><div className="small muted">{state.org.address}</div><div className="small mono">GSTIN: {state.org.gstin} · State: {state.org.state}</div></div></div>
           </div>
-          <div style={{ textAlign: 'right' }}><div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '0.06em' }}>DELIVERY CHALLAN</div><div className="small mono">{ch.no}</div><div className="tiny muted">Not a tax invoice</div></div>
+          <div style={{ textAlign: 'right' }}><div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '0.06em' }}>DELIVERY CHALLAN</div><div className="small mono">{ch.no}</div><div className="tiny muted">Not a tax invoice</div>{ch.fulfillment && <div style={{ marginTop: 4 }}>{ch.fulfillment === 'Full' ? <span className="badge success dot">Fully fulfilled</span> : ch.fulfillment === 'Partial' ? <span className="badge warning dot">Partial · {ch.sent_total}/{ch.requested_total} sent</span> : <span className="badge dot">Pending</span>}</div>}</div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, margin: '10px 0' }}>
           <div><div className="tiny muted" style={{ textTransform: 'uppercase' }}>Consign from (source order)</div><div className="small mono">{fromSO?.so_no}</div><div className="small">{fromCust?.name}</div></div>
@@ -1383,8 +1394,8 @@ function DeliveryChallanModal({ transfer, onClose }) {
         )}
         <div className="tiny muted mb-1">Reason for transportation: <strong>{ch.reason}</strong></div>
         <table style={{ width: '100%', fontSize: 12 }}>
-          <thead><tr><th style={{ textAlign: 'left' }}>#</th><th style={{ textAlign: 'left' }}>Description</th><th>HSN</th><th className="num">Qty</th><th className="num">Rate</th><th className="num">Value</th></tr></thead>
-          <tbody>{(ch.items || []).map((it, i) => (<tr key={i}><td>{i + 1}</td><td>{it.name}<div className="tiny muted mono">{it.code}</div></td><td className="mono">{it.hsn || '—'}</td><td className="num mono">{it.qty}</td><td className="num mono">{inr(it.rate)}</td><td className="num mono">{inr(it.amount)}</td></tr>))}</tbody>
+          <thead><tr><th style={{ textAlign: 'left' }}>#</th><th style={{ textAlign: 'left' }}>Description</th><th>HSN</th><th className="num">Req.</th><th className="num">Sent</th><th>Status</th><th className="num">Rate</th><th className="num">Value</th></tr></thead>
+          <tbody>{(ch.items || []).map((it, i) => { const req = it.requested != null ? it.requested : it.qty; const st = it.status || (it.qty <= 0 ? 'Pending' : (it.qty < req ? 'Partial' : 'Full')); return (<tr key={i}><td>{i + 1}</td><td>{it.name}<div className="tiny muted mono">{it.code}</div></td><td className="mono">{it.hsn || '—'}</td><td className="num mono muted">{req}</td><td className="num mono">{it.qty}</td><td>{st === 'Full' ? <span className="badge success dot">Full</span> : st === 'Partial' ? <span className="badge warning dot">{it.qty}/{req}</span> : <span className="badge dot">Pending</span>}</td><td className="num mono">{inr(it.rate)}</td><td className="num mono">{inr(it.amount)}</td></tr>); })}</tbody>
         </table>
         <table className="totals" style={{ marginTop: 8 }}><tbody>
           <tr><td>Goods value</td><td className="num mono right">{inr(ch.subtotal)}</td></tr>
