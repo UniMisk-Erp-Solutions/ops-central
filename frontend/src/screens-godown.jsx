@@ -503,14 +503,49 @@ function VGImplPanel({ so }) {
   const [logHours, setLogHours] = React.useState('');
   const [logNotes, setLogNotes] = React.useState('');
   const [logItems, setLogItems] = React.useState({});
+  const [logFiles, setLogFiles] = React.useState({});   // { [boq_id]: File[] } selected, pre-upload
+  const [posting, setPosting] = React.useState(false);
   const setLI = (id, v) => setLogItems(m => ({ ...m, [id]: v }));
-  const postLog = () => {
-    const items = boq.filter(b => Number(logItems[b.id]) > 0).map(b => ({ boq_id: b.id, name: b.name, qty: Number(logItems[b.id]) }));
-    if (!items.length && !(Number(logHours) > 0)) { toast('Add hours worked and/or items used today'); return; }
-    const log = { id: 'dl' + Date.now(), date: logDate, hours: Number(logHours) || 0, notes: logNotes || '', by: currentUser, items };
-    updImpl({ daily_logs: [log, ...logs] }, 'daily-log', [{ id: 'n-dl-' + Date.now(), kind: 'so', text: `${so.so_no}: site update by ${sup ? sup.name : 'supervisor'} · ${Number(logHours) || 0}h · ${items.length} item(s) used`, date: TODAY, read: false, role: 'Project Manager' }]);
-    setLogHours(''); setLogNotes(''); setLogItems({});
-    toast('Daily update posted · VG updated', 'success');
+  const addFiles = (id, fileList) => { const arr = Array.from(fileList || []); if (!arr.length) return; setLogFiles(m => ({ ...m, [id]: [...(m[id] || []), ...arr] })); };
+  const removeFile = (id, idx) => setLogFiles(m => ({ ...m, [id]: (m[id] || []).filter((_, j) => j !== idx) }));
+
+  // Upload one file to the self-hosted Supabase 'site-updates' bucket → public URL.
+  const uploadOne = async (file, boqId) => {
+    const sb = window.OPC_SB;
+    if (!sb || !sb.storage) return { error: 'storage offline' };
+    const safe = (file.name || 'file').replace(/[^\w.\-]+/g, '_');
+    const path = `${so.id}/${boqId}/${Date.now()}-${Math.round(Math.random() * 1e6)}-${safe}`;
+    const up = await sb.storage.from('site-updates').upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type || 'application/octet-stream' });
+    if (up.error) return { error: up.error.message || 'upload failed' };
+    const pub = sb.storage.from('site-updates').getPublicUrl(path);
+    return { url: pub?.data?.publicUrl || '', name: file.name, type: file.type || '', size: file.size, path };
+  };
+
+  const postLog = async () => {
+    // Rows to record = those with a used qty OR an attached photo/PDF (evidence-only).
+    const picked = boq.filter(b => Number(logItems[b.id]) > 0 || (logFiles[b.id] || []).length > 0);
+    const usedCount = boq.filter(b => Number(logItems[b.id]) > 0).length;
+    const totalFiles = Object.values(logFiles).reduce((a, arr) => a + (arr ? arr.length : 0), 0);
+    if (!picked.length && !(Number(logHours) > 0)) { toast('Add hours worked and/or items used today'); return; }
+    if (totalFiles === 0) { toast('Attach at least one site photo or PDF with your update'); return; }
+    if (!window.OPC_SB || !window.OPC_SB.storage) { toast('Storage is offline — can’t upload right now'); return; }
+    setPosting(true);
+    try {
+      const items = [];
+      for (const b of picked) {
+        const files = [];
+        for (const f of (logFiles[b.id] || [])) {
+          const r = await uploadOne(f, b.id);
+          if (r.error) { toast(`Upload failed for ${f.name}: ${r.error}`); setPosting(false); return; }
+          files.push({ url: r.url, name: r.name, type: r.type, size: r.size });
+        }
+        items.push({ boq_id: b.id, name: b.name, qty: Number(logItems[b.id]) || 0, files });
+      }
+      const log = { id: 'dl' + Date.now(), date: logDate, hours: Number(logHours) || 0, notes: logNotes || '', by: currentUser, items };
+      updImpl({ daily_logs: [log, ...logs] }, 'daily-log', [{ id: 'n-dl-' + Date.now(), kind: 'so', text: `${so.so_no}: site update by ${sup ? sup.name : 'supervisor'} · ${Number(logHours) || 0}h · ${usedCount} item(s) used · ${totalFiles} file(s)`, date: TODAY, read: false, role: 'Project Manager' }]);
+      setLogHours(''); setLogNotes(''); setLogItems({}); setLogFiles({});
+      toast('Daily update posted · VG updated', 'success');
+    } finally { setPosting(false); }
   };
 
   const [reqName, setReqName] = React.useState('');
@@ -663,17 +698,37 @@ function VGImplPanel({ so }) {
             <input type="number" min="0" className="input mono" placeholder="hours worked" value={logHours} onChange={e => setLogHours(e.target.value)} style={{ width: 120 }}/>
           </div>
           {rows.length > 0 && (
-            <div className="stack" style={{ gap: 4, marginBottom: 6 }}>
-              {rows.map(r => (
-                <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span className="small grow trunc">{r.name} <span className="tiny muted">(on site {r.onSite})</span></span>
-                  <input type="number" min="0" className="input mono" placeholder="used" value={logItems[r.id] || ''} onChange={e => setLI(r.id, e.target.value)} style={{ width: 72, height: 26 }}/>
+            <div className="stack" style={{ gap: 6, marginBottom: 6 }}>
+              {rows.map(r => { const files = logFiles[r.id] || []; return (
+                <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                    <label className="btn btn-ghost btn-sm" style={{ cursor: 'pointer', margin: 0 }} title="Attach site photo / PDF">
+                      <Icon name="upload" size={12}/>{files.length > 0 ? ` ${files.length}` : ''}
+                      <input type="file" accept="image/*,application/pdf,.doc,.docx" multiple style={{ display: 'none' }} onChange={e => { addFiles(r.id, e.target.files); e.target.value = ''; }}/>
+                    </label>
+                  </div>
+                  <div className="grow" style={{ minWidth: 0 }}>
+                    <span className="small trunc" style={{ display: 'block' }}>{r.name} <span className="tiny muted">(on site {r.onSite})</span></span>
+                    {files.length > 0 && (
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                        {files.map((f, i) => (
+                          <span key={i} className="badge tiny" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, maxWidth: 160 }} title={f.name}>
+                            <Icon name={/^image\//.test(f.type) ? 'eye' : 'file'} size={9}/>
+                            <span className="trunc" style={{ maxWidth: 110 }}>{f.name}</span>
+                            <a onClick={() => removeFile(r.id, i)} style={{ cursor: 'pointer' }} title="Remove">✕</a>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <input type="number" min="0" className="input mono" placeholder="used" value={logItems[r.id] || ''} onChange={e => setLI(r.id, e.target.value)} style={{ width: 72, height: 26, flexShrink: 0 }}/>
                 </div>
-              ))}
+              ); })}
             </div>
           )}
           <textarea className="textarea" rows="2" placeholder="Notes (optional)…" value={logNotes} onChange={e => setLogNotes(e.target.value)} style={{ marginBottom: 6 }}/>
-          <button className="btn btn-primary btn-sm" onClick={postLog}><Icon name="check" size={12}/>Post daily update</button>
+          <div className="tiny muted" style={{ marginBottom: 6 }}>Attach at least one site photo or PDF (per item) as proof with your update.</div>
+          <button className="btn btn-primary btn-sm" onClick={postLog} disabled={posting}><Icon name="check" size={12}/>{posting ? 'Uploading & posting…' : 'Post daily update'}</button>
         </div>
       )}
 
@@ -691,8 +746,25 @@ function VGImplPanel({ so }) {
                     <span className="badge accent tiny">{lg.hours || 0}h</span>
                     {by && <span className="tiny muted">· {by.name}</span>}
                   </div>
-                  {(lg.items || []).length > 0 && <div className="tiny" style={{ marginTop: 3 }}>Used: {lg.items.map(it => `${it.qty}× ${it.name}`).join(' · ')}</div>}
+                  {(lg.items || []).filter(it => Number(it.qty) > 0).length > 0 && <div className="tiny" style={{ marginTop: 3 }}>Used: {lg.items.filter(it => Number(it.qty) > 0).map(it => `${it.qty}× ${it.name}`).join(' · ')}</div>}
                   {lg.notes && <div className="tiny muted" style={{ marginTop: 2 }}>{lg.notes}</div>}
+                  {(() => {
+                    const atts = (lg.items || []).flatMap(it => (it.files || []).map(f => ({ ...f, item: it.name })));
+                    if (!atts.length) return null;
+                    return (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                        {atts.map((f, i) => /^image\//.test(f.type || '') ? (
+                          <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" title={`${f.item} — ${f.name}`}>
+                            <img src={f.url} alt={f.name} loading="lazy" style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)', display: 'block' }}/>
+                          </a>
+                        ) : (
+                          <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: 180 }} title={`${f.item} — ${f.name}`}>
+                            <Icon name={/pdf/.test(f.type || '') ? 'file' : 'file'} size={11}/><span className="trunc">{f.name || 'document'}</span>
+                          </a>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
