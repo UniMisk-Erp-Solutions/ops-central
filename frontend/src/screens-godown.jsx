@@ -722,9 +722,11 @@ function VirtualGodownView({ soId, embedded }) {
   const toggleRecv = (c) => setRecvSel(m => { const n = { ...m }; if (n[c.product_id] != null) delete n[c.product_id]; else n[c.product_id] = c.remaining; return n; });
   const setRecvQty = (c, v) => setRecvSel(m => ({ ...m, [c.product_id]: Math.max(0, Math.min(Number(v) || 0, c.remaining)) }));
 
-  // Approved cross-SO transfers touching this SO — single source of truth,
-  // persisted in transfer_requests. In = received into this VG; Out = lent away.
-  const approved = (state.transfer_requests || []).filter(t => t.status === 'Approved');
+  // Cross-SO transfers that have actually moved: the destination PM confirmed
+  // receipt against the delivery challan ('Confirmed'). Legacy one-step approvals
+  // (no challan) still count so nothing already in flight breaks. In = received
+  // into this VG; Out = lent away.
+  const approved = (state.transfer_requests || []).filter(t => t.status === 'Confirmed' || (t.status === 'Approved' && !t.challan));
   const transferredIn = {};
   const transferredOut = {};
   approved.forEach(t => (t.items || []).forEach(it => {
@@ -1144,20 +1146,52 @@ function AddToPoolModal({ onClose }) {
 
 // ===== Cross-SO Transfers =====
 function CrossSOTransfers() {
-  const { state, mutate, getSO, getProduct, getUser, navigate, currentUser } = useStore();
+  const { state, mutate, getSO, getProduct, getUser, getCustomer, navigate, currentUser } = useStore();
   const toast = useToast();
   const role = getUser(currentUser).role;
   const canInitiate = canDo(role, 'initiateTransfer') || role === 'Org Admin';
+  // Either the source PM OR an MD may approve (whichever acts first clears it for
+  // the other). The destination PM confirms receipt.
+  const canApprove = ['Project Manager', 'Managing Director', 'Org Admin'].includes(role);
+  const canConfirm = ['Project Manager', 'Org Admin'].includes(role);
   const [showNew, setShowNew] = React.useState(false);
+  const [approveT, setApproveT] = React.useState(null);
+  const [viewChallan, setViewChallan] = React.useState(null);
 
-  const requests = state.transfer_requests;
+  const requests = state.transfer_requests || [];
+  const pending = requests.filter(t => ['Pending', 'Approved'].includes(t.status));
+  const history = requests.filter(t => ['Confirmed', 'Rejected'].includes(t.status));
 
-  const decide = (id, decision) => {
-    mutate(s => ({
-      ...s,
-      transfer_requests: s.transfer_requests.map(t => t.id === id ? {...t, status: decision} : t)
-    }), { action: decision, entity: 'TransferRequest', entity_id: id });
-    toast(`Transfer ${decision.toLowerCase()}`, decision === 'Approved' ? 'success' : '');
+  const reject = (t) => {
+    mutate(s => ({ ...s, transfer_requests: s.transfer_requests.map(x => x.id === t.id ? { ...x, status: 'Rejected', rejected_by: currentUser, rejected_role: role, rejected_date: TODAY } : x), notifications: [{ id: 'n-txr-' + Date.now(), kind: 'transfer', text: `Transfer ${getSO(t.from_so)?.so_no} → ${getSO(t.to_so)?.so_no} rejected by ${role}`, date: TODAY, read: false, user_id: t.requested_by }, ...s.notifications] }), { action: 'reject-transfer', entity: 'TransferRequest', entity_id: t.id });
+    toast('Transfer rejected', '');
+  };
+  const confirm = (t) => {
+    mutate(s => ({ ...s, transfer_requests: s.transfer_requests.map(x => x.id === t.id ? { ...x, status: 'Confirmed', confirmed_by: currentUser, confirmed_date: TODAY } : x), notifications: [{ id: 'n-txc-' + Date.now(), kind: 'transfer', text: `Transfer ${t.challan ? t.challan.no + ' ' : ''}confirmed by ${role} · stock moved ${getSO(t.from_so)?.so_no} → ${getSO(t.to_so)?.so_no}`, date: TODAY, read: false, user_id: t.approved_by || t.requested_by }, ...s.notifications] }), { action: 'confirm-transfer', entity: 'TransferRequest', entity_id: t.id });
+    toast('Receipt confirmed · stock moved to the destination SO', 'success');
+  };
+
+  const txRow = (t) => {
+    const fromSO = getSO(t.from_so); const toSO = getSO(t.to_so);
+    const byUser = getUser(t.requested_by); const appr = getUser(t.approved_by); const conf = getUser(t.confirmed_by);
+    return (
+      <tr key={t.id}>
+        <td><div className="mono">{fromSO?.so_no || '—'}</div>{fromSO && <div className="tiny muted trunc">{getCustomer(fromSO.customer_id)?.name}</div>}</td>
+        <td><div className="mono">{toSO?.so_no || '—'}</div>{toSO && <div className="tiny muted trunc">{getCustomer(toSO.customer_id)?.name}</div>}</td>
+        <td>{t.items.map((it, i) => { const p = getProduct(it.product_id); return <div key={i} className="small">{p?.name || it.product_id} <span className="mono muted">× {it.qty}</span></div>; })}</td>
+        <td>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Avatar user={byUser} size={18}/> <span className="tiny">{byUser?.name?.split(' ')[0] || '—'}</span></div>
+          {appr && <div className="tiny muted mt-1" title={`Approved ${fmtDate(t.approved_date)}`}>✓ {appr.name?.split(' ')[0]} ({t.approved_role})</div>}
+          {conf && <div className="tiny" style={{ color: 'var(--success)' }} title={`Confirmed ${fmtDate(t.confirmed_date)}`}>↓ received by {conf.name?.split(' ')[0]}</div>}
+        </td>
+        <td>{t.status === 'Pending' ? <span className="badge warning dot">Awaiting approval</span> : t.status === 'Approved' ? <span className="badge accent dot">Approved · awaiting receipt</span> : t.status === 'Confirmed' ? <span className="badge success dot">Confirmed · moved</span> : <span className="badge danger dot">Rejected</span>}</td>
+        <td style={{ whiteSpace: 'nowrap' }}>
+          {t.challan && <button className="btn btn-ghost btn-sm" title="View delivery challan" onClick={() => setViewChallan(t)}><Icon name="file" size={11}/>Challan</button>}
+          {t.status === 'Pending' && canApprove && <><button className="btn btn-sm btn-primary" onClick={() => setApproveT(t)}><Icon name="check" size={11}/>Approve</button><button className="btn btn-sm" onClick={() => reject(t)}><Icon name="x" size={11}/>Reject</button></>}
+          {t.status === 'Approved' && canConfirm && <><button className="btn btn-sm btn-primary" onClick={() => confirm(t)}><Icon name="check" size={11}/>Confirm receipt</button><button className="btn btn-sm" onClick={() => reject(t)}><Icon name="x" size={11}/>Reject</button></>}
+        </td>
+      </tr>
+    );
   };
 
   return (
@@ -1165,99 +1199,169 @@ function CrossSOTransfers() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Cross-SO Transfers</h1>
-          <div className="page-sub">Backend-only · on-hold SOs lend stock to urgent SOs · customer-facing documents never reference</div>
+          <div className="page-sub">Move line items between orders · PM/MD approves + issues a delivery challan · destination PM confirms receipt</div>
         </div>
         <div className="page-actions">
           {canInitiate && <button className="btn btn-primary" onClick={() => setShowNew(true)}><Icon name="plus" size={13}/>Request transfer</button>}
         </div>
       </div>
 
-      <div style={{
-        background: 'var(--info-bg)', border: '1px solid oklch(0.86 0.05 260)',
-        padding: '8px 12px', borderRadius: 'var(--radius)', fontSize: 12.5, marginBottom: 14,
-        display: 'flex', alignItems: 'center', gap: 8
-      }}>
+      <div style={{ background: 'var(--info-bg)', border: '1px solid oklch(0.86 0.05 260)', padding: '8px 12px', borderRadius: 'var(--radius)', fontSize: 12.5, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
         <Icon name="alert" size={14} color="var(--info)"/>
-        <span><strong>Visibility rule:</strong> Cross-SO transfers are an internal-only audit trail. The customer's Delivery Challan, Tax Invoice, and e-Way Bill show only their own SO — never the lending SO.</span>
+        <span><strong>Two-way approval:</strong> the source PM <em>or</em> an MD approves (either one) and issues a delivery challan; the destination PM checks the challan &amp; goods and confirms receipt — only then does the stock move (added to the destination SO, removed from the source). Customer tax invoices never reference the other SO.</span>
       </div>
 
       <div className="card">
-        <div className="card-header"><h3 className="card-title">Pending Requests</h3></div>
+        <div className="card-header"><h3 className="card-title">Open transfers ({pending.length})</h3></div>
         <div className="card-body flush">
-          {requests.length === 0 ? <div className="empty">No transfers</div> : (
+          {pending.length === 0 ? <div className="empty">No open transfers.</div> : (
             <table className="t">
-              <thead><tr>
-                <th>Req ID</th><th>From SO</th><th>To SO</th><th>Items</th><th>Reason</th><th>Requested by</th><th>Status</th><th></th>
-              </tr></thead>
-              <tbody>
-                {requests.map(t => {
-                  const fromSO = getSO(t.from_so);
-                  const toSO = getSO(t.to_so);
-                  const byUser = getUser(t.requested_by);
-                  return (
-                    <tr key={t.id}>
-                      <td className="mono small">{t.id}</td>
-                      <td><div className="mono">{fromSO?.so_no}</div><div className="tiny muted">On Hold</div></td>
-                      <td><div className="mono">{toSO?.so_no}</div><div className="tiny muted">Urgent</div></td>
-                      <td>
-                        {t.items.map((it, i) => {
-                          const p = getProduct(it.product_id);
-                          return <div key={i} className="small">{p?.name} <span className="mono muted">× {it.qty}</span></div>;
-                        })}
-                      </td>
-                      <td className="trunc small" title={t.reason}>{t.reason}</td>
-                      <td><Avatar user={byUser} size={20}/> <span className="small">{byUser?.name.split(' ')[0]}</span></td>
-                      <td>{t.status === 'Pending' ? <span className="badge warning dot">Pending</span> :
-                          t.status === 'Approved' ? <span className="badge success dot">Approved</span> :
-                          <span className="badge danger dot">Rejected</span>}</td>
-                      <td>
-                        {t.status === 'Pending' && (
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            <button className="btn btn-sm btn-primary" onClick={() => decide(t.id, 'Approved')}><Icon name="check" size={11}/>Approve</button>
-                            <button className="btn btn-sm" onClick={() => decide(t.id, 'Rejected')}><Icon name="x" size={11}/>Reject</button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
+              <thead><tr><th>From SO</th><th>To SO</th><th>Items</th><th>Requested / approved</th><th>Status</th><th></th></tr></thead>
+              <tbody>{pending.map(txRow)}</tbody>
             </table>
           )}
         </div>
       </div>
 
-      <div className="mt-3 split-2">
-        <div className="card">
-          <div className="card-header"><h3 className="card-title">Recent transfers</h3></div>
-          <div className="card-body flush">
+      <div className="card mt-2">
+        <div className="card-header"><h3 className="card-title">History ({history.length})</h3><span className="card-sub">confirmed &amp; rejected transfers</span></div>
+        <div className="card-body flush">
+          {history.length === 0 ? <div className="empty">No completed transfers yet.</div> : (
             <table className="t">
-              <thead><tr><th>Date</th><th>From → To</th><th>Items</th><th>Approver</th></tr></thead>
-              <tbody>
-                <tr><td className="mono small">12-May</td><td className="mono small">SO/0007 → SO/0010</td><td className="small">3× SSD-NVME-512</td><td><span className="small">Ravi I</span></td></tr>
-                <tr><td className="mono small">08-May</td><td className="mono small">SO/0006 → SO/0009</td><td className="small">2× SW-24P-GE</td><td><span className="small">Divya S</span></td></tr>
-                <tr><td className="mono small">02-May</td><td className="mono small">SO/0005 → SO/0008</td><td className="small">8× CAB-CAT6</td><td><span className="small">Ravi I</span></td></tr>
-              </tbody>
+              <thead><tr><th>From SO</th><th>To SO</th><th>Items</th><th>Requested / approved</th><th>Status</th><th></th></tr></thead>
+              <tbody>{history.map(txRow)}</tbody>
             </table>
-          </div>
-        </div>
-        <div className="card">
-          <div className="card-header"><h3 className="card-title">How it works</h3></div>
-          <div className="card-body">
-            <div className="timeline">
-              <div className="timeline-step done"><div className="timeline-dot"/><div className="timeline-label">Urgent SO's PM initiates request</div></div>
-              <div className="timeline-step done"><div className="timeline-dot"/><div className="timeline-label">Source SO's PM notified (in-app + email)</div></div>
-              <div className="timeline-step current"><div className="timeline-dot"/><div className="timeline-label">Source PM approves or rejects with reason</div></div>
-              <div className="timeline-step"><div className="timeline-dot"/><div className="timeline-label">Items digitally re-allocated · audit logged</div></div>
-              <div className="timeline-step"><div className="timeline-dot"/><div className="timeline-label">Source SO's procurement auto-re-triggered</div></div>
-              <div className="timeline-step"><div className="timeline-dot"/><div className="timeline-label">Customer docs hide the transfer entirely</div></div>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 
       {showNew && <NewTransferModal onClose={() => setShowNew(false)}/>}
+      {approveT && <ApproveTransferModal transfer={approveT} onClose={() => setApproveT(null)}/>}
+      {viewChallan && <DeliveryChallanModal transfer={viewChallan} onClose={() => setViewChallan(null)}/>}
     </div>
+  );
+}
+
+// Source PM/MD approves a transfer and fills the delivery challan (rates, delivery
+// cost, transport). Generates a structured challan; the destination PM then confirms.
+function ApproveTransferModal({ transfer, onClose }) {
+  const { state, mutate, getSO, getProduct, getUser, getCustomer, currentUser } = useStore();
+  const toast = useToast();
+  const role = getUser(currentUser).role;
+  const fromSO = getSO(transfer.from_so); const toSO = getSO(transfer.to_so);
+  const [items, setItems] = React.useState(transfer.items.map(it => { const p = getProduct(it.product_id); return { product_id: it.product_id, name: p ? p.name : it.product_id, code: p ? p.code : '', hsn: p ? p.hsn || '' : '', qty: Number(it.qty) || 0, rate: p ? (p.buy || 0) : 0 }; }));
+  const [deliveryCost, setDeliveryCost] = React.useState('');
+  const [transport, setTransport] = React.useState('Road');
+  const [vehicle, setVehicle] = React.useState('');
+  const [lr, setLr] = React.useState('');
+  const [notes, setNotes] = React.useState('');
+  const [applyGst, setApplyGst] = React.useState(false);
+  const setItem = (i, patch) => setItems(its => its.map((x, j) => j === i ? { ...x, ...patch } : x));
+  const subtotal = items.reduce((a, it) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+  const dc = Number(deliveryCost) || 0;
+  const gst = applyGst ? Math.round((subtotal + dc) * 0.18) : 0;
+  const total = subtotal + dc + gst;
+
+  const submit = () => {
+    if (items.some(it => (Number(it.qty) || 0) <= 0)) { toast('Every item needs a quantity'); return; }
+    const seq = (state.transfer_requests || []).filter(t => t.challan).length;
+    const challan = {
+      no: `DC/FY26/${String(1 + seq).padStart(4, '0')}`, date: TODAY,
+      reason: 'Cross-SO stock transfer — internal re-allocation (not a sale)',
+      transport, vehicle, lr, delivery_cost: dc, notes,
+      items: items.map(it => ({ ...it, qty: Number(it.qty) || 0, rate: Number(it.rate) || 0, amount: Math.round((Number(it.qty) || 0) * (Number(it.rate) || 0)) })),
+      subtotal: Math.round(subtotal), gst, total: Math.round(total), apply_gst: applyGst,
+    };
+    mutate(s => ({
+      ...s,
+      transfer_requests: s.transfer_requests.map(t => t.id === transfer.id ? { ...t, status: 'Approved', approved_by: currentUser, approved_role: role, approved_date: TODAY, items: challan.items.map(it => ({ product_id: it.product_id, qty: it.qty })), challan } : t),
+      notifications: [{ id: 'n-txa-' + Date.now(), kind: 'transfer', text: `Transfer ${challan.no} approved by ${role} · ${toSO?.so_no} PM to confirm receipt`, date: TODAY, read: false, role: 'Project Manager' }, ...s.notifications],
+    }), { action: 'approve-transfer', entity: 'TransferRequest', entity_id: transfer.id });
+    toast(`Approved · ${challan.no} generated`, 'success');
+    onClose();
+  };
+
+  return (
+    <Modal title={`Approve transfer & issue delivery challan`} onClose={onClose} size="lg" footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={submit}><Icon name="check" size={13}/>Approve &amp; generate challan</button></>}>
+      <div className="tiny muted mb-2">{fromSO?.so_no} <Icon name="arrowRight" size={10}/> {toSO?.so_no} · approving as <strong>{role}</strong>. Fill the movement details; the destination PM confirms receipt against this challan.</div>
+      <table className="t">
+        <thead><tr><th>Item</th><th>HSN</th><th className="num">Qty</th><th className="num">Rate ₹</th><th className="num">Value</th></tr></thead>
+        <tbody>{items.map((it, i) => (
+          <tr key={i}>
+            <td>{it.name}<div className="tiny muted mono">{it.code}</div></td>
+            <td><input className="input mono" value={it.hsn} onChange={e => setItem(i, { hsn: e.target.value })} style={{ width: 72, height: 24 }}/></td>
+            <td className="num"><input type="number" min="0" className="input mono" value={it.qty} onChange={e => setItem(i, { qty: e.target.value })} style={{ width: 60, height: 24, textAlign: 'right' }}/></td>
+            <td className="num"><input type="number" min="0" className="input mono" value={it.rate} onChange={e => setItem(i, { rate: e.target.value })} style={{ width: 84, height: 24, textAlign: 'right' }}/></td>
+            <td className="num mono">{inr((Number(it.qty) || 0) * (Number(it.rate) || 0))}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      <div className="field-row-3 mt-2">
+        <div className="field"><label className="field-label">Transport mode</label><select className="select" value={transport} onChange={e => setTransport(e.target.value)}><option>Road</option><option>Rail</option><option>Hand delivery</option><option>Courier</option></select></div>
+        <div className="field"><label className="field-label">Vehicle no.</label><input className="input mono" value={vehicle} onChange={e => setVehicle(e.target.value)} placeholder="MH-04-AB-1234"/></div>
+        <div className="field"><label className="field-label">LR / docket</label><input className="input mono" value={lr} onChange={e => setLr(e.target.value)}/></div>
+      </div>
+      <div className="field-row mt-2">
+        <div className="field"><label className="field-label">Delivery / freight cost (₹)</label><input type="number" min="0" className="input mono" value={deliveryCost} onChange={e => setDeliveryCost(e.target.value)} placeholder="0"/></div>
+        <div className="field"><label className="field-label">Apply 18% GST on the challan</label><div style={{ marginTop: 6 }}><label style={{ cursor: 'pointer', display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5 }}><input type="checkbox" checked={applyGst} onChange={e => setApplyGst(e.target.checked)}/> Charge GST (leave off for a pure internal transfer)</label></div></div>
+      </div>
+      <div className="field mt-2"><label className="field-label">Notes</label><textarea className="textarea" rows="2" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason / handling instructions…"/></div>
+      <div className="dl mt-2" style={{ gridTemplateColumns: '1fr auto', maxWidth: 320, marginLeft: 'auto', fontSize: 12.5 }}>
+        <dt>Goods value</dt><dd className="num mono right">{inr(subtotal)}</dd>
+        <dt>Delivery cost</dt><dd className="num mono right">{inr(dc)}</dd>
+        {applyGst && <><dt>GST @ 18%</dt><dd className="num mono right">{inr(gst)}</dd></>}
+        <dt style={{ fontWeight: 700 }}>Challan total</dt><dd className="num mono right" style={{ fontWeight: 700 }}>{inr(total)}</dd>
+      </div>
+    </Modal>
+  );
+}
+
+// The delivery challan document (structured, GST-aware) for an internal transfer.
+function DeliveryChallanModal({ transfer, onClose }) {
+  const { state, getSO, getCustomer, getProduct, getUser } = useStore();
+  const ch = transfer.challan; if (!ch) return null;
+  const fromSO = getSO(transfer.from_so); const toSO = getSO(transfer.to_so);
+  const fromCust = fromSO ? getCustomer(fromSO.customer_id) : null;
+  const toCust = toSO ? getCustomer(toSO.customer_id) : null;
+  const appr = getUser(transfer.approved_by); const conf = getUser(transfer.confirmed_by);
+  return (
+    <Modal title={`Delivery Challan — ${ch.no}`} onClose={onClose} size="lg" footer={<><button className="btn" onClick={onClose}>Close</button><button className="btn"><Icon name="print" size={13}/>Print</button></>}>
+      <div className="doc-paper" style={{ padding: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--border-strong)', paddingBottom: 8 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><div className="brand-mark" style={{ width: 30, height: 30, fontSize: 15 }}>B</div><div><h2 style={{ margin: 0, fontSize: 16 }}>{state.org.name}</h2><div className="small muted">{state.org.address}</div><div className="small mono">GSTIN: {state.org.gstin} · State: {state.org.state}</div></div></div>
+          </div>
+          <div style={{ textAlign: 'right' }}><div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '0.06em' }}>DELIVERY CHALLAN</div><div className="small mono">{ch.no}</div><div className="tiny muted">Not a tax invoice</div></div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, margin: '10px 0' }}>
+          <div><div className="tiny muted" style={{ textTransform: 'uppercase' }}>Consign from (source order)</div><div className="small mono">{fromSO?.so_no}</div><div className="small">{fromCust?.name}</div></div>
+          <div><div className="tiny muted" style={{ textTransform: 'uppercase' }}>Consign to (destination order)</div><div className="small mono">{toSO?.so_no}</div><div className="small">{toCust?.name}</div></div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: 8, background: 'var(--bg-subtle)', borderRadius: 4, marginBottom: 10 }}>
+          <div><div className="tiny muted">Date</div><div className="mono small">{fmtDate(ch.date)}</div></div>
+          <div><div className="tiny muted">Transport</div><div className="small">{ch.transport}</div></div>
+          <div><div className="tiny muted">Vehicle</div><div className="mono small">{ch.vehicle || '—'}</div></div>
+          <div><div className="tiny muted">LR / docket</div><div className="mono small">{ch.lr || '—'}</div></div>
+        </div>
+        <div className="tiny muted mb-1">Reason for transportation: <strong>{ch.reason}</strong></div>
+        <table style={{ width: '100%', fontSize: 12 }}>
+          <thead><tr><th style={{ textAlign: 'left' }}>#</th><th style={{ textAlign: 'left' }}>Description</th><th>HSN</th><th className="num">Qty</th><th className="num">Rate</th><th className="num">Value</th></tr></thead>
+          <tbody>{(ch.items || []).map((it, i) => (<tr key={i}><td>{i + 1}</td><td>{it.name}<div className="tiny muted mono">{it.code}</div></td><td className="mono">{it.hsn || '—'}</td><td className="num mono">{it.qty}</td><td className="num mono">{inr(it.rate)}</td><td className="num mono">{inr(it.amount)}</td></tr>))}</tbody>
+        </table>
+        <table className="totals" style={{ marginTop: 8 }}><tbody>
+          <tr><td>Goods value</td><td className="num mono right">{inr(ch.subtotal)}</td></tr>
+          <tr><td>Delivery / freight</td><td className="num mono right">{inr(ch.delivery_cost || 0)}</td></tr>
+          {ch.apply_gst && <tr><td>GST @ 18%</td><td className="num mono right">{inr(ch.gst || 0)}</td></tr>}
+          <tr className="grand"><td>Total</td><td className="num mono right">{inr(ch.total)}</td></tr>
+        </tbody></table>
+        {ch.notes && <div className="tiny muted mt-2"><strong>Notes:</strong> {ch.notes}</div>}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+          <div><div className="tiny muted">Approved by</div><div className="small">{appr ? `${appr.name} (${transfer.approved_role})` : '—'} · {fmtDate(transfer.approved_date)}</div></div>
+          <div style={{ textAlign: 'right' }}><div className="tiny muted">Received &amp; confirmed by</div><div className="small">{conf ? `${conf.name}` : 'Pending confirmation'}{conf ? ` · ${fmtDate(transfer.confirmed_date)}` : ''}</div></div>
+        </div>
+        <div className="tiny muted" style={{ marginTop: 10, textAlign: 'center', borderTop: '1px solid var(--border)', paddingTop: 6 }}>Internal delivery challan (CGST Rule 55) — documents movement of goods between sales orders, not a sale. No input tax credit passes on this document.</div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1306,7 +1410,11 @@ function NewTransferModal({ onClose, destSoId }) {
         items: [{ product_id: productId, qty }],
         status: 'Pending', requested_by: currentUser, requested_date: TODAY, reason,
       }],
-      notifications: [{ id: 'n-tr-' + Date.now(), kind: 'transfer', text: `Transfer requested: ${getSO(toSO)?.so_no} needs ${qty}× ${getProduct(productId)?.name} from ${getSO(fromSO)?.so_no}`, date: TODAY, read: false, role: 'Project Manager' }, ...s.notifications],
+      notifications: [
+        { id: 'n-tr-' + Date.now(), kind: 'transfer', text: `Transfer requested: ${getSO(toSO)?.so_no} needs ${qty}× ${getProduct(productId)?.name} from ${getSO(fromSO)?.so_no} · approve (PM or MD)`, date: TODAY, read: false, role: 'Project Manager' },
+        { id: 'n-trm-' + Date.now(), kind: 'transfer', text: `Transfer request awaiting approval: ${qty}× ${getProduct(productId)?.name} · ${getSO(fromSO)?.so_no} → ${getSO(toSO)?.so_no}`, date: TODAY, read: false, role: 'Managing Director' },
+        ...s.notifications,
+      ],
     }), { action: 'create', entity: 'TransferRequest' });
     toast('Transfer request raised · source PM notified', 'success');
     onClose();
