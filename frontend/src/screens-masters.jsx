@@ -392,8 +392,15 @@ function ApprovalInbox() {
 
 // ===== Audit Log =====
 function AuditLog() {
-  const { state } = useStore();
-  const entries = [
+  const { state, getUser } = useStore();
+  // Real, live audit entries (from every mutate) shown first, newest on top.
+  const fmtTs = (ts) => { if (!ts) return ''; const str = String(ts); return str.includes('T') ? str.slice(0, 19).replace('T', ' ') : str; };
+  const detailStr = (d) => { if (!d) return ''; if (typeof d === 'string') return d; if (d.detail) return d.detail; return Object.entries(d).filter(([k]) => !['action', 'entity', 'entity_id', 'user_id', 'ts', 'id'].includes(k)).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · '); };
+  const real = (state.audit || []).slice().reverse().map(e => {
+    const u = e.user_id ? getUser(e.user_id) : null;
+    return { ts: fmtTs(e.ts), user: (u && u.name) || e.user_id || 'System', role: (u && u.role) || '', action: String(e.action || 'write').toUpperCase(), entity: e.entity || '', ref: e.entity_id || '', detail: detailStr(e.detail), ip: 'live' };
+  });
+  const entries = [...real,
     { ts: '21-May-2026 09:42:12', user: 'Arun Bhatia', role: 'Stores', action: 'POST', entity: 'GRN', ref: 'GRN/FY26/0028', detail: '24 items received against VPO/FY26/0040', ip: '10.0.0.42' },
     { ts: '21-May-2026 09:18:55', user: 'Divya Shah', role: 'Project Manager', action: 'CREATE', entity: 'TransferRequest', ref: 'TR-001', detail: 'Cross-SO transfer · 4×RAM from SO/0016 → SO/0015', ip: '10.0.0.18' },
     { ts: '21-May-2026 08:55:31', user: 'Pooja Nair', role: 'Purchase', action: 'CREATE', entity: 'RFQ', ref: 'RFQ/FY26/0023', detail: 'Floated to TechSource, Compworld, Rapid Networks, Prime Computech', ip: '10.0.0.27' },

@@ -1150,10 +1150,12 @@ function CrossSOTransfers() {
   const toast = useToast();
   const role = getUser(currentUser).role;
   const canInitiate = canDo(role, 'initiateTransfer') || role === 'Org Admin';
-  // Either the source PM OR an MD may approve (whichever acts first clears it for
-  // the other). The destination PM confirms receipt.
-  const canApprove = ['Project Manager', 'Managing Director', 'Org Admin'].includes(role);
-  const canConfirm = ['Project Manager', 'Org Admin'].includes(role);
+  // Approval is by the SOURCE SO's PM (auto-detected from the SO) or an MD; the
+  // DESTINATION SO's PM confirms receipt. If a SO has no PM assigned, any PM may
+  // act so it never blocks. Same PM on both SOs → both steps come back to them.
+  const isSoPM = (soId) => { const s = getSO(soId); return s && s.pm ? s.pm === currentUser : role === 'Project Manager'; };
+  const canApproveT = (t) => ['Managing Director', 'Org Admin'].includes(role) || (role === 'Project Manager' && isSoPM(t.from_so));
+  const canConfirmT = (t) => role === 'Org Admin' || (role === 'Project Manager' && isSoPM(t.to_so));
   const [showNew, setShowNew] = React.useState(false);
   const [approveT, setApproveT] = React.useState(null);
   const [viewChallan, setViewChallan] = React.useState(null);
@@ -1162,12 +1164,15 @@ function CrossSOTransfers() {
   const pending = requests.filter(t => ['Pending', 'Approved'].includes(t.status));
   const history = requests.filter(t => ['Confirmed', 'Rejected'].includes(t.status));
 
+  const txLabel = (t) => `${getSO(t.from_so)?.so_no || t.from_so} → ${getSO(t.to_so)?.so_no || t.to_so}`;
+  const itemsLabel = (t) => (t.items || []).map(it => `${it.qty}× ${getProduct(it.product_id)?.name || it.product_id}`).join(', ');
   const reject = (t) => {
-    mutate(s => ({ ...s, transfer_requests: s.transfer_requests.map(x => x.id === t.id ? { ...x, status: 'Rejected', rejected_by: currentUser, rejected_role: role, rejected_date: TODAY } : x), notifications: [{ id: 'n-txr-' + Date.now(), kind: 'transfer', text: `Transfer ${getSO(t.from_so)?.so_no} → ${getSO(t.to_so)?.so_no} rejected by ${role}`, date: TODAY, read: false, user_id: t.requested_by }, ...s.notifications] }), { action: 'reject-transfer', entity: 'TransferRequest', entity_id: t.id });
+    mutate(s => ({ ...s, transfer_requests: s.transfer_requests.map(x => x.id === t.id ? { ...x, status: 'Rejected', rejected_by: currentUser, rejected_role: role, rejected_date: TODAY } : x), notifications: [{ id: 'n-txr-' + Date.now(), kind: 'transfer', text: `Transfer ${txLabel(t)} rejected by ${role}`, date: TODAY, read: false, user_id: t.requested_by }, ...s.notifications] }), { action: 'reject', entity: 'TransferRequest', entity_id: t.challan ? t.challan.no : t.id, user_id: currentUser, detail: `Transfer rejected by ${role} · ${txLabel(t)} · ${itemsLabel(t)}` });
     toast('Transfer rejected', '');
   };
   const confirm = (t) => {
-    mutate(s => ({ ...s, transfer_requests: s.transfer_requests.map(x => x.id === t.id ? { ...x, status: 'Confirmed', confirmed_by: currentUser, confirmed_date: TODAY } : x), notifications: [{ id: 'n-txc-' + Date.now(), kind: 'transfer', text: `Transfer ${t.challan ? t.challan.no + ' ' : ''}confirmed by ${role} · stock moved ${getSO(t.from_so)?.so_no} → ${getSO(t.to_so)?.so_no}`, date: TODAY, read: false, user_id: t.approved_by || t.requested_by }, ...s.notifications] }), { action: 'confirm-transfer', entity: 'TransferRequest', entity_id: t.id });
+    const destPm = getSO(t.to_so)?.pm;
+    mutate(s => ({ ...s, transfer_requests: s.transfer_requests.map(x => x.id === t.id ? { ...x, status: 'Confirmed', confirmed_by: currentUser, confirmed_date: TODAY } : x), notifications: [{ id: 'n-txc-' + Date.now(), kind: 'transfer', text: `Transfer ${t.challan ? t.challan.no + ' ' : ''}confirmed · stock moved ${txLabel(t)}`, date: TODAY, read: false, user_id: t.approved_by || t.requested_by }, ...s.notifications] }), { action: 'confirm', entity: 'TransferRequest', entity_id: t.challan ? t.challan.no : t.id, user_id: currentUser, detail: `Receipt confirmed by ${role}${destPm && destPm === currentUser ? ' (destination SO PM)' : ''} · stock moved ${txLabel(t)} · ${itemsLabel(t)}` });
     toast('Receipt confirmed · stock moved to the destination SO', 'success');
   };
 
@@ -1187,8 +1192,8 @@ function CrossSOTransfers() {
         <td>{t.status === 'Pending' ? <span className="badge warning dot">Awaiting approval</span> : t.status === 'Approved' ? <span className="badge accent dot">Approved · awaiting receipt</span> : t.status === 'Confirmed' ? <span className="badge success dot">Confirmed · moved</span> : <span className="badge danger dot">Rejected</span>}</td>
         <td style={{ whiteSpace: 'nowrap' }}>
           {t.challan && <button className="btn btn-ghost btn-sm" title="View delivery challan" onClick={() => setViewChallan(t)}><Icon name="file" size={11}/>Challan</button>}
-          {t.status === 'Pending' && canApprove && <><button className="btn btn-sm btn-primary" onClick={() => setApproveT(t)}><Icon name="check" size={11}/>Approve</button><button className="btn btn-sm" onClick={() => reject(t)}><Icon name="x" size={11}/>Reject</button></>}
-          {t.status === 'Approved' && canConfirm && <><button className="btn btn-sm btn-primary" onClick={() => confirm(t)}><Icon name="check" size={11}/>Confirm receipt</button><button className="btn btn-sm" onClick={() => reject(t)}><Icon name="x" size={11}/>Reject</button></>}
+          {t.status === 'Pending' && (canApproveT(t) ? <><button className="btn btn-sm btn-primary" onClick={() => setApproveT(t)}><Icon name="check" size={11}/>Approve</button><button className="btn btn-sm" onClick={() => reject(t)}><Icon name="x" size={11}/>Reject</button></> : <span className="tiny muted">awaiting {getSO(t.from_so)?.pm ? getUser(getSO(t.from_so).pm)?.name?.split(' ')[0] + ' / MD' : 'source PM / MD'}</span>)}
+          {t.status === 'Approved' && (canConfirmT(t) ? <><button className="btn btn-sm btn-primary" onClick={() => confirm(t)}><Icon name="check" size={11}/>Confirm receipt</button><button className="btn btn-sm" onClick={() => reject(t)}><Icon name="x" size={11}/>Reject</button></> : <span className="tiny muted">awaiting {getSO(t.to_so)?.pm ? getUser(getSO(t.to_so).pm)?.name?.split(' ')[0] : 'destination PM'}</span>)}
         </td>
       </tr>
     );
@@ -1272,11 +1277,13 @@ function ApproveTransferModal({ transfer, onClose }) {
       items: items.map(it => ({ ...it, qty: Number(it.qty) || 0, rate: Number(it.rate) || 0, amount: Math.round((Number(it.qty) || 0) * (Number(it.rate) || 0)) })),
       subtotal: Math.round(subtotal), gst, total: Math.round(total), apply_gst: applyGst,
     };
+    const destPm = toSO && toSO.pm;   // confirmation goes to the DESTINATION SO's PM (auto-detected)
+    const label = `${fromSO?.so_no} → ${toSO?.so_no}`;
     mutate(s => ({
       ...s,
       transfer_requests: s.transfer_requests.map(t => t.id === transfer.id ? { ...t, status: 'Approved', approved_by: currentUser, approved_role: role, approved_date: TODAY, items: challan.items.map(it => ({ product_id: it.product_id, qty: it.qty })), challan } : t),
-      notifications: [{ id: 'n-txa-' + Date.now(), kind: 'transfer', text: `Transfer ${challan.no} approved by ${role} · ${toSO?.so_no} PM to confirm receipt`, date: TODAY, read: false, role: 'Project Manager' }, ...s.notifications],
-    }), { action: 'approve-transfer', entity: 'TransferRequest', entity_id: transfer.id });
+      notifications: [{ id: 'n-txa-' + Date.now(), kind: 'transfer', text: `Confirm receipt: transfer ${challan.no} · ${label} · check the challan & goods`, date: TODAY, read: false, ...(destPm ? { user_id: destPm } : { role: 'Project Manager' }) }, ...s.notifications],
+    }), { action: 'approve', entity: 'TransferRequest', entity_id: challan.no, user_id: currentUser, detail: `Transfer approved by ${role} · challan ${challan.no} issued · ${label} · ${challan.items.map(it => `${it.qty}× ${it.name}`).join(', ')}` });
     toast(`Approved · ${challan.no} generated`, 'success');
     onClose();
   };
@@ -1402,21 +1409,26 @@ function NewTransferModal({ onClose, destSoId }) {
 
   const submit = () => {
     if (!fromSO || !toSO || !productId || !reason) return;
+    const trId = 'tr-' + Date.now();
+    const srcPm = getSO(fromSO)?.pm;   // approval goes to the SOURCE SO's PM (auto-detected)
+    const label = `${getSO(fromSO)?.so_no} → ${getSO(toSO)?.so_no}`;
+    const pn = getProduct(productId)?.name;
     mutate(s => ({
       ...s,
       transfer_requests: [...s.transfer_requests, {
-        id: 'tr-' + Date.now(),
+        id: trId,
         from_so: fromSO, to_so: toSO,
         items: [{ product_id: productId, qty }],
         status: 'Pending', requested_by: currentUser, requested_date: TODAY, reason,
       }],
       notifications: [
-        { id: 'n-tr-' + Date.now(), kind: 'transfer', text: `Transfer requested: ${getSO(toSO)?.so_no} needs ${qty}× ${getProduct(productId)?.name} from ${getSO(fromSO)?.so_no} · approve (PM or MD)`, date: TODAY, read: false, role: 'Project Manager' },
-        { id: 'n-trm-' + Date.now(), kind: 'transfer', text: `Transfer request awaiting approval: ${qty}× ${getProduct(productId)?.name} · ${getSO(fromSO)?.so_no} → ${getSO(toSO)?.so_no}`, date: TODAY, read: false, role: 'Managing Director' },
+        // Source SO's PM (specific user if assigned, else any PM) + MD — either approves.
+        { id: 'n-tr-' + Date.now(), kind: 'transfer', text: `Approve transfer: ${qty}× ${pn} · ${label}`, date: TODAY, read: false, ...(srcPm ? { user_id: srcPm } : { role: 'Project Manager' }) },
+        { id: 'n-trm-' + Date.now(), kind: 'transfer', text: `Transfer awaiting approval: ${qty}× ${pn} · ${label}`, date: TODAY, read: false, role: 'Managing Director' },
         ...s.notifications,
       ],
-    }), { action: 'create', entity: 'TransferRequest' });
-    toast('Transfer request raised · source PM notified', 'success');
+    }), { action: 'request', entity: 'TransferRequest', entity_id: trId, user_id: currentUser, detail: `Cross-SO transfer requested · ${qty}× ${pn} · ${label}` });
+    toast('Transfer request raised · source SO PM notified', 'success');
     onClose();
   };
 
