@@ -959,7 +959,37 @@ function VendorPODetail({ poId }) {
 
 // ===== GRN =====
 function GRNList() {
-  const { state, navigate, getVendor } = useStore();
+  const { state, navigate, getVendor, getProduct, getUser, mutate, addToPool, currentUser } = useStore();
+  const toast = useToast();
+  const role = (getUser(currentUser) || {}).role;
+  const canAccept = ['Stores', 'Org Admin'].includes(role);
+  const [busy, setBusy] = React.useState('');
+  // Receipts marked by Purchase/PM at the Virtual Godown, awaiting Stores' acceptance.
+  // Stores accepts → GRN + client invoice are posted (via the same receive engine).
+  const pending = [];
+  (state.sales_orders || []).forEach(so => ((so.extra && so.extra.pending_receipts) || []).forEach(pr => { if (pr.status === 'Pending') pending.push({ so, pr }); }));
+
+  const acceptReceipt = async ({ so, pr }) => {
+    setBusy(pr.id);
+    let r = { units: 0 };
+    if (window.vgReceiveComponents) r = await window.vgReceiveComponents(so, pr.picks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Accepted', accepted_by: currentUser, accepted_date: TODAY } : p) } } : x),
+      notifications: [{ id: 'n-reca-' + Date.now(), kind: 'grn', text: `${so.so_no}: receipt accepted by Stores · GRN posted · client invoice auto-raised`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
+    }), { action: 'receipt-accept', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Stores accepted receipt · GRN posted · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+    setBusy('');
+    toast(`Accepted · ${r.units} unit(s) received · GRN posted · client invoice raised`, 'success');
+  };
+  const rejectReceipt = ({ so, pr }) => {
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Rejected', rejected_by: currentUser, rejected_date: TODAY } : p) } } : x),
+      notifications: [{ id: 'n-recr-' + Date.now(), kind: 'grn', text: `${so.so_no}: Stores could not accept the marked receipt — please re-check`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
+    }), { action: 'receipt-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Stores rejected marked receipt · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+    toast('Receipt returned to Purchase', '');
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -972,6 +1002,36 @@ function GRNList() {
           <button className="btn" onClick={() => navigate('godown')}><Icon name="box" size={13}/>Go to Virtual Godowns</button>
         </div>
       </div>
+
+      {pending.length > 0 && (
+        <div className="card" style={{ marginBottom: 14, borderColor: 'var(--warning)' }}>
+          <div className="card-header"><div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="clock" size={14} color="var(--warning)"/>Awaiting Stores acceptance <span className="badge warn dot">{pending.length}</span></div><div className="tiny muted">Purchase marked these received — accept to post the GRN &amp; raise the client invoice</div></div>
+          <div className="card-body flush">
+            <table className="t">
+              <thead><tr><th>Sales Order</th><th>Marked by</th><th>Date</th><th>Items received</th><th className="num">Units</th><th></th></tr></thead>
+              <tbody>
+                {pending.map(({ so, pr }) => (
+                  <tr key={pr.id}>
+                    <td><a className="mono" onClick={() => navigate(`godown/${so.id}`)} style={{ cursor: 'pointer' }}>{so.so_no}</a></td>
+                    <td className="small">{(getUser(pr.by) || {}).name || pr.by}</td>
+                    <td className="mono small">{fmtDate(pr.date)}</td>
+                    <td className="small">{pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}</td>
+                    <td className="num">{pr.picks.reduce((a, p) => a + (Number(p.qty) || 0), 0)}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {canAccept ? (
+                        <>
+                          <button className="btn sm primary" disabled={busy === pr.id} onClick={() => acceptReceipt({ so, pr })}>{busy === pr.id ? 'Posting…' : 'Accept & post GRN'}</button>
+                          <button className="btn sm ghost" disabled={busy === pr.id} onClick={() => rejectReceipt({ so, pr })} style={{ marginLeft: 6 }}>Reject</button>
+                        </>
+                      ) : <span className="tiny muted">awaiting Stores</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-body flush">

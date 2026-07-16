@@ -230,6 +230,7 @@ async function vgReceiveComponents(so, picks, ctx) {
   if (posted && window.autoInvoiceSO) window.autoInvoiceSO(so.id, { mutate, toast: null, currentUser: ctx.currentUser, getUser: ctx.getUser, getProduct });
   return { posted, units, createdPONeedsMD };
 }
+window.vgReceiveComponents = vgReceiveComponents;
 
 // Add components to this SO from the Master Pool — smart suggestions (pool stock
 // the SO's BOM needs) + free search. Allocates pool stock to the SO (pool_alloc)
@@ -787,9 +788,20 @@ function VirtualGodownView({ soId, embedded }) {
   const doMarkReceived = async () => {
     if (!recvPicks.length) { toast('Tick the items you received'); return; }
     setRecvBusy(true);
-    const r = await vgReceiveComponents(so, recvPicks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
-    setRecvBusy(false); setRecvSel({});
-    toast(`Received ${r.units} unit(s) · ${r.posted} GRN(s) posted · client invoice auto-raised${r.createdPONeedsMD ? ' · a high-value PO needs MD approval before it can be received' : ''}`, 'success');
+    if (role === 'Stores' || role === 'Org Admin') {
+      // Stores (or admin) posts directly → GRN + client invoice now.
+      const r = await vgReceiveComponents(so, recvPicks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
+      setRecvBusy(false); setRecvSel({});
+      toast(`Received ${r.units} unit(s) · ${r.posted} GRN(s) posted · client invoice auto-raised${r.createdPONeedsMD ? ' · a high-value PO needs MD approval first' : ''}`, 'success');
+    } else {
+      // Purchase / PM mark received → the request goes to Stores; the GRN + invoice
+      // are created only when Stores accepts.
+      const units = recvPicks.reduce((a, p) => a + (Number(p.qty) || 0), 0);
+      const pr = { id: 'pr-' + Date.now(), by: currentUser, date: TODAY, status: 'Pending', picks: recvPicks.map(p => ({ product_id: p.product_id, qty: p.qty, name: getProduct(p.product_id)?.name || p.product_id })) };
+      mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: [...((x.extra && x.extra.pending_receipts) || []), pr] } } : x), notifications: [{ id: 'n-recq-' + Date.now(), kind: 'grn', text: `${so.so_no}: ${units} unit(s) marked received by ${role} · Stores to accept & post GRN`, date: TODAY, read: false, role: 'Stores' }, ...s.notifications] }), { action: 'receipt-request', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Receipt sent to Stores · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+      setRecvBusy(false); setRecvSel({});
+      toast(`Sent to Stores for acceptance · ${units} unit(s)`, 'success');
+    }
   };
   const totalIn = Object.values(transferredIn).reduce((a, b) => a + b, 0);
   const totalOut = Object.values(transferredOut).reduce((a, b) => a + b, 0);
