@@ -1271,6 +1271,10 @@ function ApproveTransferModal({ transfer, onClose }) {
   const [transport, setTransport] = React.useState('Road');
   const [vehicle, setVehicle] = React.useState('');
   const [lr, setLr] = React.useState('');
+  const [deliveryType, setDeliveryType] = React.useState('Courier');
+  const [carrier, setCarrier] = React.useState('');
+  const [tracking, setTracking] = React.useState('');
+  const [contact, setContact] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [applyGst, setApplyGst] = React.useState(false);
   const setItem = (i, patch) => setItems(its => its.map((x, j) => j === i ? { ...x, ...patch } : x));
@@ -1286,6 +1290,7 @@ function ApproveTransferModal({ transfer, onClose }) {
       no: `DC/FY26/${String(1 + seq).padStart(4, '0')}`, date: TODAY,
       reason: 'Cross-SO stock transfer — internal re-allocation (not a sale)',
       transport, vehicle, lr, delivery_cost: dc, notes,
+      delivery_type: deliveryType, carrier: carrier.trim(), tracking: tracking.trim(), contact: contact.trim(),
       items: items.map(it => ({ ...it, qty: Number(it.qty) || 0, rate: Number(it.rate) || 0, amount: Math.round((Number(it.qty) || 0) * (Number(it.rate) || 0)) })),
       subtotal: Math.round(subtotal), gst, total: Math.round(total), apply_gst: applyGst,
     };
@@ -1320,6 +1325,12 @@ function ApproveTransferModal({ transfer, onClose }) {
         <div className="field"><label className="field-label">Vehicle no.</label><input className="input mono" value={vehicle} onChange={e => setVehicle(e.target.value)} placeholder="MH-04-AB-1234"/></div>
         <div className="field"><label className="field-label">LR / docket</label><input className="input mono" value={lr} onChange={e => setLr(e.target.value)}/></div>
       </div>
+      <div className="field-row-3 mt-2">
+        <div className="field"><label className="field-label">Delivery type</label><select className="select" value={deliveryType} onChange={e => setDeliveryType(e.target.value)}><option>Courier</option><option>Own vehicle / transport</option><option>Hand delivery</option><option>Bike / rider</option><option>3PL / logistics partner</option><option>Pickup by destination</option></select></div>
+        <div className="field"><label className="field-label">Courier / carrier name</label><input className="input" value={carrier} onChange={e => setCarrier(e.target.value)} placeholder="BlueDart, DTDC, self…"/></div>
+        <div className="field"><label className="field-label">Contact / driver mobile</label><input className="input mono" value={contact} onChange={e => setContact(e.target.value)} placeholder="+91 …"/></div>
+      </div>
+      <div className="field mt-2"><label className="field-label">Tracking link or number</label><input className="input" value={tracking} onChange={e => setTracking(e.target.value)} placeholder="https://…/track?id=…  or  AWB / docket no."/><div className="tiny muted mt-1">Paste a tracking URL or AWB/consignment no. so anyone can track the shipment from the challan.</div></div>
       <div className="field-row mt-2">
         <div className="field"><label className="field-label">Delivery / freight cost (₹)</label><input type="number" min="0" className="input mono" value={deliveryCost} onChange={e => setDeliveryCost(e.target.value)} placeholder="0"/></div>
         <div className="field"><label className="field-label">Apply 18% GST on the challan</label><div style={{ marginTop: 6 }}><label style={{ cursor: 'pointer', display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5 }}><input type="checkbox" checked={applyGst} onChange={e => setApplyGst(e.target.checked)}/> Charge GST (leave off for a pure internal transfer)</label></div></div>
@@ -1362,6 +1373,14 @@ function DeliveryChallanModal({ transfer, onClose }) {
           <div><div className="tiny muted">Vehicle</div><div className="mono small">{ch.vehicle || '—'}</div></div>
           <div><div className="tiny muted">LR / docket</div><div className="mono small">{ch.lr || '—'}</div></div>
         </div>
+        {(ch.delivery_type || ch.carrier || ch.tracking || ch.contact) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: 8, border: '1px solid var(--border)', borderRadius: 4, marginBottom: 10 }}>
+            <div><div className="tiny muted">Delivery type</div><div className="small">{ch.delivery_type || '—'}</div></div>
+            <div><div className="tiny muted">Courier / carrier</div><div className="small">{ch.carrier || '—'}</div></div>
+            <div><div className="tiny muted">Track shipment</div><div className="small mono" style={{ wordBreak: 'break-all' }}>{ch.tracking ? (/^https?:\/\//i.test(ch.tracking) ? <a href={ch.tracking} target="_blank" rel="noopener noreferrer">Track →</a> : ch.tracking) : '—'}</div></div>
+            <div><div className="tiny muted">Contact</div><div className="small mono">{ch.contact ? <a href={`tel:${ch.contact.replace(/\s+/g, '')}`}>{ch.contact}</a> : '—'}</div></div>
+          </div>
+        )}
         <div className="tiny muted mb-1">Reason for transportation: <strong>{ch.reason}</strong></div>
         <table style={{ width: '100%', fontSize: 12 }}>
           <thead><tr><th style={{ textAlign: 'left' }}>#</th><th style={{ textAlign: 'left' }}>Description</th><th>HSN</th><th className="num">Qty</th><th className="num">Rate</th><th className="num">Value</th></tr></thead>
