@@ -235,6 +235,82 @@ window.vgReceiveComponents = vgReceiveComponents;
 // Add components to this SO from the Master Pool — smart suggestions (pool stock
 // the SO's BOM needs) + free search. Allocates pool stock to the SO (pool_alloc)
 // and decrements the pool. Replaces the old New-SO pool-reuse step.
+// Next sequential pool-movement receipt no (across all SOs' recorded receipts).
+function poolReceiptNo(state) {
+  let n = 0;
+  (state.sales_orders || []).forEach(so => ((so.extra && so.extra.pool_receipts) || []).forEach(() => n++));
+  return `POOL/FY26/${String(1 + n).padStart(4, '0')}`;
+}
+
+// Execute an "add from Master Pool" allocation for one component + write a receipt
+// record (proof) onto so.extra.pool_receipts. Identical movement logic to the
+// direct panel; callable from the Stores-accept handler too. ctx.meta carries
+// requested_by/accepted_by for the audit trail.
+async function poolAllocateToSO(so, item, ctx) {
+  const { state, mutate, consumeFromPool, getProduct, currentUser } = ctx;
+  const pid = item.product_id;
+  const poolByProd = {};
+  (state.pool || []).forEach(p => { const b = (poolByProd[p.product_id] = poolByProd[p.product_id] || { qty: 0, srcs: [] }); b.qty += Number(p.qty) || 0; b.srcs.push({ id: p.id, qty: Number(p.qty) || 0, date: p.received_date }); });
+  const inPool = (poolByProd[pid] && poolByProd[pid].qty) || 0;
+  const n = Math.max(0, Math.min(Number(item.qty) || 0, inPool));
+  if (n <= 0) return { ok: false, error: 'That quantity is no longer available in the pool' };
+  const srcs = [...((poolByProd[pid] && poolByProd[pid].srcs) || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  let rem = n; const consume = []; for (const s of srcs) { if (rem <= 0) break; const take = Math.min(rem, s.qty); if (take > 0) { consume.push({ id: s.id, qty: take }); rem -= take; } }
+  const p = getProduct(pid);
+  const meta = ctx.meta || {};
+  const receipt = { id: 'plr' + Date.now(), no: poolReceiptNo(state), kind: 'add', direction: 'in', so_id: so.id, so_no: so.so_no, items: [{ product_id: pid, name: p ? p.name : pid, qty: n }], date: TODAY, by: meta.by || currentUser, requested_by: meta.requested_by || null, accepted_by: meta.accepted_by || null };
+  mutate(s => {
+    const grnPoIds = new Set((s.grns || []).map(g => g.po_id));
+    const viPoIds = new Set((s.vendor_invoices || []).map(v => v.po_id));
+    let cut = n; let removedFromPO = 0;
+    const vendor_pos = s.vendor_pos.map(po => {
+      if (cut <= 0 || po.so_id !== so.id || grnPoIds.has(po.id) || viPoIds.has(po.id) || ['Material Received', 'Partially Received', 'Rejected', 'Pending MD Approval'].includes(po.status)) return po;
+      if (!(po.items || []).some(it => it.product_id === pid)) return po;
+      const items = (po.items || []).map(it => {
+        if (it.product_id !== pid || cut <= 0) return it;
+        const take = Math.min(cut, it.qty || 0); cut -= take; removedFromPO += take;
+        return { ...it, qty: (it.qty || 0) - take };
+      }).filter(it => (it.qty || 0) > 0);
+      return { ...po, items, amount: Math.round(items.reduce((a, it) => a + (it.qty || 0) * (it.rate || 0), 0)) };
+    }).filter(po => !(po.so_id === so.id && (po.items || []).length === 0));
+    return {
+      ...s,
+      vendor_pos,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, pool_alloc: [...(x.pool_alloc || []), { product_id: pid, qty: n, name: p ? p.name : pid, from_pool: true }], extra: { ...(x.extra || {}), pool_receipts: [...((x.extra && x.extra.pool_receipts) || []), { ...receipt, removed_from_po: removedFromPO }] } } : x),
+      notifications: [{ id: 'n-pa-' + Date.now(), kind: 'transfer', text: `${n}× ${p ? p.name : pid} added from Master Pool → ${so.so_no} · ${receipt.no}`, date: TODAY, read: false, ...(meta.requested_by ? { user_id: meta.requested_by } : { role: 'Purchase' }) }, ...s.notifications],
+    };
+  }, { action: 'pool-allocate', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${n}× ${p ? p.name : pid} added from Master Pool → ${so.so_no} · ${receipt.no}` });
+  await consumeFromPool(consume);
+  return { ok: true, n, receipt };
+}
+
+// Execute a "send to Master Pool" for the selected held rows + write a receipt.
+async function poolSendFromSO(so, rows, ctx) {
+  const { state, mutate, addToPool, getProduct, currentUser } = ctx;
+  const clean = (rows || []).filter(r => (Number(r.qty) || 0) > 0).map(r => ({ product_id: r.product_id, qty: Number(r.qty) || 0 }));
+  if (!clean.length) return { ok: false, error: 'Nothing to send' };
+  const ts = TODAY;
+  const meta = ctx.meta || {};
+  const poolRows = clean.map(r => ({ product_id: r.product_id, qty: r.qty, source_so: so.id, received_date: ts }));
+  const adjustments = clean.map(r => { const p = getProduct(r.product_id); return { product_id: r.product_id, qty: r.qty, amount: Math.round((p ? (p.sell || 0) : 0) * r.qty), reason: `Sent to Master Pool`, date: ts }; });
+  const ledger = clean.map(r => ({ product_id: r.product_id, qty: r.qty, date: ts, by: meta.by || currentUser }));
+  const units = clean.reduce((a, b) => a + b.qty, 0);
+  const receipt = { id: 'plr' + Date.now(), no: poolReceiptNo(state), kind: 'send', direction: 'out', so_id: so.id, so_no: so.so_no, items: clean.map(r => { const p = getProduct(r.product_id); return { product_id: r.product_id, name: p ? p.name : r.product_id, qty: r.qty }; }), date: ts, by: meta.by || currentUser, requested_by: meta.requested_by || null, accepted_by: meta.accepted_by || null };
+  mutate(s => ({
+    ...s,
+    sales_orders: s.sales_orders.map(x => x.id === so.id ? {
+      ...x,
+      extra: { ...(x.extra || {}), pool_out: [...((x.extra && x.extra.pool_out) || []), ...ledger], pool_receipts: [...((x.extra && x.extra.pool_receipts) || []), receipt] },
+      bill_adjustments: [...(x.bill_adjustments || []), ...adjustments],
+    } : x),
+    notifications: [{ id: 'n-poolout-' + Date.now(), kind: 'transfer', text: `${units} unit(s) from ${so.so_no} sent to Master Pool · ${receipt.no} · client bill auto-reduced`, date: ts, read: false, ...(meta.requested_by ? { user_id: meta.requested_by } : { role: 'Stores' }) }, ...s.notifications],
+  }), { action: 'pool-send', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${units} unit(s) from ${so.so_no} sent to Master Pool · ${receipt.no}` });
+  await addToPool(poolRows);
+  return { ok: true, units, receipt };
+}
+window.poolAllocateToSO = poolAllocateToSO;
+window.poolSendFromSO = poolSendFromSO;
+
 function VGAddFromPoolPanel({ so }) {
   const { state, mutate, consumeFromPool, getProduct, getUser, currentUser } = useStore();
   const toast = useToast();
@@ -270,39 +346,26 @@ function VGAddFromPoolPanel({ so }) {
     const inPool = (poolByProd[pid] && poolByProd[pid].qty) || 0;
     const n = Math.max(0, Math.min(Number(want) || 0, inPool));
     if (n <= 0) { toast('Enter a quantity available in the pool'); return; }
-    const srcs = [...((poolByProd[pid] && poolByProd[pid].srcs) || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    let rem = n; const consume = []; for (const s of srcs) { if (rem <= 0) break; const take = Math.min(rem, s.qty); if (take > 0) { consume.push({ id: s.id, qty: take }); rem -= take; } }
     const p = getProduct(pid);
     setBusy(true);
-    mutate(s => {
-      // Pool now covers this qty, so pull it off any UN-received vendor PO for this
-      // SO (no GRN yet) — reduce the line qty, recompute the PO amount, drop lines/
-      // POs that hit zero. Received/invoiced POs are never touched, so vendor
-      // invoices stay correct. Amounts recompute automatically.
-      const grnPoIds = new Set((s.grns || []).map(g => g.po_id));
-      const viPoIds = new Set((s.vendor_invoices || []).map(v => v.po_id));   // never disturb an invoiced PO
-      let cut = n;
-      let removedFromPO = 0;
-      const vendor_pos = s.vendor_pos.map(po => {
-        if (cut <= 0 || po.so_id !== so.id || grnPoIds.has(po.id) || viPoIds.has(po.id) || ['Material Received', 'Partially Received', 'Rejected', 'Pending MD Approval'].includes(po.status)) return po;
-        if (!(po.items || []).some(it => it.product_id === pid)) return po;
-        const items = (po.items || []).map(it => {
-          if (it.product_id !== pid || cut <= 0) return it;
-          const take = Math.min(cut, it.qty || 0); cut -= take; removedFromPO += take;
-          return { ...it, qty: (it.qty || 0) - take };
-        }).filter(it => (it.qty || 0) > 0);
-        return { ...po, items, amount: Math.round(items.reduce((a, it) => a + (it.qty || 0) * (it.rate || 0), 0)) };
-      }).filter(po => !(po.so_id === so.id && (po.items || []).length === 0));   // drop emptied POs
-      return {
+    if (role === 'Purchase') {
+      // Purchase can't move pool stock directly — it files a request to Stores,
+      // who accept it (which then executes + writes the receipt).
+      const req = { id: 'plq' + Date.now(), kind: 'add', by: currentUser, date: TODAY, status: 'Pending', items: [{ product_id: pid, name: p ? p.name : pid, qty: n }] };
+      mutate(s => ({
         ...s,
-        vendor_pos,
-        sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, pool_alloc: [...(x.pool_alloc || []), { product_id: pid, qty: n, name: p ? p.name : pid, from_pool: true }] } : x),
-        notifications: [{ id: 'n-pa-' + Date.now(), kind: 'transfer', text: `${n}× ${p ? p.name : pid} taken from Master Pool for ${so.so_no}${removedFromPO ? ` · ${removedFromPO} removed from vendor PO(s)` : ''}`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications],
-      };
-    }, { action: 'pool-allocate', entity: 'SalesOrder', entity_id: so.id });
-    await consumeFromPool(consume);
+        sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pool_requests: [...((x.extra && x.extra.pool_requests) || []), req] } } : x),
+        notifications: [{ id: 'n-plq-' + Date.now(), kind: 'transfer', text: `${so.so_no}: Purchase requests ${n}× ${p ? p.name : pid} FROM Master Pool · Stores to approve`, date: TODAY, read: false, role: 'Stores' }, ...s.notifications],
+      }), { action: 'pool-request', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Requested ${n}× ${p ? p.name : pid} from Master Pool → ${so.so_no}` });
+      setBusy(false); setQty(m => ({ ...m, [pid]: '' })); setQ('');
+      toast(`Sent to Stores for approval · ${n}× ${p ? p.name : pid}`, 'success');
+      return;
+    }
+    // PM / Org Admin act directly (unchanged) — the shared executor also writes a receipt.
+    const r = await window.poolAllocateToSO(so, { product_id: pid, qty: n }, { state, mutate, consumeFromPool, getProduct, currentUser });
     setBusy(false); setQty(m => ({ ...m, [pid]: '' })); setQ('');
-    toast(`Added ${n}× ${p ? p.name : pid} from Master Pool`, 'success');
+    if (r && r.ok) toast(`Added ${n}× ${p ? p.name : pid} from Master Pool`, 'success');
+    else toast((r && r.error) || 'Could not add from pool');
   };
 
   return (
@@ -332,6 +395,35 @@ function VGAddFromPoolPanel({ so }) {
           </div>
         ))}
         {q.trim() && results.length === 0 && <div className="tiny muted mt-1">No matching pool stock.</div>}
+      </div>
+    </div>
+  );
+}
+
+// Small proof/history of Master-Pool movements for this SO (add-from / send-to),
+// each row a POOL/… receipt. Read-only record; mirrors what shows in the GRN screen.
+function VGPoolHistoryCard({ so }) {
+  const { getUser } = useStore();
+  const recs = ((so.extra && so.extra.pool_receipts) || []).slice().reverse();
+  if (!recs.length) return null;
+  return (
+    <div className="card">
+      <div className="card-header"><h3 className="card-title">Master Pool movements</h3><span className="card-sub">{recs.length} record(s) · proof</span></div>
+      <div className="card-body flush">
+        <table className="t">
+          <thead><tr><th>Receipt</th><th>Type</th><th>Items</th><th>By</th><th>Date</th></tr></thead>
+          <tbody>
+            {recs.map(r => (
+              <tr key={r.id}>
+                <td className="mono small">{r.no}</td>
+                <td>{r.direction === 'in' ? <span className="badge success dot">From pool</span> : <span className="badge info dot">To pool</span>}</td>
+                <td className="small">{(r.items || []).map(it => `${it.qty}× ${it.name}`).join(', ')}</td>
+                <td className="small">{(getUser(r.accepted_by || r.by) || {}).name || r.by}{r.requested_by ? <div className="tiny muted">req: {(getUser(r.requested_by) || {}).name || r.requested_by}</div> : null}</td>
+                <td className="mono small">{fmtDate(r.date)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -394,23 +486,24 @@ function VGPoolSendPanel({ so }) {
     const rows = held.filter(h => sel[h.product_id] != null && sel[h.product_id] > 0).map(h => ({ product_id: h.product_id, qty: Math.min(sel[h.product_id], h.held) }));
     if (!rows.length) { toast('Tick items and set a quantity to send to the pool'); return; }
     setBusy(true);
-    const ts = TODAY;
-    const poolRows = rows.map(r => ({ product_id: r.product_id, qty: r.qty, source_so: so.id, received_date: ts }));
-    const adjustments = rows.map(r => { const p = getProduct(r.product_id); return { product_id: r.product_id, qty: r.qty, amount: Math.round((p ? (p.sell || 0) : 0) * r.qty), reason: `Sent to Master Pool by ${role}`, date: ts }; });
-    const ledger = rows.map(r => ({ product_id: r.product_id, qty: r.qty, date: ts, by: currentUser }));
     const units = rows.reduce((a, b) => a + b.qty, 0);
-    mutate(s => ({
-      ...s,
-      sales_orders: s.sales_orders.map(x => x.id === so.id ? {
-        ...x,
-        extra: { ...(x.extra || {}), pool_out: [...((x.extra && x.extra.pool_out) || []), ...ledger] },
-        bill_adjustments: [...(x.bill_adjustments || []), ...adjustments],
-      } : x),
-      notifications: [{ id: 'n-poolout-' + Date.now(), kind: 'transfer', text: `${units} unit(s) from ${so.so_no} sent to Master Pool by ${role} · client bill auto-reduced`, date: ts, read: false, role: 'Stores' }, ...s.notifications],
-    }), { action: 'pool-send', entity: 'SalesOrder', entity_id: so.id });
-    await addToPool(poolRows);
+    if (role === 'Purchase') {
+      // Purchase files a request to Stores; Stores accept executes it + writes the receipt.
+      const req = { id: 'plq' + Date.now(), kind: 'send', by: currentUser, date: TODAY, status: 'Pending', items: rows.map(r => { const p = getProduct(r.product_id); return { product_id: r.product_id, name: p ? p.name : r.product_id, qty: r.qty }; }) };
+      mutate(s => ({
+        ...s,
+        sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pool_requests: [...((x.extra && x.extra.pool_requests) || []), req] } } : x),
+        notifications: [{ id: 'n-plq-' + Date.now(), kind: 'transfer', text: `${so.so_no}: Purchase requests ${units} unit(s) TO Master Pool · Stores to approve`, date: TODAY, read: false, role: 'Stores' }, ...s.notifications],
+      }), { action: 'pool-request', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Requested ${units} unit(s) from ${so.so_no} → Master Pool` });
+      setBusy(false); setSel({});
+      toast(`Sent to Stores for approval · ${units} unit(s)`, 'success');
+      return;
+    }
+    // PM / Org Admin act directly (unchanged) — the shared executor also writes a receipt.
+    const r = await window.poolSendFromSO(so, rows, { state, mutate, addToPool, getProduct, currentUser });
     setBusy(false); setSel({});
-    toast(`Sent ${units} unit(s) to Master Pool · client bill auto-reduced`, 'success');
+    if (r && r.ok) toast(`Sent ${units} unit(s) to Master Pool · client bill auto-reduced`, 'success');
+    else toast((r && r.error) || 'Could not send to pool');
   };
 
   return (
@@ -915,6 +1008,7 @@ function VirtualGodownView({ soId, embedded }) {
         <div className="stack">
         <VGAddFromPoolPanel so={so}/>
         <VGPoolSendPanel so={so}/>
+        <VGPoolHistoryCard so={so}/>
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">VG Contents · {so.so_no}</h3>

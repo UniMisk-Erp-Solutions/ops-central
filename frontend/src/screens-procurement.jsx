@@ -959,7 +959,7 @@ function VendorPODetail({ poId }) {
 
 // ===== GRN =====
 function GRNList() {
-  const { state, navigate, getVendor, getProduct, getUser, mutate, addToPool, currentUser } = useStore();
+  const { state, navigate, getVendor, getProduct, getUser, mutate, addToPool, consumeFromPool, currentUser } = useStore();
   const toast = useToast();
   const role = (getUser(currentUser) || {}).role;
   const canAccept = ['Stores', 'Org Admin'].includes(role);
@@ -968,6 +968,40 @@ function GRNList() {
   // Stores accepts → GRN + client invoice are posted (via the same receive engine).
   const pending = [];
   (state.sales_orders || []).forEach(so => ((so.extra && so.extra.pending_receipts) || []).forEach(pr => { if (pr.status === 'Pending') pending.push({ so, pr }); }));
+  // Purchase's Master-Pool requests (add-from / send-to) awaiting Stores' approval.
+  const poolPending = [];
+  (state.sales_orders || []).forEach(so => ((so.extra && so.extra.pool_requests) || []).forEach(req => { if (req.status === 'Pending') poolPending.push({ so, req }); }));
+  // All completed pool movements (proof records) — shown here so they live "in GRN" too.
+  const poolReceipts = [];
+  (state.sales_orders || []).forEach(so => ((so.extra && so.extra.pool_receipts) || []).forEach(rec => poolReceipts.push({ so, rec })));
+  poolReceipts.sort((a, b) => (b.rec.no || '').localeCompare(a.rec.no || ''));
+
+  const acceptPool = async ({ so, req }) => {
+    setBusy(req.id);
+    const meta = { requested_by: req.by, accepted_by: currentUser, by: currentUser };
+    const ctx = { state, mutate, consumeFromPool, addToPool, getProduct, currentUser, meta };
+    let ok = true;
+    if (req.kind === 'add') {
+      for (const it of (req.items || [])) { const r = await window.poolAllocateToSO(so, { product_id: it.product_id, qty: it.qty }, ctx); if (!r || !r.ok) ok = false; }
+    } else {
+      const r = await window.poolSendFromSO(so, req.items || [], ctx); if (!r || !r.ok) ok = false;
+    }
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pool_requests: ((x.extra && x.extra.pool_requests) || []).map(p => p.id === req.id ? { ...p, status: 'Accepted', accepted_by: currentUser, accepted_date: TODAY } : p) } } : x),
+      notifications: [{ id: 'n-pla-' + Date.now(), kind: 'transfer', text: `${so.so_no}: Stores approved your Master-Pool ${req.kind === 'add' ? 'pull' : 'send'} · ${(req.items || []).map(it => `${it.qty}× ${it.name}`).join(', ')}`, date: TODAY, read: false, user_id: req.by }, ...s.notifications],
+    }), { action: 'pool-approve', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Stores approved pool ${req.kind} · ${so.so_no} · ${(req.items || []).map(it => `${it.qty}× ${it.name}`).join(', ')}` });
+    setBusy('');
+    toast(ok ? `Approved · pool ${req.kind === 'add' ? 'items added to ' + so.so_no : 'items sent to pool'} · receipt saved` : 'Approved, but some quantities were unavailable — please re-check', ok ? 'success' : '');
+  };
+  const rejectPool = ({ so, req }) => {
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pool_requests: ((x.extra && x.extra.pool_requests) || []).map(p => p.id === req.id ? { ...p, status: 'Rejected', rejected_by: currentUser, rejected_date: TODAY } : p) } } : x),
+      notifications: [{ id: 'n-plrj-' + Date.now(), kind: 'transfer', text: `${so.so_no}: Stores declined your Master-Pool ${req.kind === 'add' ? 'pull' : 'send'} request`, date: TODAY, read: false, user_id: req.by }, ...s.notifications],
+    }), { action: 'pool-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Stores declined pool ${req.kind} · ${so.so_no}` });
+    toast('Request returned to Purchase', '');
+  };
 
   const acceptReceipt = async ({ so, pr }) => {
     setBusy(pr.id);
@@ -1025,6 +1059,59 @@ function GRNList() {
                         </>
                       ) : <span className="tiny muted">awaiting Stores</span>}
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {poolPending.length > 0 && (
+        <div className="card" style={{ marginBottom: 14, borderColor: 'var(--accent)' }}>
+          <div className="card-header"><div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="layers" size={14} color="var(--accent)"/>Master-Pool requests awaiting Stores <span className="badge accent dot">{poolPending.length}</span></div><div className="tiny muted">Purchase asked to move stock to/from the Master Pool — approve to execute &amp; record the receipt</div></div>
+          <div className="card-body flush">
+            <table className="t">
+              <thead><tr><th>Sales Order</th><th>Direction</th><th>Requested by</th><th>Date</th><th>Items</th><th></th></tr></thead>
+              <tbody>
+                {poolPending.map(({ so, req }) => (
+                  <tr key={req.id}>
+                    <td><a className="mono" onClick={() => navigate(`godown/${so.id}`)} style={{ cursor: 'pointer' }}>{so.so_no}</a></td>
+                    <td>{req.kind === 'add' ? <span className="badge success dot">From pool</span> : <span className="badge info dot">To pool</span>}</td>
+                    <td className="small">{(getUser(req.by) || {}).name || req.by}</td>
+                    <td className="mono small">{fmtDate(req.date)}</td>
+                    <td className="small">{(req.items || []).map(it => `${it.qty}× ${it.name}`).join(', ')}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {canAccept ? (
+                        <>
+                          <button className="btn sm primary" disabled={busy === req.id} onClick={() => acceptPool({ so, req })}>{busy === req.id ? 'Applying…' : 'Approve'}</button>
+                          <button className="btn sm ghost" disabled={busy === req.id} onClick={() => rejectPool({ so, req })} style={{ marginLeft: 6 }}>Reject</button>
+                        </>
+                      ) : <span className="tiny muted">awaiting Stores</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {poolReceipts.length > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="card-header"><div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="layers" size={13}/>Master-Pool movement receipts</div><div className="tiny muted">{poolReceipts.length} record(s) · proof of every add-from / send-to Master Pool</div></div>
+          <div className="card-body flush">
+            <table className="t">
+              <thead><tr><th>Receipt</th><th>Sales Order</th><th>Direction</th><th>Items</th><th>By</th><th>Date</th></tr></thead>
+              <tbody>
+                {poolReceipts.slice(0, 50).map(({ so, rec }) => (
+                  <tr key={rec.id}>
+                    <td className="mono small">{rec.no}</td>
+                    <td><a className="mono small" onClick={() => navigate(`godown/${so.id}`)} style={{ cursor: 'pointer' }}>{rec.so_no || so.so_no}</a></td>
+                    <td>{rec.direction === 'in' ? <span className="badge success dot">From pool</span> : <span className="badge info dot">To pool</span>}</td>
+                    <td className="small">{(rec.items || []).map(it => `${it.qty}× ${it.name}`).join(', ')}</td>
+                    <td className="small">{(getUser(rec.accepted_by || rec.by) || {}).name || rec.by}</td>
+                    <td className="mono small">{fmtDate(rec.date)}</td>
                   </tr>
                 ))}
               </tbody>
