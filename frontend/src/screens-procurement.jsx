@@ -964,6 +964,7 @@ function GRNList() {
   const role = (getUser(currentUser) || {}).role;
   const canAccept = ['Stores', 'Org Admin'].includes(role);
   const [busy, setBusy] = React.useState('');
+  const [viewRec, setViewRec] = React.useState(null);
   // Receipts marked by Purchase/PM at the Virtual Godown, awaiting Stores' acceptance.
   // Stores accepts → GRN + client invoice are posted (via the same receive engine).
   const pending = [];
@@ -1105,9 +1106,9 @@ function GRNList() {
               <thead><tr><th>Receipt</th><th>Sales Order</th><th>Direction</th><th>Items</th><th>By</th><th>Date</th></tr></thead>
               <tbody>
                 {poolReceipts.slice(0, 50).map(({ so, rec }) => (
-                  <tr key={rec.id}>
-                    <td className="mono small">{rec.no}</td>
-                    <td><a className="mono small" onClick={() => navigate(`godown/${so.id}`)} style={{ cursor: 'pointer' }}>{rec.so_no || so.so_no}</a></td>
+                  <tr key={rec.id} onClick={() => setViewRec({ rec, so })} style={{ cursor: 'pointer' }}>
+                    <td className="mono small"><a>{rec.no}</a></td>
+                    <td className="mono small">{rec.so_no || so.so_no}</td>
                     <td>{rec.direction === 'in' ? <span className="badge success dot">From pool</span> : <span className="badge info dot">To pool</span>}</td>
                     <td className="small">{(rec.items || []).map(it => `${it.qty}× ${it.name}`).join(', ')}</td>
                     <td className="small">{(getUser(rec.accepted_by || rec.by) || {}).name || rec.by}</td>
@@ -1119,6 +1120,7 @@ function GRNList() {
           </div>
         </div>
       )}
+      {viewRec && <PoolReceiptModal receipt={viewRec.rec} so={viewRec.so} onClose={() => setViewRec(null)}/>}
 
       <div className="card">
         <div className="card-body flush">

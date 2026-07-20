@@ -400,22 +400,115 @@ function VGAddFromPoolPanel({ so }) {
   );
 }
 
+// A clean, printable/downloadable "Master Pool Movement Note" for one pool receipt.
+// Opens a standalone print window (Print or Save-as-PDF) with a matching design.
+function PoolReceiptModal({ receipt: r, so, onClose }) {
+  const { state, getUser, getCustomer, getProduct } = useStore();
+  if (!r) return null;
+  const org = state.org || {};
+  const cust = so ? getCustomer(so.customer_id) : null;
+  const byName = (getUser(r.accepted_by || r.by) || {}).name || r.by || '—';
+  const reqName = r.requested_by ? ((getUser(r.requested_by) || {}).name || r.requested_by) : null;
+  const inbound = r.direction === 'in';
+  const purpose = inbound
+    ? 'Stock drawn FROM the shared Master Pool INTO this sales order.'
+    : 'Surplus stock returned FROM this sales order TO the shared Master Pool.';
+  const title = 'MASTER POOL MOVEMENT NOTE';
+  const rows = (r.items || []).map((it, i) => {
+    const p = getProduct(it.product_id) || {};
+    return { i: i + 1, name: it.name || p.name || it.product_id, code: p.code || '', qty: it.qty };
+  });
+  const totalUnits = rows.reduce((a, x) => a + (Number(x.qty) || 0), 0);
+
+  const printIt = () => {
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const itemRows = rows.map(x => `<tr><td>${x.i}</td><td>${esc(x.name)}${x.code ? `<div class="mut mono">${esc(x.code)}</div>` : ''}</td><td class="r mono">${esc(x.qty)}</td></tr>`).join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(r.no)}</title><style>
+      *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;margin:0;padding:28px;font-size:12.5px}
+      .paper{max-width:720px;margin:0 auto;border:1px solid #e2e2e2;border-radius:10px;padding:24px}
+      .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #222;padding-bottom:10px}
+      .brand{display:flex;gap:10px;align-items:center}
+      .mark{width:34px;height:34px;border-radius:8px;background:#2b3a67;color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:16px}
+      h1{font-size:16px;margin:0} .mut{color:#777} .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+      .tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;margin-top:6px}
+      .in{background:#e6f6ec;color:#1b7a43} .out{background:#e7eefb;color:#2b53a8}
+      .title{font-size:14px;font-weight:800;letter-spacing:.07em;text-align:right}
+      .purpose{margin:14px 0;padding:10px 12px;background:#f6f7f9;border-radius:6px;font-weight:600}
+      .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:12px 0}
+      .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#888}
+      table{width:100%;border-collapse:collapse;margin-top:8px} th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #eee;font-size:12px}
+      th{background:#fafafa;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#666} .r{text-align:right}
+      .sign{display:flex;justify-content:space-between;margin-top:34px} .sign div{width:45%;border-top:1px solid #bbb;padding-top:6px;font-size:11px;color:#555}
+      .foot{margin-top:18px;font-size:10.5px;color:#999;text-align:center}
+      @media print{body{padding:0}.paper{border:none}}
+    </style></head><body><div class="paper">
+      <div class="top"><div class="brand"><div class="mark">${esc((org.name || 'B').slice(0, 1))}</div><div><h1>${esc(org.name || 'Organisation')}</h1><div class="mut">${esc(org.address || '')}</div><div class="mono mut">GSTIN: ${esc(org.gstin || '—')}${org.state ? ' · ' + esc(org.state) : ''}</div></div></div>
+        <div><div class="title">${title}</div><div class="mono">${esc(r.no)}</div><span class="tag ${inbound ? 'in' : 'out'}">${inbound ? 'FROM POOL → SO' : 'SO → POOL'}</span></div></div>
+      <div class="purpose">Purpose: ${esc(purpose)}</div>
+      <div class="grid">
+        <div><div class="lbl">Sales Order</div><div class="mono">${esc(r.so_no || (so && so.so_no) || '—')}</div><div>${esc(cust ? cust.name : '')}</div></div>
+        <div><div class="lbl">Date</div><div class="mono">${esc(fmtDate(r.date))}</div></div>
+        <div><div class="lbl">Total units</div><div class="mono">${esc(totalUnits)}</div></div>
+      </div>
+      <table><thead><tr><th>#</th><th>Component</th><th class="r">Qty</th></tr></thead><tbody>${itemRows}</tbody></table>
+      <div class="grid" style="margin-top:14px">
+        <div><div class="lbl">${reqName ? 'Requested by (Purchase)' : 'Actioned by'}</div><div>${esc(reqName || byName)}</div></div>
+        <div><div class="lbl">${reqName ? 'Approved by (Stores)' : ''}</div><div>${reqName ? esc(byName) : ''}</div></div>
+        <div></div>
+      </div>
+      <div class="sign"><div>Issued by / Stores</div><div>Received / Authorised</div></div>
+      <div class="foot">Internal stock movement between this order and the shared Master Pool — not a sale, not a tax invoice.</div>
+    </div><script>window.onload=function(){setTimeout(function(){window.print()},200)}</script></body></html>`;
+    const w = window.open('', '_blank', 'width=820,height=920');
+    if (!w) { return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  };
+
+  return (
+    <Modal title={`Pool Receipt — ${r.no}`} onClose={onClose} size="lg" footer={<><button className="btn" onClick={onClose}>Close</button><button className="btn btn-primary" onClick={printIt}><Icon name="print" size={13}/>Print / Download PDF</button></>}>
+      <div className="doc-paper" style={{ padding: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--border-strong)', paddingBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><div className="brand-mark" style={{ width: 32, height: 32, fontSize: 15 }}>{(org.name || 'B').slice(0, 1)}</div><div><h2 style={{ margin: 0, fontSize: 16 }}>{org.name}</h2><div className="small muted">{org.address}</div><div className="small mono">GSTIN: {org.gstin} {org.state ? '· ' + org.state : ''}</div></div></div>
+          <div style={{ textAlign: 'right' }}><div style={{ fontSize: 14, fontWeight: 800, letterSpacing: '0.07em' }}>{title}</div><div className="small mono">{r.no}</div><div style={{ marginTop: 5 }}>{inbound ? <span className="badge success dot">From pool → SO</span> : <span className="badge info dot">SO → Pool</span>}</div></div>
+        </div>
+        <div style={{ margin: '12px 0', padding: '9px 12px', background: 'var(--bg-subtle)', borderRadius: 6, fontWeight: 600, fontSize: 12.5 }}>Purpose: {purpose}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 8 }}>
+          <div><div className="tiny muted" style={{ textTransform: 'uppercase' }}>Sales Order</div><div className="small mono">{r.so_no || (so && so.so_no)}</div><div className="small">{cust ? cust.name : ''}</div></div>
+          <div><div className="tiny muted" style={{ textTransform: 'uppercase' }}>Date</div><div className="small mono">{fmtDate(r.date)}</div></div>
+          <div><div className="tiny muted" style={{ textTransform: 'uppercase' }}>Total units</div><div className="small mono">{totalUnits}</div></div>
+        </div>
+        <table style={{ width: '100%', fontSize: 12 }}>
+          <thead><tr><th style={{ textAlign: 'left' }}>#</th><th style={{ textAlign: 'left' }}>Component</th><th className="num">Qty</th></tr></thead>
+          <tbody>{rows.map(x => (<tr key={x.i}><td>{x.i}</td><td>{x.name}{x.code ? <div className="tiny muted mono">{x.code}</div> : null}</td><td className="num mono">{x.qty}</td></tr>))}</tbody>
+        </table>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginTop: 14 }}>
+          <div><div className="tiny muted" style={{ textTransform: 'uppercase' }}>{reqName ? 'Requested by (Purchase)' : 'Actioned by'}</div><div className="small">{reqName || byName}</div></div>
+          {reqName ? <div><div className="tiny muted" style={{ textTransform: 'uppercase' }}>Approved by (Stores)</div><div className="small">{byName}</div></div> : <div/>}
+          <div/>
+        </div>
+        <div className="tiny muted" style={{ marginTop: 16, textAlign: 'center' }}>Internal stock movement between this order and the shared Master Pool — not a sale, not a tax invoice.</div>
+      </div>
+    </Modal>
+  );
+}
+
 // Small proof/history of Master-Pool movements for this SO (add-from / send-to),
-// each row a POOL/… receipt. Read-only record; mirrors what shows in the GRN screen.
+// each row a POOL/… receipt. Click a row → printable receipt. Mirrors the GRN screen.
 function VGPoolHistoryCard({ so }) {
   const { getUser } = useStore();
+  const [view, setView] = React.useState(null);
   const recs = ((so.extra && so.extra.pool_receipts) || []).slice().reverse();
   if (!recs.length) return null;
   return (
     <div className="card">
-      <div className="card-header"><h3 className="card-title">Master Pool movements</h3><span className="card-sub">{recs.length} record(s) · proof</span></div>
+      <div className="card-header"><h3 className="card-title">Master Pool movements</h3><span className="card-sub">{recs.length} record(s) · click to view / print</span></div>
       <div className="card-body flush">
         <table className="t">
           <thead><tr><th>Receipt</th><th>Type</th><th>Items</th><th>By</th><th>Date</th></tr></thead>
           <tbody>
             {recs.map(r => (
-              <tr key={r.id}>
-                <td className="mono small">{r.no}</td>
+              <tr key={r.id} onClick={() => setView(r)} style={{ cursor: 'pointer' }}>
+                <td className="mono small"><a>{r.no}</a></td>
                 <td>{r.direction === 'in' ? <span className="badge success dot">From pool</span> : <span className="badge info dot">To pool</span>}</td>
                 <td className="small">{(r.items || []).map(it => `${it.qty}× ${it.name}`).join(', ')}</td>
                 <td className="small">{(getUser(r.accepted_by || r.by) || {}).name || r.by}{r.requested_by ? <div className="tiny muted">req: {(getUser(r.requested_by) || {}).name || r.requested_by}</div> : null}</td>
@@ -425,6 +518,7 @@ function VGPoolHistoryCard({ so }) {
           </tbody>
         </table>
       </div>
+      {view && <PoolReceiptModal receipt={view} so={so} onClose={() => setView(null)}/>}
     </div>
   );
 }
