@@ -38,7 +38,7 @@ module.exports = async function handler(req, res) {
   const rowsHtml = cleanItems.map(i => '<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">' + esc(i.name) + (i.code ? ' <span style="color:#999">(' + esc(i.code) + ')</span>' : '') + '</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">' + i.qty + '</td></tr>').join('');
   const sent = [];
   for (const v of rfqVendors) {
-    const link = BASE + '/quote.html?t=' + encodeURIComponent(v.token);
+    const link = BASE + '/quote?t=' + encodeURIComponent(v.token);
     const html = '<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:auto;color:#222">'
       + '<h2 style="margin:0 0 4px">' + esc(org_name || SENDER_NAME) + '</h2>'
       + '<p style="color:#666;margin:0 0 14px">Request for Quotation' + (src_no ? ' — ' + esc(src_no) : '') + (customer_name ? ' · for ' + esc(customer_name) : '') + '</p>'
