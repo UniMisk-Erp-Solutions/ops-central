@@ -495,17 +495,33 @@ function SourcingDetail({ srcId }) {
   const [showConvert, setShowConvert] = React.useState(false);
   const [showAddVendor, setShowAddVendor] = React.useState(false);
   const [rfqBusy, setRfqBusy] = React.useState(false);
+  // Per-item multi-vendor selection for Float RFQ: { [product_id]: { [vendor_id]: true } }.
+  const [rfqSel, setRfqSel] = React.useState({});
+  const toggleRfq = (pid, vid) => setRfqSel(s => { const cur = { ...(s[pid] || {}) }; if (cur[vid]) delete cur[vid]; else cur[vid] = true; return { ...s, [pid]: cur }; });
   // Float RFQ: email every shortlisted vendor (that has an email) a private quote
   // link with these line items. Prices come back into src.prices automatically.
   const floatRFQ = async () => {
-    const vids = src.quote_vendors || [];
-    if (!vids.length) { toast('Add vendors first via “Add vendor & quote”'); return; }
     const emails = (state.config && state.config.vendor_emails) || {};
-    const vendors = vids.map(vid => ({ vendor_id: vid, name: (getVendor(vid) || {}).name || vid, email: (emails[vid] || '').trim() }));
+    const compList = src ? srcComponentList(src) : [];
+    if (!compList.length) { toast('No line items to quote'); return; }
+    const mkItems = (pids) => pids.map(pid => { const p = getProduct(pid) || {}; const c = compList.find(x => x.product_id === pid); return { product_id: pid, name: p.name || pid, code: p.code || '', qty: c ? c.qty : 0 }; });
+    const allPids = compList.map(c => c.product_id);
+    // Per-item vendor picks → each vendor gets only the items it was ticked for.
+    const perVendor = {};
+    compList.forEach(c => { const sel = rfqSel[c.product_id] || {}; Object.keys(sel).forEach(vid => { if (sel[vid]) (perVendor[vid] = perVendor[vid] || []).push(c.product_id); }); });
+    const selectedVids = Object.keys(perVendor);
+    let vendors;
+    if (selectedVids.length) {
+      vendors = selectedVids.map(vid => ({ vendor_id: vid, name: (getVendor(vid) || {}).name || vid, email: (emails[vid] || '').trim(), items: mkItems(perVendor[vid]) }));
+    } else {
+      // Nothing ticked → send the whole list to every shortlisted vendor (default).
+      const vids = src.quote_vendors || [];
+      if (!vids.length) { toast('Add vendors first via “Add vendor & quote”'); return; }
+      vendors = vids.map(vid => ({ vendor_id: vid, name: (getVendor(vid) || {}).name || vid, email: (emails[vid] || '').trim(), items: mkItems(allPids) }));
+    }
     const missing = vendors.filter(v => !v.email);
     if (missing.length) { toast(`No email set for: ${missing.map(v => v.name).join(', ')} — add it in “Add vendor & quote”`); return; }
-    const itemsPayload = (src ? srcComponentList(src) : []).map(c => { const p = getProduct(c.product_id) || {}; return { product_id: c.product_id, name: p.name || c.product_id, code: p.code || '', qty: c.qty }; });
-    if (!itemsPayload.length) { toast('No line items to quote'); return; }
+    const itemsPayload = mkItems(allPids);
     setRfqBusy(true);
     try {
       const SB = (window.OPC_ENV && window.OPC_ENV.SUPABASE_URL) || '';
@@ -515,6 +531,7 @@ function SourcingDetail({ srcId }) {
       if (r.ok && j.ok) {
         const okc = (j.sent || []).filter(s => s.ok).length;
         toast(`RFQ floated · emailed ${okc}/${vendors.length} vendor(s) · prices will appear here as they reply`, okc ? 'success' : '');
+        setRfqSel({});
         mutate(s => s, { action: 'float-rfq', entity: 'Sourcing', entity_id: src.id, user_id: currentUser, detail: `Floated RFQ to ${okc} vendor(s) · ${src.src_no}` });
       } else { toast(j.error || 'Could not float RFQ (is the mailer configured?)'); }
     } catch (e) { toast('Network error floating RFQ'); }
@@ -665,7 +682,7 @@ function SourcingDetail({ srcId }) {
       <div className="card mb-2">
         <div className="card-header">
           <h3 className="card-title">Vendor comparison — per item</h3>
-          <div className="tiny muted">{hasQuotes ? `Comparing ${(src.quote_vendors || []).length} quoted vendor(s) · best price suggested ★` : 'Estimated across all vendors — use “Add vendor & quote” to enter real quotes'}</div>
+          <div className="tiny muted">{hasQuotes ? `Comparing ${(src.quote_vendors || []).length} quoted vendor(s) · best price suggested ★` : 'Estimated across all vendors — use “Add vendor & quote” to enter real quotes'} · tick the <span style={{ color: 'var(--info)' }}>☑</span> on vendors to include them in Float RFQ</div>
         </div>
         <div className="card-body flush">
           <table className="t">
@@ -686,21 +703,31 @@ function SourcingDetail({ srcId }) {
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                         {sugg.map((s, idx) => {
                           const sel = chosen === s.vendor.id;
+                          const rfqOn = !!(rfqSel[c.product_id] && rfqSel[c.product_id][s.vendor.id]);
                           return (
-                            <button key={s.vendor.id} type="button" disabled={locked || !canSource}
-                              onClick={() => setPicks(pk => ({ ...pk, [c.product_id]: s.vendor.id }))}
+                            <div key={s.vendor.id} role="button"
+                              onClick={() => { if (!(locked || !canSource)) setPicks(pk => ({ ...pk, [c.product_id]: s.vendor.id })); }}
                               className="btn btn-sm"
                               style={{
-                                borderColor: sel ? 'var(--accent)' : 'var(--border)',
+                                position: 'relative',
+                                borderColor: rfqOn ? 'var(--info)' : (sel ? 'var(--accent)' : 'var(--border)'),
+                                boxShadow: rfqOn ? '0 0 0 1px var(--info)' : 'none',
                                 background: sel ? 'var(--accent-bg)' : 'var(--surface)',
                                 fontWeight: sel ? 600 : 400, cursor: (locked || !canSource) ? 'default' : 'pointer',
-                                display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, padding: '4px 8px', height: 'auto',
+                                display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, padding: '4px 8px', paddingRight: 22, height: 'auto',
                               }}>
+                              {canSource && !locked && (
+                                <span onClick={(e) => { e.stopPropagation(); toggleRfq(c.product_id, s.vendor.id); }}
+                                  title={rfqOn ? 'Selected for RFQ — click to remove' : 'Select this vendor for the RFQ'}
+                                  style={{ position: 'absolute', top: 3, right: 3, width: 15, height: 15, borderRadius: 4, border: '1px solid ' + (rfqOn ? 'var(--info)' : 'var(--border)'), background: rfqOn ? 'var(--info)' : 'transparent', color: '#fff', fontSize: 10, lineHeight: '13px', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}>
+                                  {rfqOn ? '✓' : ''}
+                                </span>
+                              )}
                               <span style={{ fontSize: 11.5 }}>{idx === 0 ? '★ ' : ''}{s.vendor.name}</span>
                               <span className="tiny" style={{ fontFamily: 'var(--mono)' }}>
                                 {inr(s.price)} · <span style={{ color: s.benefitPct >= 0 ? 'var(--success)' : 'var(--text-3)' }}>{pct1(s.benefitPct)}</span>
                               </span>
-                            </button>
+                            </div>
                           );
                         })}
                       </div>
