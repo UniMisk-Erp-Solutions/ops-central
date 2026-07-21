@@ -66,7 +66,7 @@ function CustomersList() {
 function CustomerLedger({ custId }) {
   const { state, navigate, getCustomer } = useStore();
   const c = getCustomer(custId);
-  if (!c) return <div className="page"><div className="empty">Customer not found</div></div>;
+  if (!c) return <div className="page"><div className="empty">{state.loaded ? 'Customer not found' : 'Loading…'}</div></div>;
   const sos = state.sales_orders.filter(s => s.customer_id === custId);
   const outstanding = sos.filter(s => s.status === 'Payment Pending').reduce((sum, s) => sum + (s.invoice_amount || 0), 0);
 

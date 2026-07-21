@@ -70,12 +70,12 @@ function InvoiceList() {
 function InvoiceDetail({ soId, invId }) {
   const { state, navigate, getSO, getCustomer, getCategory, getProduct, soSubtotal, soBillAdjustment, soBilledSubtotal } = useStore();
   const so = getSO(soId);
-  if (!so) return <div className="page"><div className="empty">Invoice not found</div></div>;
+  if (!so) return <div className="page"><div className="empty">{state.loaded ? 'Invoice not found' : 'Loading…'}</div></div>;
   // When an invoice id is given, render THAT specific invoice (partial / consolidated);
   // otherwise fall back to the order-level (legacy) full invoice.
   const inv = invId ? (so.invoices || []).find(i => i.id === invId) : null;
-  if (invId && !inv) return <div className="page"><div className="empty">Invoice not found</div></div>;
-  if (!invId && !so.invoice_no) return <div className="page"><div className="empty">Invoice not found</div></div>;
+  if (invId && !inv) return <div className="page"><div className="empty">{state.loaded ? 'Invoice not found' : 'Loading…'}</div></div>;
+  if (!invId && !so.invoice_no) return <div className="page"><div className="empty">{state.loaded ? 'Invoice not found' : 'Loading…'}</div></div>;
   const c = getCustomer(so.customer_id);
   const sameState = c.state === state.org.state;
   const docNo = inv ? inv.no : so.invoice_no;

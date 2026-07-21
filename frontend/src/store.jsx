@@ -57,11 +57,12 @@ function loadInitialState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed.__version === window.OPC_SEED.version) return parsed;
+      if (parsed.__version === window.OPC_SEED.version) return { ...parsed, loaded: false };
     }
   } catch (e) {}
   return {
     __version: window.OPC_SEED.version,
+    loaded: false,   // becomes true once the DB load (or offline/seed fallback) resolves
     org: { ...window.OPC_SEED.org },
     users: window.OPC_SEED.users,
     categories: window.OPC_SEED.categories,
@@ -202,7 +203,9 @@ function StoreProvider({ children }) {
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!window.OPC_SB || !realUserId) return;
+      // Offline / seed-only mode: nothing to fetch — the data we have IS the data.
+      if (!window.OPC_SB) { setState(prev => prev.loaded ? prev : { ...prev, loaded: true }); return; }
+      if (!realUserId) return;
       try {
         const results = await Promise.all(LOADED_TABLES.map(t => window.OPC_SB.from(t).select('*')));
         if (cancelled) return;
@@ -212,10 +215,12 @@ function StoreProvider({ children }) {
             const { data, error } = results[i];
             if (!error && Array.isArray(data)) next[t] = data;
           });
+          next.loaded = true;   // DB data is in — detail screens may now decide "not found"
           return next;
         });
       } catch (e) {
         console.warn('[OPC] transactional load failed', e);
+        if (!cancelled) setState(prev => ({ ...prev, loaded: true }));   // don't hang on error
       }
     })();
     return () => { cancelled = true; };

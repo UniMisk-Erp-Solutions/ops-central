@@ -726,7 +726,7 @@ function VendorPODetail({ poId }) {
   const { state, navigate, mutate, getVendor, getSO, getCustomer, getProduct, currentUser, getUser } = useStore();
   const toast = useToast();
   const po = state.vendor_pos.find(p => p.id === poId);
-  if (!po) return <div className="page"><div className="empty">PO not found</div></div>;
+  if (!po) return <div className="page"><div className="empty">{state.loaded ? 'PO not found' : 'Loading…'}</div></div>;
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canApprovePO = ['Managing Director', 'Org Admin'].includes(role);
   const canProcurePO = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
@@ -1158,7 +1158,7 @@ function GRNList() {
 function GRNDetail({ grnId }) {
   const { state, navigate, getVendor, getProduct } = useStore();
   const g = state.grns.find(x => x.id === grnId);
-  if (!g) return <div className="page"><div className="empty">GRN not found</div></div>;
+  if (!g) return <div className="page"><div className="empty">{state.loaded ? 'GRN not found' : 'Loading…'}</div></div>;
   const po = state.vendor_pos.find(p => p.id === g.po_id);
   const v = getVendor(po.vendor_id);
 
@@ -1674,7 +1674,7 @@ function ThreeWayMatchDetail({ viId }) {
   const { state, navigate, mutate, getVendor, getProduct } = useStore();
   const toast = useToast();
   const vi = state.vendor_invoices.find(v => v.id === viId);
-  if (!vi) return <div className="page"><div className="empty">Not found</div></div>;
+  if (!vi) return <div className="page"><div className="empty">{state.loaded ? 'Not found' : 'Loading…'}</div></div>;
   const po = state.vendor_pos.find(p => p.id === vi.po_id);
   const grn = state.grns.find(g => g.id === vi.grn_id);
   const v = getVendor(vi.vendor_id);

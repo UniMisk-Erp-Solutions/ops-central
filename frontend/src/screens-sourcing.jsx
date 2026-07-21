@@ -559,7 +559,7 @@ function SourcingDetail({ srcId }) {
     return init;
   });
 
-  if (!src) return <div className="page"><div className="empty"><div className="empty-title">Inquiry not found</div><button className="btn mt-2" onClick={() => navigate('sourcing')}>← Back</button></div></div>;
+  if (!src) return <div className="page"><div className="empty">{state.loaded ? <><div className="empty-title">Inquiry not found</div><button className="btn mt-2" onClick={() => navigate('sourcing')}>← Back</button></> : <div className="empty-title">Loading…</div>}</div></div>;
 
   const cust = getCustomer(src.customer_id);
   const margin = computeMargin(src, picks, getProduct);

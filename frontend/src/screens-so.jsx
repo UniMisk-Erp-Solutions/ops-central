@@ -650,8 +650,10 @@ function SalesOrderDetail({ soId }) {
   if (!so) return (
     <div className="page">
       <div className="empty">
+        {state.loaded ? <>
         <div className="empty-title">Sales Order not found</div>
         <button className="btn mt-2" onClick={() => navigate('sales-orders')}>← Back to list</button>
+        </> : <div className="empty-title">Loading…</div>}
       </div>
     </div>
   );

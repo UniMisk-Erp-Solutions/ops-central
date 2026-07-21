@@ -968,7 +968,7 @@ function VirtualGodownView({ soId, embedded }) {
   const [recvSel, setRecvSel] = React.useState({});   // product_id -> receive-now qty
   const [recvBusy, setRecvBusy] = React.useState(false);
   const so = getSO(soId);
-  if (!so) return <div className="empty">Godown not found</div>;
+  if (!so) return <div className="empty">{state.loaded ? 'Godown not found' : 'Loading…'}</div>;
   const cust = getCustomer(so.customer_id);
   const role = getUser(currentUser)?.role;
   const canEditBOM = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
