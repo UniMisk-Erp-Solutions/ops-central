@@ -209,15 +209,37 @@ function StoreProvider({ children }) {
       try {
         const results = await Promise.all(LOADED_TABLES.map(t => window.OPC_SB.from(t).select('*')));
         if (cancelled) return;
+        // Rows created locally while the DB was unreachable (e.g. an inquiry made
+        // during an outage) live only in localStorage. A plain replace would wipe
+        // them on load; instead KEEP any row that's missing from the DB and re-push
+        // it, so offline work is recovered — not lost. (Skip notifications so
+        // locally-dismissed ones don't reappear.)
+        const cur = stateRef.current;
+        const RECOVER_SKIP = new Set(['notifications']);
+        const merged = {};
+        const toPush = [];
+        LOADED_TABLES.forEach((t, i) => {
+          const { data, error } = results[i];
+          if (error || !Array.isArray(data)) return;
+          const pk = SYNCED_TABLES[t];
+          if (!pk || RECOVER_SKIP.has(t)) { merged[t] = data; return; }
+          const dbIds = new Set(data.map(r => r[pk]));
+          const localOnly = (cur[t] || []).filter(r => r && r[pk] != null && !dbIds.has(r[pk]));
+          merged[t] = localOnly.length ? [...localOnly, ...data] : data;
+          localOnly.forEach(r => toPush.push({ t, pk, r }));
+        });
         setState(prev => {
           const next = { ...prev };
-          LOADED_TABLES.forEach((t, i) => {
-            const { data, error } = results[i];
-            if (!error && Array.isArray(data)) next[t] = data;
-          });
+          Object.keys(merged).forEach(t => { next[t] = merged[t]; });
           next.loaded = true;   // DB data is in — detail screens may now decide "not found"
           return next;
         });
+        // Persist the recovered local-only rows back to the DB.
+        for (const { t, pk, r } of toPush) {
+          const payload = t === 'audit' ? __auditRow(r) : r;
+          window.OPC_SB.from(t).upsert(payload, { onConflict: pk }).then(({ error }) => { if (error) console.error('[OPC] recover push ' + t, error.message); });
+        }
+        if (toPush.length) console.info('[OPC] recovered ' + toPush.length + ' local-only row(s) → DB');
       } catch (e) {
         console.warn('[OPC] transactional load failed', e);
         if (!cancelled) setState(prev => ({ ...prev, loaded: true }));   // don't hang on error
