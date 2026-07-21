@@ -727,14 +727,21 @@ function SourcingDetail({ srcId }) {
 // ---- add a vendor (master or custom) + per-line-item quote -----------------
 
 function AddVendorQuoteModal({ src, comps, onClose }) {
-  const { state, mutate, getProduct, getVendor, addVendor } = useStore();
+  const { state, mutate, getProduct, getVendor, addVendor, saveConfig } = useStore();
   const toast = useToast();
   const already = new Set(src.quote_vendors || []);
   const available = state.vendors.filter(v => !already.has(v.id));
   const [mode, setMode] = React.useState(available[0] ? available[0].id : '__custom');
   const [customName, setCustomName] = React.useState('');
   const [customCity, setCustomCity] = React.useState('');
+  const [email, setEmail] = React.useState('');
   const [saving, setSaving] = React.useState(false);
+  // Vendor email is stored once (config.vendor_emails) and reused every time —
+  // prefill it whenever the selected vendor changes.
+  React.useEffect(() => {
+    const em = ((state.config && state.config.vendor_emails) || {})[mode] || '';
+    setEmail(mode && mode !== '__custom' ? em : '');
+  }, [mode]);
   const [prices, setPrices] = React.useState(() => {
     const init = {}; comps.forEach(c => { const p = getProduct(c.product_id); init[c.product_id] = p ? (p.buy || 0) : 0; });
     return init;
@@ -783,6 +790,11 @@ function AddVendorQuoteModal({ src, comps, onClose }) {
         return { ...x, prices: np, quote_vendors: Array.from(new Set([...(x.quote_vendors || []), vid])) };
       }),
     }), { action: 'add-vendor-quote', entity: 'Sourcing', entity_id: src.id });
+    // Persist the vendor's email for lifetime reuse (editable next time).
+    if (email.trim() && vid && saveConfig) {
+      const cur = (state.config && state.config.vendor_emails) || {};
+      if (cur[vid] !== email.trim()) await saveConfig({ vendor_emails: { ...cur, [vid]: email.trim() } });
+    }
     toast(`${label} quote added`, 'success');
     setSaving(false);
     onClose();
@@ -815,6 +827,11 @@ function AddVendorQuoteModal({ src, comps, onClose }) {
             <input className="input" placeholder="optional" value={customCity} onChange={e => setCustomCity(e.target.value)}/>
           </div>
         )}
+      </div>
+      <div className="field mt-2">
+        <label className="field-label">Vendor email <span className="tiny muted">(for RFQ · saved for next time)</span></label>
+        <input className="input" type="email" placeholder="vendor@example.com" value={email} onChange={e => setEmail(e.target.value)}/>
+        <div className="tiny muted mt-1">Stored on this vendor and reused automatically — you won't need to type it again. Used when you Float RFQ.</div>
       </div>
       <div className="field mt-2">
         <label className="field-label">This vendor's quote per item</label>
