@@ -508,7 +508,9 @@ function SourcingDetail({ srcId }) {
     if (!itemsPayload.length) { toast('No line items to quote'); return; }
     setRfqBusy(true);
     try {
-      const r = await fetch('/api/float-rfq', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src_id: src.id, src_no: src.src_no, customer_name: (cust && cust.name) || '', org_name: (state.org && state.org.name) || '', vendors, items: itemsPayload }) });
+      const SB = (window.OPC_ENV && window.OPC_ENV.SUPABASE_URL) || '';
+      const ANON = (window.OPC_ENV && window.OPC_ENV.SUPABASE_ANON_KEY) || '';
+      const r = await fetch(SB + '/functions/v1/main/float-rfq', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON }, body: JSON.stringify({ src_id: src.id, src_no: src.src_no, customer_name: (cust && cust.name) || '', org_name: (state.org && state.org.name) || '', vendors, items: itemsPayload }) });
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.ok) {
         const okc = (j.sent || []).filter(s => s.ok).length;

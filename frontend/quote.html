@@ -37,6 +37,10 @@
   </div>
   <script>
     (function () {
+      // Public Supabase edge function (anon key is public by design, RLS-protected).
+      var SB = 'https://so-po.unimisk.com';
+      var ANON = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc4MDM4NDg2MCwiZXhwIjo0OTM2MDU4NDYwLCJyb2xlIjoiYW5vbiJ9.0AhbGOMbIybN0azUCAuoriNKGtSwdpznBqCQbZDpxZM';
+      var SBH = { apikey: ANON, Authorization: 'Bearer ' + ANON };
       var qs = new URLSearchParams(location.search);
       var token = qs.get('t');
       var card = document.getElementById('card');
@@ -48,7 +52,7 @@
 
       if (!token) { fail('This quote link is missing its code. Please use the link from your email.'); return; }
 
-      fetch('/api/quote-load?t=' + encodeURIComponent(token))
+      fetch(SB + '/functions/v1/main/quote-load?t=' + encodeURIComponent(token), { headers: SBH })
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (o) {
           if (!o.ok) { fail((o.j && o.j.error) || 'This link is not valid.'); return; }
@@ -92,7 +96,7 @@
           inputs.forEach(function (inp) { var v = Number(inp.value); if (v > 0) { prices[inp.getAttribute('data-pid')] = v; any = true; } });
           if (!any) { document.getElementById('msg').innerHTML = '<div class="err">Please enter at least one price.</div>'; return; }
           var btn = document.getElementById('send'); btn.disabled = true; btn.textContent = 'Submitting…';
-          fetch('/api/quote-submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t: token, prices: prices }) })
+          fetch(SB + '/functions/v1/main/quote-submit', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, SBH), body: JSON.stringify({ t: token, prices: prices }) })
             .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
             .then(function (o) {
               if (o.ok && o.j.ok) { renderThanks(false); }
