@@ -498,6 +498,29 @@ function SourcingDetail({ srcId }) {
   // Per-item multi-vendor selection for Float RFQ: { [product_id]: { [vendor_id]: true } }.
   const [rfqSel, setRfqSel] = React.useState({});
   const toggleRfq = (pid, vid) => setRfqSel(s => { const cur = { ...(s[pid] || {}) }; if (cur[vid]) delete cur[vid]; else cur[vid] = true; return { ...s, [pid]: cur }; });
+  // Reconcile vendor prices submitted via the RFQ link (stored on the rfqs row) into
+  // this sourcing's prices/quote_vendors — so quotes show here even if quote-submit
+  // couldn't fold them (e.g. the sourcing wasn't in the DB at submit time). Runs when
+  // the RFQ data loads; folds only what's missing, then stops (no loop).
+  React.useEffect(() => {
+    if (!src) return;
+    const rfq = (state.rfqs || []).find(r => r && r.so_id === src.id);
+    if (!rfq || !Array.isArray(rfq.vendors)) return;
+    const np = JSON.parse(JSON.stringify(src.prices || {}));
+    const qv = new Set(src.quote_vendors || []);
+    let changed = false;
+    rfq.vendors.forEach(v => {
+      if (v && v.status === 'submitted' && v.prices && Object.keys(v.prices).length) {
+        Object.keys(v.prices).forEach(pid => {
+          const val = Number(v.prices[pid]) || 0;
+          np[pid] = np[pid] || {};
+          if (np[pid][v.vendor_id] !== val) { np[pid][v.vendor_id] = val; changed = true; }
+        });
+        if (!qv.has(v.vendor_id)) { qv.add(v.vendor_id); changed = true; }
+      }
+    });
+    if (changed) mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, prices: np, quote_vendors: [...qv] } : x) }), { action: 'rfq-prices-synced', entity: 'Sourcing', entity_id: src.id });
+  }, [src && src.id, state.rfqs]);
   // Float RFQ: email every shortlisted vendor (that has an email) a private quote
   // link with these line items. Prices come back into src.prices automatically.
   const floatRFQ = async () => {
