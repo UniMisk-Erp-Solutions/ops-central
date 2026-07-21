@@ -347,7 +347,7 @@ function SourcingNew() {
               ) : (
                 <table className="t">
                   <thead><tr>
-                    <th style={{ width: 22 }}></th><th>Bundle</th><th className="num">Qty</th><th className="num">Unit sell ₹</th><th className="num">Line ₹</th><th style={{ width: 28 }}></th>
+                    <th style={{ width: 22 }}></th><th>Bundle</th><th className="num">Qty</th><th style={{ width: 28 }}></th>
                   </tr></thead>
                   <tbody>
                     {lines.map(l => {
@@ -359,8 +359,6 @@ function SourcingNew() {
                             <td style={{ cursor: 'pointer' }} onClick={() => setExpanded(e => ({ ...e, [l.id]: !open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={12}/></td>
                             <td><div style={{ fontWeight: 500 }}>{cat.name}</div><div className="tiny muted">{l.components.length} components</div></td>
                             <td className="num"><input type="number" className="input mono" min="1" value={l.bundle_qty} onChange={e => updateLine(l.id, { bundle_qty: parseInt(e.target.value) || 1 })} style={{ width: 64, textAlign: 'right' }}/></td>
-                            <td className="num"><input type="number" className="input mono" value={l.unit_price} onChange={e => updateLine(l.id, { unit_price: parseInt(e.target.value) || 0 })} style={{ width: 100, textAlign: 'right' }}/></td>
-                            <td className="num"><strong>{inr(l.bundle_qty * l.unit_price)}</strong></td>
                             <td><button className="btn btn-ghost btn-sm" onClick={() => removeLine(l.id)}><Icon name="trash" size={12} color="var(--danger)"/></button></td>
                           </tr>
                           {open && (
@@ -372,14 +370,13 @@ function SourcingNew() {
                                     <td></td>
                                     <td><div style={{ fontSize: 12 }}>{p.name}</div><div className="tiny muted mono">{p.code}</div></td>
                                     <td className="num"><input type="number" className="input mono" min="0" value={Math.round((c.qty || 0) * (l.bundle_qty || 1))} onChange={e => { const t = parseInt(e.target.value) || 0; const b = l.bundle_qty || 1; updateComp(l.id, c.product_id, { qty: t / b }); }} style={{ width: 72, textAlign: 'right', height: 24 }}/>{l.bundle_qty > 1 && <div className="tiny muted">{(c.qty || 0)}/bundle</div>}{c.override && <div className="tiny" style={{ color: 'var(--warning)' }}>was {Math.round((c.original_qty || 0) * (l.bundle_qty || 1))}</div>}</td>
-                                    <td colSpan="2" className="num small muted">baseline @ {inr(p.buy || 0)}</td>
                                     <td><button className="btn btn-ghost btn-sm" onClick={() => removeComp(l.id, c.product_id)}><Icon name="x" size={11}/></button></td>
                                   </tr>
                                 );
                               })}
                               <tr className="subrow">
                                 <td></td>
-                                <td colSpan="5" style={{ padding: '6px 0 12px' }}>
+                                <td colSpan="3" style={{ padding: '6px 0 12px' }}>
                                   <select className="select" value="" onChange={e => { if (e.target.value) { addComp(l.id, e.target.value); e.target.value = ''; } }} style={{ width: 220, height: 24, fontSize: 11.5 }}>
                                     <option value="">+ Add component…</option>
                                     {state.products.filter(p => !l.components.find(c => c.product_id === p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
