@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Submit your quote</title>
+  <style>
+    :root { --ink:#1f2430; --mut:#7b8394; --line:#e6e8ee; --brand:#2b3a67; --ok:#1b7a43; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:var(--ink); background:#f4f5f8; }
+    .wrap { max-width:640px; margin:0 auto; padding:22px 16px 60px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px; }
+    h1 { font-size:18px; margin:0 0 2px; }
+    .sub { color:var(--mut); font-size:13px; margin:0 0 16px; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:9px 8px; border-bottom:1px solid var(--line); font-size:14px; text-align:left; }
+    th { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); }
+    td.num, th.num { text-align:right; }
+    input[type=number] { width:120px; padding:8px 10px; border:1px solid #cfd4de; border-radius:7px; font-size:14px; text-align:right; }
+    input:focus { outline:none; border-color:var(--brand); }
+    .btn { width:100%; margin-top:18px; background:var(--brand); color:#fff; border:0; padding:13px; border-radius:9px; font-size:15px; font-weight:600; cursor:pointer; }
+    .btn:disabled { opacity:.55; cursor:default; }
+    .muted { color:var(--mut); font-size:12px; }
+    .total { display:flex; justify-content:space-between; font-weight:700; padding:12px 8px 0; font-size:15px; }
+    .state { text-align:center; padding:44px 10px; color:var(--mut); }
+    .ok { color:var(--ok); }
+    .brandbar { font-weight:700; color:var(--brand); margin-bottom:14px; font-size:15px; }
+    .err { background:#fdecec; color:#b12; padding:10px 12px; border-radius:8px; font-size:13px; margin-top:12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brandbar">Request for Quotation</div>
+    <div class="card" id="card"><div class="state" id="state">Loading your quote…</div></div>
+    <p class="muted" style="text-align:center;margin-top:14px">Your prices are sent securely. This link is private to you.</p>
+  </div>
+  <script>
+    (function () {
+      var qs = new URLSearchParams(location.search);
+      var token = qs.get('t');
+      var card = document.getElementById('card');
+      var inr = function (n) { return '₹' + (Number(n) || 0).toLocaleString('en-IN'); };
+      var esc = function (s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+
+      function show(html) { card.innerHTML = html; }
+      function fail(msg) { show('<div class="state">' + esc(msg) + '</div>'); }
+
+      if (!token) { fail('This quote link is missing its code. Please use the link from your email.'); return; }
+
+      fetch('/api/quote-load?t=' + encodeURIComponent(token))
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (o) {
+          if (!o.ok) { fail((o.j && o.j.error) || 'This link is not valid.'); return; }
+          var d = o.j;
+          if (d.submitted) { renderThanks(true); return; }
+          render(d);
+        })
+        .catch(function () { fail('Could not load your quote. Please check your connection and retry.'); });
+
+      function render(d) {
+        var items = d.items || [];
+        var rows = items.map(function (it, i) {
+          var pre = (d.prices && d.prices[it.product_id]) || '';
+          return '<tr><td>' + esc(it.name) + (it.code ? '<div class="muted">' + esc(it.code) + '</div>' : '') +
+            '</td><td class="num">' + (it.qty || 0) + '</td><td class="num">' +
+            '<input type="number" min="0" step="0.01" data-pid="' + esc(it.product_id) + '" data-qty="' + (it.qty || 0) + '" value="' + esc(pre) + '" placeholder="0"></td>' +
+            '<td class="num" id="line-' + i + '">—</td></tr>';
+        }).join('');
+        show(
+          '<h1>Enter your prices' + (d.rfq_no ? ' · ' + esc(d.rfq_no) : '') + '</h1>' +
+          '<p class="sub">' + esc(d.vendor || '') + ' — type your unit price for each item, then submit.</p>' +
+          '<table><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Unit price ₹</th><th class="num">Line</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          '<div class="total"><span>Total</span><span id="grand">₹0</span></div>' +
+          '<button class="btn" id="send">Submit quote</button>' +
+          '<div id="msg"></div>'
+        );
+        var inputs = Array.prototype.slice.call(card.querySelectorAll('input[data-pid]'));
+        function recalc() {
+          var g = 0;
+          inputs.forEach(function (inp, i) {
+            var v = Number(inp.value) || 0, q = Number(inp.getAttribute('data-qty')) || 0;
+            var line = v * q; g += line;
+            var cell = document.getElementById('line-' + i); if (cell) cell.textContent = v ? inr(line) : '—';
+          });
+          document.getElementById('grand').textContent = inr(g);
+        }
+        inputs.forEach(function (inp) { inp.addEventListener('input', recalc); });
+        recalc();
+        document.getElementById('send').addEventListener('click', function () {
+          var prices = {}; var any = false;
+          inputs.forEach(function (inp) { var v = Number(inp.value); if (v > 0) { prices[inp.getAttribute('data-pid')] = v; any = true; } });
+          if (!any) { document.getElementById('msg').innerHTML = '<div class="err">Please enter at least one price.</div>'; return; }
+          var btn = document.getElementById('send'); btn.disabled = true; btn.textContent = 'Submitting…';
+          fetch('/api/quote-submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t: token, prices: prices }) })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (o) {
+              if (o.ok && o.j.ok) { renderThanks(false); }
+              else { btn.disabled = false; btn.textContent = 'Submit quote'; document.getElementById('msg').innerHTML = '<div class="err">' + esc((o.j && o.j.error) || 'Could not submit. Try again.') + '</div>'; }
+            })
+            .catch(function () { btn.disabled = false; btn.textContent = 'Submit quote'; document.getElementById('msg').innerHTML = '<div class="err">Network error. Please retry.</div>'; });
+        });
+      }
+
+      function renderThanks(already) {
+        show('<div class="state"><div style="font-size:40px" class="ok">✓</div><h1 style="margin:10px 0 4px">' +
+          (already ? 'Quote already received' : 'Thank you — quote submitted') + '</h1>' +
+          '<p class="sub" style="text-align:center">Your prices have reached the buyer. You can close this page.</p></div>');
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -494,6 +494,30 @@ function SourcingDetail({ srcId }) {
   const canConvert = ['Sales', 'Pre-sales', 'Org Admin'].includes(role);
   const [showConvert, setShowConvert] = React.useState(false);
   const [showAddVendor, setShowAddVendor] = React.useState(false);
+  const [rfqBusy, setRfqBusy] = React.useState(false);
+  // Float RFQ: email every shortlisted vendor (that has an email) a private quote
+  // link with these line items. Prices come back into src.prices automatically.
+  const floatRFQ = async () => {
+    const vids = src.quote_vendors || [];
+    if (!vids.length) { toast('Add vendors first via “Add vendor & quote”'); return; }
+    const emails = (state.config && state.config.vendor_emails) || {};
+    const vendors = vids.map(vid => ({ vendor_id: vid, name: (getVendor(vid) || {}).name || vid, email: (emails[vid] || '').trim() }));
+    const missing = vendors.filter(v => !v.email);
+    if (missing.length) { toast(`No email set for: ${missing.map(v => v.name).join(', ')} — add it in “Add vendor & quote”`); return; }
+    const itemsPayload = (src ? srcComponentList(src) : []).map(c => { const p = getProduct(c.product_id) || {}; return { product_id: c.product_id, name: p.name || c.product_id, code: p.code || '', qty: c.qty }; });
+    if (!itemsPayload.length) { toast('No line items to quote'); return; }
+    setRfqBusy(true);
+    try {
+      const r = await fetch('/api/float-rfq', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src_id: src.id, src_no: src.src_no, customer_name: (cust && cust.name) || '', org_name: (state.org && state.org.name) || '', vendors, items: itemsPayload }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) {
+        const okc = (j.sent || []).filter(s => s.ok).length;
+        toast(`RFQ floated · emailed ${okc}/${vendors.length} vendor(s) · prices will appear here as they reply`, okc ? 'success' : '');
+        mutate(s => s, { action: 'float-rfq', entity: 'Sourcing', entity_id: src.id, user_id: currentUser, detail: `Floated RFQ to ${okc} vendor(s) · ${src.src_no}` });
+      } else { toast(j.error || 'Could not float RFQ (is the mailer configured?)'); }
+    } catch (e) { toast('Network error floating RFQ'); }
+    setRfqBusy(false);
+  };
   const [showAllocate, setShowAllocate] = React.useState(false);
 
   const comps = src ? srcComponentList(src) : [];
@@ -577,6 +601,7 @@ function SourcingDetail({ srcId }) {
         </div>
         <div className="page-actions">
           {hasSupply && canSource && !locked && <button className="btn btn-primary" onClick={() => setShowAddVendor(true)}><Icon name="plus" size={13}/>Add vendor &amp; quote</button>}
+          {hasSupply && canSource && !locked && <button className="btn" disabled={rfqBusy} onClick={floatRFQ} title="Email each shortlisted vendor a private link to quote these items"><Icon name="mail" size={13}/>{rfqBusy ? 'Floating…' : 'Float RFQ'}</button>}
           {hasSupply && canSource && !locked && <button className="btn" onClick={() => setShowAllocate(true)}><Icon name="arrowLeftRight" size={13}/>Allocate across vendors</button>}
           {hasSupply && canSource && !locked && <button className="btn" onClick={saveQuotation}><Icon name="save" size={13}/>Save vendor quotation</button>}
           {hasSupply && canSource && !locked && <button className="btn btn-primary" onClick={sendToSales}><Icon name="mail" size={13}/>Send to Sales</button>}
