@@ -521,6 +521,20 @@ function SourcingDetail({ srcId }) {
     });
     if (changed) mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, prices: np, quote_vendors: [...qv] } : x) }), { action: 'rfq-prices-synced', entity: 'Sourcing', entity_id: src.id });
   }, [src && src.id, state.rfqs]);
+
+  // Sales edits "our price" per inquiry line (client sell) before creating the SO.
+  // Editing is local (live margin); committed on blur → the line's unit_price, and
+  // our_price is cleared so the per-line total is the single source of truth.
+  const [linePrices, setLinePrices] = React.useState({});
+  React.useEffect(() => {
+    if (src && Array.isArray(src.lines)) setLinePrices(Object.fromEntries(src.lines.map(l => [l.id, l.unit_price == null ? '' : l.unit_price])));
+  }, [src && src.id]);
+  const setLp = (id, v) => setLinePrices(m => ({ ...m, [id]: v }));
+  const commitLine = (id) => {
+    const v = linePrices[id];
+    const num = v === '' || v == null ? 0 : Number(v) || 0;
+    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, our_price: null, lines: (x.lines || []).map(l => l.id === id ? { ...l, unit_price: num } : l) } : x) }), { action: 'set-our-price', entity: 'Sourcing', entity_id: src.id, detail: `Our price set on a line · ${src.src_no}` });
+  };
   // Float RFQ: email every shortlisted vendor (that has an email) a private quote
   // link with these line items. Prices come back into src.prices automatically.
   const floatRFQ = async () => {
@@ -586,6 +600,12 @@ function SourcingDetail({ srcId }) {
 
   const cust = getCustomer(src.customer_id);
   const margin = computeMargin(src, picks, getProduct);
+  // Per-line (bundle) vendor cost = sum of its components' chosen-vendor unit cost.
+  const unitCostByPid = {}; (margin.perItem || []).forEach(pi => { unitCostByPid[pi.product_id] = pi.unit; });
+  const lineCost = (l) => (l.components || []).reduce((s, c) => { const uc = unitCostByPid[c.product_id] != null ? unitCostByPid[c.product_id] : ((getProduct(c.product_id) || {}).buy || 0); return s + uc * (Number(c.qty) || 0) * (Number(l.bundle_qty) || 1); }, 0);
+  const lineSell = (l) => { const lp = linePrices[l.id]; const unit = lp === '' || lp == null ? 0 : Number(lp) || 0; return unit * (Number(l.bundle_qty) || 1); };
+  const ourTotals = (src.lines || []).reduce((a, l) => { const sell = lineSell(l), cost = lineCost(l); return { sell: a.sell + sell, cost: a.cost + cost }; }, { sell: 0, cost: 0 });
+  const canEditPrices = canConvert && !locked && (src.status === 'Sent to Sales' || src.status === 'Sourced');
   const locked = src.status === 'Converted';
   const hasQuotes = (src.quote_vendors || []).length > 0;
   // Implementation-only inquiries have no supply bundles → no vendor sourcing step.
@@ -677,6 +697,45 @@ function SourcingDetail({ srcId }) {
           <div className="small" style={{ fontWeight: 600, color: margin.marginPct >= 0 ? 'var(--success)' : 'var(--danger)' }}>{pct1(margin.marginPct)} margin</div>
         </div></div>
       </div>
+      )}
+
+      {/* Sales: set our client price per line before creating the SO — live margin */}
+      {hasSupply && canEditPrices && (
+        <div className="card mb-2" style={{ borderColor: 'var(--accent)' }}>
+          <div className="card-header">
+            <h3 className="card-title">Our Prices &amp; Margin</h3>
+            <div className="tiny muted">Set the client sell price per line — margin vs vendor cost updates live · these prices flow to the Sales Order</div>
+          </div>
+          <div className="card-body flush">
+            <table className="t">
+              <thead><tr><th>Line item</th><th className="num">Qty</th><th className="num">Our unit price ₹</th><th className="num">Line sell</th><th className="num">Vendor cost</th><th className="num">Margin</th></tr></thead>
+              <tbody>
+                {(src.lines || []).map(l => {
+                  const cat = getCategory(l.category_id) || { name: l.category_id };
+                  const sell = lineSell(l), cost = lineCost(l), m = sell - cost, mp = sell ? (m / sell) * 100 : 0;
+                  return (
+                    <tr key={l.id}>
+                      <td><div style={{ fontWeight: 500 }}>{cat.name}</div><div className="tiny muted">{(l.components || []).length} components</div></td>
+                      <td className="num">{l.bundle_qty}</td>
+                      <td className="num"><input type="number" min="0" className="input mono" value={linePrices[l.id] == null ? '' : linePrices[l.id]} onChange={e => setLp(l.id, e.target.value)} onBlur={() => commitLine(l.id)} placeholder="0" style={{ width: 110, textAlign: 'right' }}/></td>
+                      <td className="num mono">{inr(sell)}</td>
+                      <td className="num mono">{inr(cost)}</td>
+                      <td className="num mono" style={{ color: m >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>{inr(m)}<div className="tiny">{pct1(mp)}</div></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan="3" className="right small">Total</td>
+                  <td className="num mono"><strong>{inr(ourTotals.sell)}</strong></td>
+                  <td className="num mono">{inr(ourTotals.cost)}</td>
+                  <td className="num mono" style={{ color: (ourTotals.sell - ourTotals.cost) >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 700 }}>{inr(ourTotals.sell - ourTotals.cost)}<div className="tiny">{ourTotals.sell ? pct1((ourTotals.sell - ourTotals.cost) / ourTotals.sell * 100) : '+0.0%'}</div></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
       )}
 
       {src.implementation && <ImplBOQPanel src={src}/>}
