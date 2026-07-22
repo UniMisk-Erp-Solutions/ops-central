@@ -526,14 +526,24 @@ function SourcingDetail({ srcId }) {
   // Editing is local (live margin); committed on blur → the line's unit_price, and
   // our_price is cleared so the per-line total is the single source of truth.
   const [linePrices, setLinePrices] = React.useState({});
+  const [compPrices, setCompPrices] = React.useState({});      // { [lineId]: { [product_id]: perUnitSell } }
+  const [expandedLines, setExpandedLines] = React.useState({});
   React.useEffect(() => {
-    if (src && Array.isArray(src.lines)) setLinePrices(Object.fromEntries(src.lines.map(l => [l.id, l.unit_price == null ? '' : l.unit_price])));
+    if (src && Array.isArray(src.lines)) {
+      setLinePrices(Object.fromEntries(src.lines.map(l => [l.id, l.unit_price == null ? '' : l.unit_price])));
+      // Seed component sells from anything saved before; blanks get filled on expand.
+      setCompPrices(Object.fromEntries(src.lines.map(l => [l.id, Object.fromEntries((l.components || []).filter(c => c.sell_price != null).map(c => [c.product_id, c.sell_price]))])));
+    }
   }, [src && src.id]);
   const setLp = (id, v) => setLinePrices(m => ({ ...m, [id]: v }));
+  const setCp = (lid, pid, v) => setCompPrices(m => ({ ...m, [lid]: { ...(m[lid] || {}), [pid]: v } }));
+  // Edit the bundle price directly → set line.unit_price; drop any component split so
+  // re-expanding re-derives it from this new total.
   const commitLine = (id) => {
     const v = linePrices[id];
     const num = v === '' || v == null ? 0 : Number(v) || 0;
-    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, our_price: null, lines: (x.lines || []).map(l => l.id === id ? { ...l, unit_price: num } : l) } : x) }), { action: 'set-our-price', entity: 'Sourcing', entity_id: src.id, detail: `Our price set on a line · ${src.src_no}` });
+    setCompPrices(m => { const n = { ...m }; n[id] = {}; return n; });
+    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, our_price: null, lines: (x.lines || []).map(l => l.id === id ? { ...l, unit_price: num, components: (l.components || []).map(c => { const cc = { ...c }; delete cc.sell_price; return cc; }) } : l) } : x) }), { action: 'set-our-price', entity: 'Sourcing', entity_id: src.id, detail: `Our price set on a line · ${src.src_no}` });
   };
   // Float RFQ: email every shortlisted vendor (that has an email) a private quote
   // link with these line items. Prices come back into src.prices automatically.
@@ -606,6 +616,35 @@ function SourcingDetail({ srcId }) {
   const lineSell = (l) => { const lp = linePrices[l.id]; const unit = lp === '' || lp == null ? 0 : Number(lp) || 0; return unit * (Number(l.bundle_qty) || 1); };
   const ourTotals = (src.lines || []).reduce((a, l) => { const sell = lineSell(l), cost = lineCost(l); return { sell: a.sell + sell, cost: a.cost + cost }; }, { sell: 0, cost: 0 });
   const canEditPrices = canConvert && !locked && (src.status === 'Sent to Sales' || src.status === 'Sourced');
+  const compCostUnit = (pid) => unitCostByPid[pid] != null ? unitCostByPid[pid] : ((getProduct(pid) || {}).buy || 0);
+  // Split the current bundle sell across its components (by vendor-cost share) → per-unit sells.
+  const distribute = (l) => {
+    const bundleUnit = (() => { const v = linePrices[l.id]; return v === '' || v == null ? 0 : Number(v) || 0; })();
+    const comps = l.components || [];
+    const costs = comps.map(c => compCostUnit(c.product_id) * (Number(c.qty) || 0));
+    const totalCost = costs.reduce((a, b) => a + b, 0);
+    const out = {};
+    comps.forEach((c, i) => {
+      const q = Number(c.qty) || 0;
+      const shareTotal = totalCost > 0 ? bundleUnit * (costs[i] / totalCost) : (comps.length ? bundleUnit / comps.length : 0);
+      out[c.product_id] = q > 0 ? Math.round(shareTotal / q) : 0;
+    });
+    return out;
+  };
+  const toggleExpand = (l) => {
+    setExpandedLines(m => {
+      const open = !m[l.id];
+      if (open && (!compPrices[l.id] || Object.keys(compPrices[l.id]).length === 0)) setCompPrices(cp => ({ ...cp, [l.id]: distribute(l) }));
+      return { ...m, [l.id]: open };
+    });
+  };
+  // Edit a component's sell → bundle unit_price becomes the sum of component sells.
+  const commitComp = (l) => {
+    const cp = compPrices[l.id] || {};
+    const bundleUnit = (l.components || []).reduce((s, c) => s + (Number(cp[c.product_id]) || 0) * (Number(c.qty) || 0), 0);
+    setLinePrices(m => ({ ...m, [l.id]: bundleUnit }));
+    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, our_price: null, lines: (x.lines || []).map(ln => ln.id === l.id ? { ...ln, unit_price: bundleUnit, components: (ln.components || []).map(c => ({ ...c, sell_price: Number(cp[c.product_id]) || 0 })) } : ln) } : x) }), { action: 'set-our-price', entity: 'Sourcing', entity_id: src.id, detail: `Component prices set · ${src.src_no}` });
+  };
   const locked = src.status === 'Converted';
   const hasQuotes = (src.quote_vendors || []).length > 0;
   // Implementation-only inquiries have no supply bundles → no vendor sourcing step.
@@ -708,26 +747,47 @@ function SourcingDetail({ srcId }) {
           </div>
           <div className="card-body flush">
             <table className="t">
-              <thead><tr><th>Line item</th><th className="num">Qty</th><th className="num">Our unit price ₹</th><th className="num">Line sell</th><th className="num">Vendor cost</th><th className="num">Margin</th></tr></thead>
+              <thead><tr><th style={{ width: 22 }}></th><th>Line item</th><th className="num">Qty</th><th className="num">Our unit price ₹</th><th className="num">Line sell</th><th className="num">Vendor cost</th><th className="num">Margin</th></tr></thead>
               <tbody>
                 {(src.lines || []).map(l => {
                   const cat = getCategory(l.category_id) || { name: l.category_id };
                   const sell = lineSell(l), cost = lineCost(l), m = sell - cost, mp = sell ? (m / sell) * 100 : 0;
+                  const open = !!expandedLines[l.id];
                   return (
-                    <tr key={l.id}>
-                      <td><div style={{ fontWeight: 500 }}>{cat.name}</div><div className="tiny muted">{(l.components || []).length} components</div></td>
+                    <Fragment key={l.id}>
+                    <tr>
+                      <td style={{ cursor: 'pointer' }} onClick={() => toggleExpand(l)}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={12}/></td>
+                      <td><div style={{ fontWeight: 500, cursor: 'pointer' }} onClick={() => toggleExpand(l)}>{cat.name}</div><div className="tiny muted">{(l.components || []).length} components · {open ? 'editing per component' : 'click to price each component'}</div></td>
                       <td className="num">{l.bundle_qty}</td>
-                      <td className="num"><input type="number" min="0" className="input mono" value={linePrices[l.id] == null ? '' : linePrices[l.id]} onChange={e => setLp(l.id, e.target.value)} onBlur={() => commitLine(l.id)} placeholder="0" style={{ width: 110, textAlign: 'right' }}/></td>
+                      <td className="num"><input type="number" min="0" className="input mono" value={linePrices[l.id] == null ? '' : linePrices[l.id]} onChange={e => setLp(l.id, e.target.value)} onBlur={() => commitLine(l.id)} disabled={open} title={open ? 'Auto-summed from components below' : ''} placeholder="0" style={{ width: 110, textAlign: 'right', opacity: open ? 0.6 : 1 }}/></td>
                       <td className="num mono">{inr(sell)}</td>
                       <td className="num mono">{inr(cost)}</td>
                       <td className="num mono" style={{ color: m >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>{inr(m)}<div className="tiny">{pct1(mp)}</div></td>
                     </tr>
+                    {open && (l.components || []).map(c => {
+                      const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id };
+                      const totQty = (Number(c.qty) || 0) * (Number(l.bundle_qty) || 1);
+                      const cu = Number((compPrices[l.id] || {})[c.product_id]) || 0;
+                      const cSell = cu * totQty, cCost = compCostUnit(c.product_id) * totQty, cm = cSell - cCost, cmp = cSell ? (cm / cSell) * 100 : 0;
+                      return (
+                        <tr key={l.id + '-' + c.product_id} className="subrow">
+                          <td></td>
+                          <td><div style={{ fontSize: 12 }}>{p.name}</div><div className="tiny muted mono">{p.code}</div></td>
+                          <td className="num">{totQty}</td>
+                          <td className="num"><input type="number" min="0" className="input mono" value={(compPrices[l.id] || {})[c.product_id] == null ? '' : (compPrices[l.id] || {})[c.product_id]} onChange={e => setCp(l.id, c.product_id, e.target.value)} onBlur={() => commitComp(l)} placeholder="0" style={{ width: 96, textAlign: 'right', height: 24 }}/></td>
+                          <td className="num mono">{inr(cSell)}</td>
+                          <td className="num mono">{inr(cCost)}</td>
+                          <td className="num mono" style={{ color: cm >= 0 ? 'var(--success)' : 'var(--danger)' }}>{inr(cm)}<div className="tiny">{pct1(cmp)}</div></td>
+                        </tr>
+                      );
+                    })}
+                    </Fragment>
                   );
                 })}
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan="3" className="right small">Total</td>
+                  <td colSpan="4" className="right small">Total</td>
                   <td className="num mono"><strong>{inr(ourTotals.sell)}</strong></td>
                   <td className="num mono">{inr(ourTotals.cost)}</td>
                   <td className="num mono" style={{ color: (ourTotals.sell - ourTotals.cost) >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 700 }}>{inr(ourTotals.sell - ourTotals.cost)}<div className="tiny">{ourTotals.sell ? pct1((ourTotals.sell - ourTotals.cost) / ourTotals.sell * 100) : '+0.0%'}</div></td>
