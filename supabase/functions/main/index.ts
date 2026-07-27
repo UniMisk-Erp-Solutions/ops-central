@@ -90,20 +90,20 @@ Deno.serve(async (req: Request) => {
     const row = Array.isArray(arr) ? arr[0] : null;
     const v = row && (row.vendors || []).find((x: any) => x.token === t);
     if (!row || !v) return json({ error: "This quote link is not valid or has expired." }, 404);
-    return json({ vendor: v.name, rfq_no: row.rfq_no, items: v.items || [], prices: v.prices || {}, submitted: v.status === "submitted" });
+    return json({ vendor: v.name, rfq_no: row.rfq_no, items: v.items || [], prices: v.prices || {}, terms: v.terms || {}, submitted: v.status === "submitted" });
   }
 
   // ---------- Quote submit (vendor page) ----------
   if (path === "/quote-submit" && req.method === "POST") {
     if (!SB_KEY) return json({ error: "Server missing service key" }, 500);
     const body = await req.json().catch(() => ({}));
-    const { t, prices } = body || {};
+    const { t, prices, terms } = body || {};
     if (!t || !prices || typeof prices !== "object") return json({ error: "token and prices required" }, 400);
     const rfqId = String(t).split("~")[0];
     const rr = await fetch(SB_URL + "/rest/v1/rfqs?id=eq." + encodeURIComponent(rfqId) + "&select=*", { headers: sbHeaders() });
     const row = (await rr.json().catch(() => []))[0];
     if (!row) return json({ error: "Invalid link" }, 404);
-    const vendors = (row.vendors || []).map((x: any) => x.token === t ? { ...x, prices, status: "submitted", submitted_at: new Date().toISOString() } : x);
+    const vendors = (row.vendors || []).map((x: any) => x.token === t ? { ...x, prices, terms: (terms && typeof terms === "object") ? terms : {}, status: "submitted", submitted_at: new Date().toISOString() } : x);
     const v = vendors.find((x: any) => x.token === t);
     if (!v) return json({ error: "Invalid link" }, 404);
     await fetch(SB_URL + "/rest/v1/rfqs?id=eq." + encodeURIComponent(rfqId), { method: "PATCH", headers: { ...sbHeaders(), Prefer: "return=minimal" }, body: JSON.stringify({ vendors }) });

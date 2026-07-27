@@ -27,6 +27,15 @@
     .ok { color:var(--ok); }
     .brandbar { font-weight:700; color:var(--brand); margin-bottom:14px; font-size:15px; }
     .err { background:#fdecec; color:#b12; padding:10px 12px; border-radius:8px; font-size:13px; margin-top:12px; }
+    .item { border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+    .item-h { display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:10px; }
+    .item-h .nm { font-weight:600; font-size:14px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .fld label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--mut); margin-bottom:3px; }
+    .fld input { width:100%; padding:8px 10px; border:1px solid #cfd4de; border-radius:7px; font-size:14px; text-align:left; }
+    .fld input.num { text-align:right; }
+    .fld input:focus { outline:none; border-color:var(--brand); }
+    @media (max-width:520px){ .grid { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -64,39 +73,52 @@
 
       function render(d) {
         var items = d.items || [];
-        var rows = items.map(function (it, i) {
-          var pre = (d.prices && d.prices[it.product_id]) || '';
-          return '<tr><td>' + esc(it.name) + (it.code ? '<div class="muted">' + esc(it.code) + '</div>' : '') +
-            '</td><td class="num">' + (it.qty || 0) + '</td><td class="num">' +
-            '<input type="number" min="0" step="0.01" data-pid="' + esc(it.product_id) + '" data-qty="' + (it.qty || 0) + '" value="' + esc(pre) + '" placeholder="0"></td>' +
-            '<td class="num" id="line-' + i + '">—</td></tr>';
+        var terms = d.terms || {};
+        var blocks = items.map(function (it, i) {
+          var pid = esc(it.product_id);
+          var pre = (d.prices && d.prices[it.product_id]);
+          var tm = terms[it.product_id] || {};
+          return '<div class="item" data-i="' + i + '">' +
+            '<div class="item-h"><span class="nm">' + esc(it.name) + (it.code ? ' <span class="muted">(' + esc(it.code) + ')</span>' : '') + '</span>' +
+            '<span class="muted">Qty ' + (it.qty || 0) + ' · <span id="line-' + i + '">—</span></span></div>' +
+            '<div class="grid">' +
+              '<div class="fld"><label>Unit price ₹ *</label><input class="num" type="number" min="0" step="0.01" data-pid="' + pid + '" data-qty="' + (it.qty || 0) + '" data-f="price" value="' + (pre != null ? esc(pre) : '') + '" placeholder="0"></div>' +
+              '<div class="fld"><label>Delivery (days)</label><input class="num" type="number" min="0" data-pid="' + pid + '" data-f="delivery_days" value="' + esc(tm.delivery_days != null ? tm.delivery_days : '') + '" placeholder="e.g. 7"></div>' +
+              '<div class="fld"><label>Payment terms</label><input type="text" data-pid="' + pid + '" data-f="payment_terms" value="' + esc(tm.payment_terms || '') + '" placeholder="e.g. 50% advance, net 30"></div>' +
+              '<div class="fld"><label>Notes / other</label><input type="text" data-pid="' + pid + '" data-f="notes" value="' + esc(tm.notes || '') + '" placeholder="warranty, brand, MOQ…"></div>' +
+            '</div></div>';
         }).join('');
         show(
-          '<h1>Enter your prices' + (d.rfq_no ? ' · ' + esc(d.rfq_no) : '') + '</h1>' +
-          '<p class="sub">' + esc(d.vendor || '') + ' — type your unit price for each item, then submit.</p>' +
-          '<table><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Unit price ₹</th><th class="num">Line</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          '<h1>Enter your quote' + (d.rfq_no ? ' · ' + esc(d.rfq_no) : '') + '</h1>' +
+          '<p class="sub">' + esc(d.vendor || '') + ' — fill your unit price (and delivery / payment terms if any) for each item, then submit.</p>' +
+          blocks +
           '<div class="total"><span>Total</span><span id="grand">₹0</span></div>' +
           '<button class="btn" id="send">Submit quote</button>' +
           '<div id="msg"></div>'
         );
-        var inputs = Array.prototype.slice.call(card.querySelectorAll('input[data-pid]'));
+        var priceInputs = Array.prototype.slice.call(card.querySelectorAll('input[data-f="price"]'));
         function recalc() {
           var g = 0;
-          inputs.forEach(function (inp, i) {
+          priceInputs.forEach(function (inp, i) {
             var v = Number(inp.value) || 0, q = Number(inp.getAttribute('data-qty')) || 0;
             var line = v * q; g += line;
             var cell = document.getElementById('line-' + i); if (cell) cell.textContent = v ? inr(line) : '—';
           });
           document.getElementById('grand').textContent = inr(g);
         }
-        inputs.forEach(function (inp) { inp.addEventListener('input', recalc); });
+        priceInputs.forEach(function (inp) { inp.addEventListener('input', recalc); });
         recalc();
         document.getElementById('send').addEventListener('click', function () {
-          var prices = {}; var any = false;
-          inputs.forEach(function (inp) { var v = Number(inp.value); if (v > 0) { prices[inp.getAttribute('data-pid')] = v; any = true; } });
+          var prices = {}, termsOut = {}, any = false;
+          var all = Array.prototype.slice.call(card.querySelectorAll('input[data-pid]'));
+          all.forEach(function (inp) {
+            var pid = inp.getAttribute('data-pid'), f = inp.getAttribute('data-f'), val = inp.value;
+            if (f === 'price') { var v = Number(val); if (v > 0) { prices[pid] = v; any = true; } }
+            else if (val != null && String(val).trim() !== '') { termsOut[pid] = termsOut[pid] || {}; termsOut[pid][f] = f === 'delivery_days' ? (Number(val) || 0) : String(val).trim(); }
+          });
           if (!any) { document.getElementById('msg').innerHTML = '<div class="err">Please enter at least one price.</div>'; return; }
           var btn = document.getElementById('send'); btn.disabled = true; btn.textContent = 'Submitting…';
-          fetch(SB + '/functions/v1/main/quote-submit', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, SBH), body: JSON.stringify({ t: token, prices: prices }) })
+          fetch(SB + '/functions/v1/main/quote-submit', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, SBH), body: JSON.stringify({ t: token, prices: prices, terms: termsOut }) })
             .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
             .then(function (o) {
               if (o.ok && o.j.ok) { renderThanks(false); }

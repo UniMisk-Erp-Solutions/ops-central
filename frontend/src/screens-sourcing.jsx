@@ -888,6 +888,46 @@ function SourcingDetail({ srcId }) {
         </div>
       </div>
 
+      {/* Vendor-submitted terms (delivery / payment / notes) from the RFQ replies */}
+      {(() => {
+        const rfq = (state.rfqs || []).find(r => r && r.so_id === src.id);
+        const subs = rfq ? (rfq.vendors || []).filter(v => v && v.status === 'submitted') : [];
+        if (!subs.length) return null;
+        return (
+          <div className="card mb-2">
+            <div className="card-header"><h3 className="card-title">Vendor quotes &amp; terms</h3><span className="tiny muted">delivery · payment · notes each vendor submitted via the RFQ · visible to pre-sales &amp; purchase</span></div>
+            <div className="card-body flush">
+              {subs.map(v => {
+                const ven = getVendor(v.vendor_id);
+                return (
+                  <div key={v.token || v.vendor_id} style={{ borderTop: '1px solid var(--border)' }}>
+                    <div className="small" style={{ fontWeight: 600, padding: '8px 12px 2px' }}>{ven ? ven.name : v.name}{v.submitted_at ? <span className="tiny muted" style={{ fontWeight: 400 }}> · submitted {fmtDate(v.submitted_at)}</span> : null}</div>
+                    <table className="t">
+                      <thead><tr><th>Item</th><th className="num">Price ₹</th><th className="num">Delivery</th><th>Payment terms</th><th>Notes / other</th></tr></thead>
+                      <tbody>
+                        {(v.items || []).map(it => {
+                          const tm = (v.terms || {})[it.product_id] || {};
+                          const pr = (v.prices || {})[it.product_id];
+                          return (
+                            <tr key={it.product_id}>
+                              <td className="small">{it.name}{it.code ? <span className="tiny muted mono"> · {it.code}</span> : null}</td>
+                              <td className="num mono">{pr != null ? inr(pr) : '—'}</td>
+                              <td className="num">{tm.delivery_days != null && tm.delivery_days !== '' ? `${tm.delivery_days} day(s)` : '—'}</td>
+                              <td className="small">{tm.payment_terms || '—'}</td>
+                              <td className="small">{tm.notes || '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Inquiry lines (customer-facing) */}
       <div className="card">
         <div className="card-header"><h3 className="card-title">Inquiry — customer requirement</h3></div>
