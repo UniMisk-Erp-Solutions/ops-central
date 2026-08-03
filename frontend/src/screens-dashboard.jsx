@@ -134,7 +134,7 @@ function Dashboard() {
 
 // ===== View 1 — Excel-like board of resizable SO cards =====
 function SOBoardDashboard() {
-  const { state, navigate, soSubtotal, getCustomer, getUser, getVendor } = useStore();
+  const { state, navigate, soSubtotal, getCustomer, getUser, getVendor, getCategory, getProduct } = useStore();
   const [q, setQ] = React.useState('');
   const [status, setStatus] = React.useState('');
   const [priority, setPriority] = React.useState('');
@@ -192,9 +192,10 @@ function SOBoardDashboard() {
         .so-card::-webkit-scrollbar-thumb { background: #ececec; border-radius: 10px; }
         .so-card::-webkit-scrollbar-thumb:hover { background: #dcdcdc; }
         .so-card:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.05); }
-        .so-card .so-extra, .so-card .so-extra-2 { display: none; }
+        .so-card .so-extra, .so-card .so-extra-2, .so-card .so-extra-3 { display: none; }
         @container socard (min-height: 232px) { .so-card .so-extra { display: grid; } }
         @container socard (min-height: 320px) { .so-card .so-extra-2 { display: block; } }
+        @container socard (min-height: 450px) { .so-card .so-extra-3 { display: block; } }
       `}</style>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
         {slice.map(({ so, m, cust }) => {
@@ -273,6 +274,48 @@ function SOBoardDashboard() {
                           </div>
                         ))}
                       </div>
+                      {/* Client invoices — partial + final · click to open */}
+                      <div style={{ marginTop: 10 }}>
+                        <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Invoices ({(so.invoices || []).length})</div>
+                        {(so.invoices || []).length === 0 && <div className="tiny muted">None raised yet.</div>}
+                        {(so.invoices || []).map(inv => (
+                          <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 11, padding: '2px 0' }}>
+                            <a className="trunc mono" style={{ cursor: 'pointer', color: (inv.consolidated || inv.type === 'Final') ? 'var(--success)' : 'var(--accent)' }} onClick={() => navigate(`invoices/${so.id}/${inv.id}`)}>{inv.no}</a>
+                            <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '0 0 auto' }}>
+                              <span className="tiny muted">{inv.consolidated ? 'Final' : (inv.type || 'Partial')}</span>
+                              <span className="mono">{inr(inv.total || 0)}</span>
+                            </span>
+                          </div>
+                        ))}
+                        {(so.invoices || []).length === 0 && so.status !== 'Draft' && (
+                          <a className="tiny" style={{ cursor: 'pointer', color: 'var(--accent)' }} onClick={() => navigate(`invoices/${so.id}`)}>Open invoicing →</a>
+                        )}
+                      </div>
+                    </div>
+                    {/* Bill of materials — bundles + components */}
+                    <div className="so-extra-3" style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
+                      <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Bill of materials · {(so.lines || []).length} line(s)</div>
+                      {(so.lines || []).map(l => {
+                        const cat = getCategory(l.category_id) || { name: l.category_id };
+                        return (
+                          <div key={l.id} style={{ marginBottom: 6 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 500, gap: 8 }}>
+                              <span className="trunc">{cat.name} <span className="tiny muted">×{l.bundle_qty}</span></span>
+                              <span className="mono" style={{ flex: '0 0 auto' }}>{inr((Number(l.bundle_qty) || 0) * (Number(l.unit_price) || 0))}</span>
+                            </div>
+                            {(l.components || []).map(c => {
+                              const p = getProduct(c.product_id);
+                              return (
+                                <div key={c.product_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: 'var(--text-muted)', paddingLeft: 8, gap: 8 }}>
+                                  <span className="trunc">{p ? p.name : c.product_id}</span>
+                                  <span className="mono" style={{ flex: '0 0 auto' }}>×{(Number(c.qty) || 0) * (Number(l.bundle_qty) || 1)}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                      {(so.lines || []).length === 0 && <div className="tiny muted">No line items.</div>}
                     </div>
                   </>
                 );
