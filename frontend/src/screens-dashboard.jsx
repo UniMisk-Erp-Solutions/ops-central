@@ -14,7 +14,31 @@ function soMetrics(state, so, soSubtotal) {
   let stages = cfgStages, idx = stages.indexOf(so.status);
   if (idx < 0) { stages = SO_LIFECYCLE; idx = stages.indexOf(so.status); }
   const progress = idx >= 0 ? Math.round((idx / (stages.length - 1)) * 100) : 0;
-  return { sell, vendorSpend, margin, marginPct: sell > 0 ? (margin / sell) * 100 : 0, vendorIds, pos, progress };
+
+  // Materials: required (BOM components + implementation BOQ) vs in-hand
+  // (GRN-accepted + committed pool stock) — mirrors the Virtual Godown / SO detail.
+  const req = {};
+  (so.lines || []).forEach(l => (l.components || []).forEach(c => { req[c.product_id] = (req[c.product_id] || 0) + (Number(c.qty) || 0) * (Number(l.bundle_qty) || 1); }));
+  const implReq = window.soImplReq ? window.soImplReq(so) : {};
+  Object.keys(implReq).forEach(pid => { req[pid] = (req[pid] || 0) + implReq[pid]; });
+  const poIds = new Set(pos.map(p => p.id));
+  const recv = {};
+  (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + (Number(it.accepted) || 0); }); });
+  (so.pool_alloc || []).forEach(a => { recv[a.product_id] = (recv[a.product_id] || 0) + (Number(a.qty) || 0); });
+  const reqUnits = Object.values(req).reduce((a, b) => a + b, 0);
+  const recvUnits = Object.keys(req).reduce((a, pid) => a + Math.min(recv[pid] || 0, req[pid]), 0);
+  const remainingUnits = Math.max(0, reqUnits - recvUnits);
+  const distinctReq = Object.keys(req).length;
+  const distinctDone = Object.keys(req).filter(pid => (recv[pid] || 0) >= req[pid]).length;
+
+  // Client invoicing raised so far (partials + final), vs the SO value.
+  const invoices = so.invoices || [];
+  const invoicedAmt = invoices.length ? invoices.reduce((s, i) => s + (Number(i.total) || 0), 0) : (Number(so.invoice_amount) || 0);
+
+  return {
+    sell, vendorSpend, margin, marginPct: sell > 0 ? (margin / sell) * 100 : 0, vendorIds, pos, progress,
+    reqUnits, recvUnits, remainingUnits, distinctReq, distinctDone, invoicedAmt, invoiceCount: invoices.length,
+  };
 }
 
 // SVG donut / circle chart — data: [{label, value, color}]
@@ -202,26 +226,57 @@ function SOBoardDashboard() {
                   <div className="mono" style={{ fontWeight: 600, fontSize: 12.5, color: mColor }}>{m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</div>
                 </div>
               </div>
-              <div className="so-extra" style={{ gridTemplateColumns: 'auto 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5, marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
-                <span className="muted">PM</span><span className="right trunc">{getUser(so.pm)?.name || 'Unassigned'}</span>
-                <span className="muted">Profit</span><span className="mono right" style={{ color: mColor, fontWeight: 600 }}>{inr(m.margin)}</span>
-                <span className="muted">Created</span><span className="mono right">{fmtDate(so.date)}</span>
-                <span className="muted">Delivery</span><span className="mono right">{fmtDate(so.expected)}</span>
-                <span className="muted">Vendors</span><span className="right trunc">{m.vendorIds.length ? m.vendorIds.map(id => getVendor(id)?.name || id).join(', ') : '—'}</span>
-              </div>
-              <div className="so-extra-2" style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
-                <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Vendor POs ({m.pos.length})</div>
-                {m.pos.length === 0 && <div className="tiny muted">No POs raised yet.</div>}
-                {m.pos.slice(0, 8).map(p => (
-                  <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 11, padding: '2px 0' }}>
-                    <span className="trunc">{getVendor(p.vendor_id)?.name || p.vendor_id}</span>
-                    <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '0 0 auto' }}>
-                      <StatusBadge status={p.status}/>
-                      <span className="mono">{inr(p.amount || 0)}</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
+              {(() => {
+                const impl = so.extra && so.extra.implementation;
+                const supervisor = impl ? getUser(impl.supervisor_id) : null;
+                const matPct = m.reqUnits > 0 ? Math.round((m.recvUnits / m.reqUnits) * 100) : 0;
+                return (
+                  <>
+                    <div className="so-extra" style={{ gridTemplateColumns: 'auto 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5, marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
+                      <span className="muted">PM</span><span className="right trunc">{getUser(so.pm)?.name || 'Unassigned'}</span>
+                      <span className="muted">Order type</span><span className="right trunc">{so.order_type || 'Supply'}{impl ? ' + Implementation' : ''}</span>
+                      {supervisor && <><span className="muted">Supervisor</span><span className="right trunc">{supervisor.name}</span></>}
+                      <span className="muted">Created</span><span className="mono right">{fmtDate(so.date)}</span>
+                      <span className="muted">Delivery</span><span className="mono right">{fmtDate(so.expected)}</span>
+                      <span className="muted">Vendors</span><span className="right trunc">{m.vendorIds.length ? m.vendorIds.map(id => getVendor(id)?.name || id).join(', ') : '—'}</span>
+                    </div>
+                    <div className="so-extra-2" style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
+                      {/* Money: our quote to client · vendor cost · profit · billed */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5 }}>
+                        <span className="muted">Client quotation</span><span className="mono right">{inr(m.sell)}</span>
+                        <span className="muted">Vendor cost</span><span className="mono right">{inr(m.vendorSpend)}</span>
+                        <span className="muted" style={{ fontWeight: 600 }}>Our profit</span><span className="mono right" style={{ color: mColor, fontWeight: 600 }}>{inr(m.margin)} · {m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</span>
+                        <span className="muted">Billed to client</span><span className="mono right">{inr(m.invoicedAmt)}{m.invoiceCount ? <span className="tiny muted"> ({m.invoiceCount})</span> : ''}</span>
+                      </div>
+                      {/* Materials received vs remaining */}
+                      <div style={{ marginTop: 9 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
+                          <span className="muted">Material received</span>
+                          <span className="mono">{m.recvUnits}/{m.reqUnits} units · {m.remainingUnits} left</span>
+                        </div>
+                        <div style={{ height: 4, background: 'var(--bg-subtle)', borderRadius: 3, overflow: 'hidden', marginTop: 3 }}>
+                          <div style={{ width: `${matPct}%`, height: '100%', background: matPct >= 100 ? 'var(--success)' : 'var(--accent)' }}/>
+                        </div>
+                        <div className="tiny muted" style={{ marginTop: 2 }}>{m.distinctDone}/{m.distinctReq} item(s) fully in hand</div>
+                      </div>
+                      {/* Vendor POs */}
+                      <div style={{ marginTop: 10 }}>
+                        <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Vendor POs ({m.pos.length})</div>
+                        {m.pos.length === 0 && <div className="tiny muted">No POs raised yet.</div>}
+                        {m.pos.slice(0, 10).map(p => (
+                          <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 11, padding: '2px 0' }}>
+                            <a className="trunc" style={{ cursor: 'pointer' }} onClick={() => navigate(`vendor-pos/${p.id}`)}>{getVendor(p.vendor_id)?.name || p.vendor_id}</a>
+                            <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '0 0 auto' }}>
+                              <StatusBadge status={p.status}/>
+                              <span className="mono">{inr(p.amount || 0)}</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           );
         })}
