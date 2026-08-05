@@ -495,6 +495,8 @@ function SourcingDetail({ srcId }) {
   const [showConvert, setShowConvert] = React.useState(false);
   const [showAddVendor, setShowAddVendor] = React.useState(false);
   const [rfqBusy, setRfqBusy] = React.useState(false);
+  const [refloat, setRefloat] = React.useState(null);      // { vendors, itemsPayload, names } when re-sending
+  const [refloatReason, setRefloatReason] = React.useState('');
   // Per-item multi-vendor selection for Float RFQ: { [product_id]: { [vendor_id]: true } }.
   const [rfqSel, setRfqSel] = React.useState({});
   const toggleRfq = (pid, vid) => setRfqSel(s => { const cur = { ...(s[pid] || {}) }; if (cur[vid]) delete cur[vid]; else cur[vid] = true; return { ...s, [pid]: cur }; });
@@ -547,13 +549,31 @@ function SourcingDetail({ srcId }) {
   };
   // Float RFQ: email every shortlisted vendor (that has an email) a private quote
   // link with these line items. Prices come back into src.prices automatically.
-  const floatRFQ = async () => {
+  // Actually send the RFQ (reason is '' for a first float, required for a re-float).
+  const doFloat = async (vendors, itemsPayload, reason) => {
+    setRfqBusy(true);
+    try {
+      const SB = (window.OPC_ENV && window.OPC_ENV.SUPABASE_URL) || '';
+      const ANON = (window.OPC_ENV && window.OPC_ENV.SUPABASE_ANON_KEY) || '';
+      const r = await fetch(SB + '/functions/v1/main/float-rfq', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON }, body: JSON.stringify({ src_id: src.id, src_no: src.src_no, customer_name: (cust && cust.name) || '', org_name: (state.org && state.org.name) || '', vendors, items: itemsPayload, reason: reason || '' }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) {
+        const okc = (j.sent || []).filter(s => s.ok).length;
+        toast(`RFQ ${j.refloat ? 're-sent' : 'floated'} · emailed ${okc}/${vendors.length} vendor(s) · prices appear here as they reply`, okc ? 'success' : '');
+        setRfqSel({});
+        mutate(s => s, { action: j.refloat ? 'refloat-rfq' : 'float-rfq', entity: 'Sourcing', entity_id: src.id, user_id: currentUser, detail: `${j.refloat ? 'Re-sent' : 'Floated'} RFQ to ${okc} vendor(s)${reason ? ' · reason: ' + reason : ''} · ${src.src_no}` });
+      } else { toast(j.error || 'Could not float RFQ (is the mailer configured?)'); }
+    } catch (e) { toast('Network error floating RFQ'); }
+    setRfqBusy(false);
+    return true;
+  };
+
+  const floatRFQ = () => {
     const emails = (state.config && state.config.vendor_emails) || {};
     const compList = src ? srcComponentList(src) : [];
     if (!compList.length) { toast('No line items to quote'); return; }
     const mkItems = (pids) => pids.map(pid => { const p = getProduct(pid) || {}; const c = compList.find(x => x.product_id === pid); return { product_id: pid, name: p.name || pid, code: p.code || '', qty: c ? c.qty : 0 }; });
     const allPids = compList.map(c => c.product_id);
-    // Per-item vendor picks → each vendor gets only the items it was ticked for.
     const perVendor = {};
     compList.forEach(c => { const sel = rfqSel[c.product_id] || {}; Object.keys(sel).forEach(vid => { if (sel[vid]) (perVendor[vid] = perVendor[vid] || []).push(c.product_id); }); });
     const selectedVids = Object.keys(perVendor);
@@ -561,7 +581,6 @@ function SourcingDetail({ srcId }) {
     if (selectedVids.length) {
       vendors = selectedVids.map(vid => ({ vendor_id: vid, name: (getVendor(vid) || {}).name || vid, email: (emails[vid] || '').trim(), items: mkItems(perVendor[vid]) }));
     } else {
-      // Nothing ticked → send the whole list to every shortlisted vendor (default).
       const vids = src.quote_vendors || [];
       if (!vids.length) { toast('Add vendors first via “Add vendor & quote”'); return; }
       vendors = vids.map(vid => ({ vendor_id: vid, name: (getVendor(vid) || {}).name || vid, email: (emails[vid] || '').trim(), items: mkItems(allPids) }));
@@ -569,20 +588,12 @@ function SourcingDetail({ srcId }) {
     const missing = vendors.filter(v => !v.email);
     if (missing.length) { toast(`No email set for: ${missing.map(v => v.name).join(', ')} — add it in “Add vendor & quote”`); return; }
     const itemsPayload = mkItems(allPids);
-    setRfqBusy(true);
-    try {
-      const SB = (window.OPC_ENV && window.OPC_ENV.SUPABASE_URL) || '';
-      const ANON = (window.OPC_ENV && window.OPC_ENV.SUPABASE_ANON_KEY) || '';
-      const r = await fetch(SB + '/functions/v1/main/float-rfq', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON }, body: JSON.stringify({ src_id: src.id, src_no: src.src_no, customer_name: (cust && cust.name) || '', org_name: (state.org && state.org.name) || '', vendors, items: itemsPayload }) });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok && j.ok) {
-        const okc = (j.sent || []).filter(s => s.ok).length;
-        toast(`RFQ floated · emailed ${okc}/${vendors.length} vendor(s) · prices will appear here as they reply`, okc ? 'success' : '');
-        setRfqSel({});
-        mutate(s => s, { action: 'float-rfq', entity: 'Sourcing', entity_id: src.id, user_id: currentUser, detail: `Floated RFQ to ${okc} vendor(s) · ${src.src_no}` });
-      } else { toast(j.error || 'Could not float RFQ (is the mailer configured?)'); }
-    } catch (e) { toast('Network error floating RFQ'); }
-    setRfqBusy(false);
+    // Re-float? Any selected vendor already has an RFQ entry → require a reason.
+    const rfq = (state.rfqs || []).find(r => r && r.so_id === src.id);
+    const prevIds = new Set(((rfq && rfq.vendors) || []).map(v => v.vendor_id));
+    const again = vendors.filter(v => prevIds.has(v.vendor_id));
+    if (again.length) { setRefloat({ vendors, itemsPayload, names: again.map(v => v.name) }); setRefloatReason(''); return; }
+    doFloat(vendors, itemsPayload, '');
   };
   const [showAllocate, setShowAllocate] = React.useState(false);
 
@@ -891,7 +902,7 @@ function SourcingDetail({ srcId }) {
       {/* Vendor-submitted terms (delivery / payment / notes) from the RFQ replies */}
       {(() => {
         const rfq = (state.rfqs || []).find(r => r && r.so_id === src.id);
-        const subs = rfq ? (rfq.vendors || []).filter(v => v && v.status === 'submitted') : [];
+        const subs = rfq ? (rfq.vendors || []).filter(v => v && (v.status === 'submitted' || (Number(v.refloat_count) || 0) > 0 || (v.prices && Object.keys(v.prices).length))) : [];
         if (!subs.length) return null;
         return (
           <div className="card mb-2">
@@ -901,7 +912,11 @@ function SourcingDetail({ srcId }) {
                 const ven = getVendor(v.vendor_id);
                 return (
                   <div key={v.token || v.vendor_id} style={{ borderTop: '1px solid var(--border)' }}>
-                    <div className="small" style={{ fontWeight: 600, padding: '8px 12px 2px' }}>{ven ? ven.name : v.name}{v.submitted_at ? <span className="tiny muted" style={{ fontWeight: 400 }}> · submitted {fmtDate(v.submitted_at)}</span> : null}</div>
+                    <div className="small" style={{ fontWeight: 600, padding: '8px 12px 2px' }}>{ven ? ven.name : v.name}
+                      {v.submitted_at ? <span className="tiny muted" style={{ fontWeight: 400 }}> · submitted {fmtDate(v.submitted_at)}</span> : null}
+                      {(Number(v.refloat_count) || 0) > 0 && <span className="badge warning tiny" style={{ marginLeft: 6 }}>Re-sent {v.refloat_count}×{v.status === 'sent' ? ' · awaiting revision' : ''}</span>}
+                    </div>
+                    {(Number(v.refloat_count) || 0) > 0 && v.refloat_reason && <div className="tiny muted" style={{ padding: '0 12px 4px' }}>Re-sent reason: <strong>{v.refloat_reason}</strong></div>}
                     <table className="t">
                       <thead><tr><th>Item</th><th className="num">Price ₹</th><th className="num">Delivery</th><th>Payment terms</th><th>Notes / other</th></tr></thead>
                       <tbody>
@@ -956,6 +971,16 @@ function SourcingDetail({ srcId }) {
       {showConvert && <ConvertToSOModal src={src} margin={margin} onClose={() => setShowConvert(false)}/>}
       {showAddVendor && <AddVendorQuoteModal src={src} comps={comps} onClose={() => setShowAddVendor(false)}/>}
       {showAllocate && <AllocateVendorsModal src={src} onClose={() => setShowAllocate(false)}/>}
+      {refloat && (
+        <Modal title="Re-send RFQ — reason required" onClose={() => setRefloat(null)}
+          footer={<><button className="btn" onClick={() => setRefloat(null)}>Cancel</button>
+            <button className="btn btn-primary" disabled={rfqBusy || !refloatReason.trim()} onClick={async () => { const r = { ...refloat }; const ok = await doFloat(r.vendors, r.itemsPayload, refloatReason.trim()); if (ok) setRefloat(null); }}><Icon name="mail" size={13}/>{rfqBusy ? 'Re-sending…' : 'Re-send RFQ'}</button></>}>
+          <div className="tiny muted mb-2">You’re re-sending this RFQ to a vendor already asked: <strong>{refloat.names.join(', ')}</strong>. Their previous prices stay until they resubmit. The reason is saved for the record and shown to the vendor in the email &amp; on their quote page.</div>
+          <div className="field"><label className="field-label">Reason for re-sending *</label>
+            <textarea className="textarea" rows="3" value={refloatReason} onChange={e => setRefloatReason(e.target.value)} placeholder="e.g. wrong price entered · missing GST · quoted the wrong item · needs revised delivery…" autoFocus/>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

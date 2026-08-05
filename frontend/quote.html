@@ -88,9 +88,11 @@
               '<div class="fld"><label>Notes / other</label><input type="text" data-pid="' + pid + '" data-f="notes" value="' + esc(tm.notes || '') + '" placeholder="warranty, brand, MOQ…"></div>' +
             '</div></div>';
         }).join('');
+        var reasonBanner = d.refloat_reason ? '<div style="background:#fff6e5;border:1px solid #ffe0a3;border-radius:8px;padding:10px 12px;margin:0 0 14px;color:#8a5a00;font-size:13px"><strong>We\'ve asked you to revise this quote.</strong><br>Reason: ' + esc(d.refloat_reason) + '</div>' : '';
         show(
-          '<h1>Enter your quote' + (d.rfq_no ? ' · ' + esc(d.rfq_no) : '') + '</h1>' +
+          '<h1>' + (d.refloat_reason ? 'Revise your quote' : 'Enter your quote') + (d.rfq_no ? ' · ' + esc(d.rfq_no) : '') + '</h1>' +
           '<p class="sub">' + esc(d.vendor || '') + ' — fill your unit price (and delivery / payment terms if any) for each item, then submit.</p>' +
+          reasonBanner +
           blocks +
           '<div class="total"><span>Total</span><span id="grand">₹0</span></div>' +
           '<button class="btn" id="send">Submit quote</button>' +
