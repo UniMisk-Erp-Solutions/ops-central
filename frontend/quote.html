@@ -74,25 +74,42 @@
       function render(d) {
         var items = d.items || [];
         var terms = d.terms || {};
+        var anyLock = false;
         var blocks = items.map(function (it, i) {
           var pid = esc(it.product_id);
           var pre = (d.prices && d.prices[it.product_id]);
           var tm = terms[it.product_id] || {};
+          var lk = it.lock || {};
+          function inp(f, label, type, ph, val, isPrice) {
+            var locked = lk[f];
+            var isLocked = locked !== undefined && locked !== null && locked !== '';
+            if (isLocked) anyLock = true;
+            var attrs = 'data-pid="' + pid + '" data-f="' + f + '"' + (isPrice ? ' data-qty="' + (it.qty || 0) + '"' : '');
+            var cls = (type === 'number' ? 'num' : '');
+            if (isLocked) {
+              return '<div class="fld"><label>' + label + ' <span style="color:#8a5a00;font-weight:600">🔒 required by buyer</span></label>' +
+                '<input class="' + cls + '" type="' + type + '" ' + attrs + ' value="' + esc(locked) + '" readonly disabled style="background:#f7f2e6;color:#555;cursor:not-allowed"></div>';
+            }
+            var numAttrs = (type === 'number' ? ' min="0"' + (isPrice ? ' step="0.01"' : '') : '');
+            return '<div class="fld"><label>' + label + '</label><input class="' + cls + '" type="' + type + '"' + numAttrs + ' ' + attrs + ' value="' + (val != null && val !== '' ? esc(val) : '') + '" placeholder="' + ph + '"></div>';
+          }
           return '<div class="item" data-i="' + i + '">' +
             '<div class="item-h"><span class="nm">' + esc(it.name) + (it.code ? ' <span class="muted">(' + esc(it.code) + ')</span>' : '') + '</span>' +
             '<span class="muted">Qty ' + (it.qty || 0) + ' · <span id="line-' + i + '">—</span></span></div>' +
             '<div class="grid">' +
-              '<div class="fld"><label>Unit price ₹ *</label><input class="num" type="number" min="0" step="0.01" data-pid="' + pid + '" data-qty="' + (it.qty || 0) + '" data-f="price" value="' + (pre != null ? esc(pre) : '') + '" placeholder="0"></div>' +
-              '<div class="fld"><label>Delivery (days)</label><input class="num" type="number" min="0" data-pid="' + pid + '" data-f="delivery_days" value="' + esc(tm.delivery_days != null ? tm.delivery_days : '') + '" placeholder="e.g. 7"></div>' +
-              '<div class="fld"><label>Payment terms</label><input type="text" data-pid="' + pid + '" data-f="payment_terms" value="' + esc(tm.payment_terms || '') + '" placeholder="e.g. 50% advance, net 30"></div>' +
-              '<div class="fld"><label>Notes / other</label><input type="text" data-pid="' + pid + '" data-f="notes" value="' + esc(tm.notes || '') + '" placeholder="warranty, brand, MOQ…"></div>' +
+              inp('price', 'Unit price ₹ *', 'number', '0', pre, true) +
+              inp('delivery_days', 'Delivery (days)', 'number', 'e.g. 7', tm.delivery_days, false) +
+              inp('payment_terms', 'Payment terms', 'text', 'e.g. 50% advance, net 30', tm.payment_terms, false) +
+              inp('notes', 'Notes / other', 'text', 'warranty, brand, MOQ…', tm.notes, false) +
             '</div></div>';
         }).join('');
+        var lockNote = anyLock ? '<p class="muted" style="margin:-6px 0 12px">🔒 Some fields are set by the buyer and can’t be changed — please quote around them.</p>' : '';
         var reasonBanner = d.refloat_reason ? '<div style="background:#fff6e5;border:1px solid #ffe0a3;border-radius:8px;padding:10px 12px;margin:0 0 14px;color:#8a5a00;font-size:13px"><strong>We\'ve asked you to revise this quote.</strong><br>Reason: ' + esc(d.refloat_reason) + '</div>' : '';
         show(
           '<h1>' + (d.refloat_reason ? 'Revise your quote' : 'Enter your quote') + (d.rfq_no ? ' · ' + esc(d.rfq_no) : '') + '</h1>' +
           '<p class="sub">' + esc(d.vendor || '') + ' — fill your unit price (and delivery / payment terms if any) for each item, then submit.</p>' +
           reasonBanner +
+          lockNote +
           blocks +
           '<div class="total"><span>Total</span><span id="grand">₹0</span></div>' +
           '<button class="btn" id="send">Submit quote</button>' +

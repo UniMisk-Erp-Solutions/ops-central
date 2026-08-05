@@ -495,8 +495,10 @@ function SourcingDetail({ srcId }) {
   const [showConvert, setShowConvert] = React.useState(false);
   const [showAddVendor, setShowAddVendor] = React.useState(false);
   const [rfqBusy, setRfqBusy] = React.useState(false);
-  const [refloat, setRefloat] = React.useState(null);      // { vendors, itemsPayload, names } when re-sending
+  const [floatModal, setFloatModal] = React.useState(null);   // { vendors, itemsPayload, distinctItems, isRefloat, names }
   const [refloatReason, setRefloatReason] = React.useState('');
+  const [locks, setLocks] = React.useState({});               // { [product_id]: { price, delivery_days, payment_terms, notes } }
+  const setLock = (pid, f, v) => setLocks(m => ({ ...m, [pid]: { ...(m[pid] || {}), [f]: v } }));
   // Per-item multi-vendor selection for Float RFQ: { [product_id]: { [vendor_id]: true } }.
   const [rfqSel, setRfqSel] = React.useState({});
   const toggleRfq = (pid, vid) => setRfqSel(s => { const cur = { ...(s[pid] || {}) }; if (cur[vid]) delete cur[vid]; else cur[vid] = true; return { ...s, [pid]: cur }; });
@@ -550,12 +552,12 @@ function SourcingDetail({ srcId }) {
   // Float RFQ: email every shortlisted vendor (that has an email) a private quote
   // link with these line items. Prices come back into src.prices automatically.
   // Actually send the RFQ (reason is '' for a first float, required for a re-float).
-  const doFloat = async (vendors, itemsPayload, reason) => {
+  const doFloat = async (vendors, itemsPayload, reason, lockMap) => {
     setRfqBusy(true);
     try {
       const SB = (window.OPC_ENV && window.OPC_ENV.SUPABASE_URL) || '';
       const ANON = (window.OPC_ENV && window.OPC_ENV.SUPABASE_ANON_KEY) || '';
-      const r = await fetch(SB + '/functions/v1/main/float-rfq', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON }, body: JSON.stringify({ src_id: src.id, src_no: src.src_no, customer_name: (cust && cust.name) || '', org_name: (state.org && state.org.name) || '', vendors, items: itemsPayload, reason: reason || '' }) });
+      const r = await fetch(SB + '/functions/v1/main/float-rfq', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON }, body: JSON.stringify({ src_id: src.id, src_no: src.src_no, customer_name: (cust && cust.name) || '', org_name: (state.org && state.org.name) || '', vendors, items: itemsPayload, reason: reason || '', locks: lockMap || {} }) });
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.ok) {
         const okc = (j.sent || []).filter(s => s.ok).length;
@@ -588,12 +590,15 @@ function SourcingDetail({ srcId }) {
     const missing = vendors.filter(v => !v.email);
     if (missing.length) { toast(`No email set for: ${missing.map(v => v.name).join(', ')} — add it in “Add vendor & quote”`); return; }
     const itemsPayload = mkItems(allPids);
-    // Re-float? Any selected vendor already has an RFQ entry → require a reason.
+    // Always open the Float modal: presales can optionally lock fields, and give a
+    // reason if this is a re-send to a vendor already asked.
     const rfq = (state.rfqs || []).find(r => r && r.so_id === src.id);
     const prevIds = new Set(((rfq && rfq.vendors) || []).map(v => v.vendor_id));
     const again = vendors.filter(v => prevIds.has(v.vendor_id));
-    if (again.length) { setRefloat({ vendors, itemsPayload, names: again.map(v => v.name) }); setRefloatReason(''); return; }
-    doFloat(vendors, itemsPayload, '');
+    const floatedPids = new Set(); vendors.forEach(v => (v.items || []).forEach(it => floatedPids.add(it.product_id)));
+    const distinctItems = itemsPayload.filter(it => floatedPids.has(it.product_id));
+    setLocks({}); setRefloatReason('');
+    setFloatModal({ vendors, itemsPayload, distinctItems, isRefloat: again.length > 0, names: again.map(v => v.name) });
   };
   const [showAllocate, setShowAllocate] = React.useState(false);
 
@@ -971,14 +976,33 @@ function SourcingDetail({ srcId }) {
       {showConvert && <ConvertToSOModal src={src} margin={margin} onClose={() => setShowConvert(false)}/>}
       {showAddVendor && <AddVendorQuoteModal src={src} comps={comps} onClose={() => setShowAddVendor(false)}/>}
       {showAllocate && <AllocateVendorsModal src={src} onClose={() => setShowAllocate(false)}/>}
-      {refloat && (
-        <Modal title="Re-send RFQ — reason required" onClose={() => setRefloat(null)}
-          footer={<><button className="btn" onClick={() => setRefloat(null)}>Cancel</button>
-            <button className="btn btn-primary" disabled={rfqBusy || !refloatReason.trim()} onClick={async () => { const r = { ...refloat }; const ok = await doFloat(r.vendors, r.itemsPayload, refloatReason.trim()); if (ok) setRefloat(null); }}><Icon name="mail" size={13}/>{rfqBusy ? 'Re-sending…' : 'Re-send RFQ'}</button></>}>
-          <div className="tiny muted mb-2">You’re re-sending this RFQ to a vendor already asked: <strong>{refloat.names.join(', ')}</strong>. Their previous prices stay until they resubmit. The reason is saved for the record and shown to the vendor in the email &amp; on their quote page.</div>
-          <div className="field"><label className="field-label">Reason for re-sending *</label>
-            <textarea className="textarea" rows="3" value={refloatReason} onChange={e => setRefloatReason(e.target.value)} placeholder="e.g. wrong price entered · missing GST · quoted the wrong item · needs revised delivery…" autoFocus/>
-          </div>
+      {floatModal && (
+        <Modal title={floatModal.isRefloat ? 'Re-send RFQ' : 'Float RFQ'} size="lg" onClose={() => setFloatModal(null)}
+          footer={<><button className="btn" onClick={() => setFloatModal(null)}>Cancel</button>
+            <button className="btn btn-primary" disabled={rfqBusy || (floatModal.isRefloat && !refloatReason.trim())} onClick={async () => { const ok = await doFloat(floatModal.vendors, floatModal.itemsPayload, refloatReason.trim(), locks); if (ok) setFloatModal(null); }}><Icon name="mail" size={13}/>{rfqBusy ? 'Sending…' : (floatModal.isRefloat ? 'Re-send RFQ' : `Send RFQ · ${floatModal.vendors.length} vendor(s)`)}</button></>}>
+          {floatModal.isRefloat && (
+            <div className="field mb-2"><label className="field-label">Reason for re-sending * <span className="tiny muted">(already asked: {floatModal.names.join(', ')})</span></label>
+              <textarea className="textarea" rows="2" value={refloatReason} onChange={e => setRefloatReason(e.target.value)} placeholder="e.g. wrong price entered · missing GST · quoted the wrong item…" autoFocus/>
+            </div>
+          )}
+          <div className="tiny muted mb-2">Emailing <strong>{floatModal.vendors.length}</strong> vendor(s). Optionally <strong>lock</strong> any field below — the vendor sees it as a fixed requirement and can’t change it. Leave blank for the vendor to fill.</div>
+          <div className="card"><div className="card-body flush">
+            <table className="t">
+              <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Lock price ₹</th><th className="num">Lock delivery (days)</th><th>Lock payment terms</th><th>Lock notes</th></tr></thead>
+              <tbody>
+                {floatModal.distinctItems.map(it => { const lk = locks[it.product_id] || {}; return (
+                  <tr key={it.product_id}>
+                    <td className="small">{it.name}{it.code ? <span className="tiny muted mono"> · {it.code}</span> : null}</td>
+                    <td className="num">{it.qty}</td>
+                    <td className="num"><input type="number" min="0" className="input mono" value={lk.price == null ? '' : lk.price} onChange={e => setLock(it.product_id, 'price', e.target.value)} placeholder="—" style={{ width: 90, height: 26, textAlign: 'right' }}/></td>
+                    <td className="num"><input type="number" min="0" className="input mono" value={lk.delivery_days == null ? '' : lk.delivery_days} onChange={e => setLock(it.product_id, 'delivery_days', e.target.value)} placeholder="—" style={{ width: 80, height: 26, textAlign: 'right' }}/></td>
+                    <td><input className="input" value={lk.payment_terms == null ? '' : lk.payment_terms} onChange={e => setLock(it.product_id, 'payment_terms', e.target.value)} placeholder="—" style={{ height: 26 }}/></td>
+                    <td><input className="input" value={lk.notes == null ? '' : lk.notes} onChange={e => setLock(it.product_id, 'notes', e.target.value)} placeholder="—" style={{ height: 26 }}/></td>
+                  </tr>
+                ); })}
+              </tbody>
+            </table>
+          </div></div>
         </Modal>
       )}
     </div>

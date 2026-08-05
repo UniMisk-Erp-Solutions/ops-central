@@ -57,8 +57,24 @@ Deno.serve(async (req: Request) => {
     if (!cfg.key) return json({ error: "Email is not configured yet (BREVO_API_KEY missing on the server)" }, 500);
     const rfqId = "rfq-" + src_id;
     const rand = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-    const cleanItems = items.map((i: any) => ({ product_id: i.product_id, name: i.name || i.product_id, code: i.code || "", qty: Number(i.qty) || 0 }));
-    const cleanOf = (arr: any[]) => arr.map((i: any) => ({ product_id: i.product_id, name: i.name || i.product_id, code: i.code || "", qty: Number(i.qty) || 0 }));
+    // Buyer-locked fields per item (price / delivery_days / payment_terms / notes):
+    // the vendor sees these as a fixed requirement and cannot change them.
+    const locks = (body.locks && typeof body.locks === "object") ? body.locks : {};
+    const withLock = (arr: any[]) => arr.map((i: any) => {
+      const it: any = { product_id: i.product_id, name: i.name || i.product_id, code: i.code || "", qty: Number(i.qty) || 0 };
+      const lk = locks[i.product_id];
+      if (lk && typeof lk === "object") {
+        const L: any = {};
+        if (lk.price !== undefined && lk.price !== null && lk.price !== "") L.price = Number(lk.price) || 0;
+        if (lk.delivery_days !== undefined && lk.delivery_days !== null && lk.delivery_days !== "") L.delivery_days = Number(lk.delivery_days) || 0;
+        if (lk.payment_terms) L.payment_terms = String(lk.payment_terms);
+        if (lk.notes) L.notes = String(lk.notes);
+        if (Object.keys(L).length) it.lock = L;
+      }
+      return it;
+    });
+    const cleanItems = withLock(items);
+    const cleanOf = withLock;
     const withEmail = vendors.filter((v: any) => v && v.vendor_id && v.email);
     if (!withEmail.length) return json({ error: "No selected vendor has an email set" }, 400);
 
@@ -127,7 +143,22 @@ Deno.serve(async (req: Request) => {
     const rr = await fetch(SB_URL + "/rest/v1/rfqs?id=eq." + encodeURIComponent(rfqId) + "&select=*", { headers: sbHeaders() });
     const row = (await rr.json().catch(() => []))[0];
     if (!row) return json({ error: "Invalid link" }, 404);
-    const vendors = (row.vendors || []).map((x: any) => x.token === t ? { ...x, prices, terms: (terms && typeof terms === "object") ? terms : {}, status: "submitted", submitted_at: new Date().toISOString() } : x);
+    const target = (row.vendors || []).find((x: any) => x.token === t);
+    if (!target) return json({ error: "Invalid link" }, 404);
+    // Enforce buyer-locked fields — a locked value always wins over whatever is sent.
+    const finalPrices: any = { ...(prices || {}) };
+    const finalTerms: any = (terms && typeof terms === "object") ? { ...terms } : {};
+    (target.items || []).forEach((it: any) => {
+      const lk = it.lock; if (!lk) return;
+      if (lk.price !== undefined) finalPrices[it.product_id] = Number(lk.price) || 0;
+      if (lk.delivery_days !== undefined || lk.payment_terms || lk.notes) {
+        finalTerms[it.product_id] = finalTerms[it.product_id] || {};
+        if (lk.delivery_days !== undefined) finalTerms[it.product_id].delivery_days = Number(lk.delivery_days) || 0;
+        if (lk.payment_terms) finalTerms[it.product_id].payment_terms = lk.payment_terms;
+        if (lk.notes) finalTerms[it.product_id].notes = lk.notes;
+      }
+    });
+    const vendors = (row.vendors || []).map((x: any) => x.token === t ? { ...x, prices: finalPrices, terms: finalTerms, status: "submitted", submitted_at: new Date().toISOString() } : x);
     const v = vendors.find((x: any) => x.token === t);
     if (!v) return json({ error: "Invalid link" }, 404);
     await fetch(SB_URL + "/rest/v1/rfqs?id=eq." + encodeURIComponent(rfqId), { method: "PATCH", headers: { ...sbHeaders(), Prefer: "return=minimal" }, body: JSON.stringify({ vendors }) });
@@ -135,7 +166,7 @@ Deno.serve(async (req: Request) => {
     const srow = (await sr.json().catch(() => []))[0];
     if (srow) {
       const np = srow.prices || {};
-      for (const pid of Object.keys(prices)) { np[pid] = np[pid] || {}; np[pid][v.vendor_id] = Number((prices as any)[pid]) || 0; }
+      for (const pid of Object.keys(finalPrices)) { np[pid] = np[pid] || {}; np[pid][v.vendor_id] = Number((finalPrices as any)[pid]) || 0; }
       const qv = Array.from(new Set([...(srow.quote_vendors || []), v.vendor_id]));
       await fetch(SB_URL + "/rest/v1/sourcings?id=eq." + encodeURIComponent(row.so_id), { method: "PATCH", headers: { ...sbHeaders(), Prefer: "return=minimal" }, body: JSON.stringify({ prices: np, quote_vendors: qv }) });
     }
