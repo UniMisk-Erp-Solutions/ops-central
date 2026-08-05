@@ -132,6 +132,143 @@ function Dashboard() {
   );
 }
 
+// Persist each card's stretched size + the board scroll across navigation. These
+// are module-level so they survive unmount/remount within the SPA session (hash
+// routing → no page reload), so the browser Back button returns you to the board
+// exactly as you left it — same stretched cards, same scroll.
+const cardSizes = {};   // { [so.id]: { w, h } } — only for cards stretched taller than default
+let boardScroll = 0;
+
+// One SO card. Restores its saved size on mount, remembers it on resize, and makes
+// every section clickable to the relevant detail page.
+function SOCard({ so, m, cust, navigate, getUser, getVendor, getCategory, getProduct }) {
+  const mColor = m.margin >= 0 ? 'var(--success)' : 'var(--danger)';
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const saved = cardSizes[so.id];
+    if (saved) { el.style.width = saved.w + 'px'; el.style.height = saved.h + 'px'; }
+    const ro = new ResizeObserver(() => {
+      if (el.offsetHeight > 165) cardSizes[so.id] = { w: el.offsetWidth, h: el.offsetHeight };
+      else delete cardSizes[so.id];   // collapsed back to default → forget it
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [so.id]);
+  const go = (r) => (e) => { e.stopPropagation(); navigate(r); };
+  const impl = so.extra && so.extra.implementation;
+  const supervisor = impl ? getUser(impl.supervisor_id) : null;
+  const matPct = m.reqUnits > 0 ? Math.round((m.recvUnits / m.reqUnits) * 100) : 0;
+  const clk = { cursor: 'pointer' };
+  return (
+    <div ref={ref} className="so-card" onDoubleClick={() => navigate(`sales-orders/${so.id}`)}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', ...clk }} onClick={go(`sales-orders/${so.id}`)}>{cust ? cust.name : '—'}</div>
+          <a className="mono tiny muted" style={clk} onClick={go(`sales-orders/${so.id}`)}>{so.so_no}</a>
+        </div>
+        <PriorityBadge priority={so.priority}/>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, margin: '8px 0 5px' }}>
+        <StatusBadge status={so.status}/>
+        <span className="tiny mono muted">{m.progress}%</span>
+      </div>
+      <div style={{ height: 5, background: 'var(--bg-subtle)', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${m.progress}%`, height: '100%', background: m.progress >= 100 ? 'var(--success)' : 'var(--accent)', transition: 'width .3s' }}/>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 9 }}>
+        <div style={{ background: 'var(--bg-subtle)', borderRadius: 5, padding: '5px 8px', ...clk }} onClick={go(`sales-orders/${so.id}`)} title="Open Sales Order">
+          <div className="tiny muted">Value</div>
+          <div className="mono" style={{ fontWeight: 600, fontSize: 12.5 }}>{inr(m.sell)}</div>
+        </div>
+        <div style={{ background: 'var(--bg-subtle)', borderRadius: 5, padding: '5px 8px', ...clk }} onClick={go(`sales-orders/${so.id}`)} title="Open Sales Order">
+          <div className="tiny muted">Margin</div>
+          <div className="mono" style={{ fontWeight: 600, fontSize: 12.5, color: mColor }}>{m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</div>
+        </div>
+      </div>
+      <div className="so-extra" style={{ gridTemplateColumns: 'auto 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5, marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
+        <span className="muted">PM</span><span className="right trunc">{getUser(so.pm)?.name || 'Unassigned'}</span>
+        <span className="muted">Order type</span><span className="right trunc">{so.order_type || 'Supply'}{impl ? ' + Implementation' : ''}</span>
+        {supervisor && <><span className="muted">Supervisor</span><span className="right trunc">{supervisor.name}</span></>}
+        <span className="muted">Created</span><span className="mono right">{fmtDate(so.date)}</span>
+        <span className="muted">Delivery</span><span className="mono right">{fmtDate(so.expected)}</span>
+        <span className="muted">Vendors</span><span className="right trunc">{m.vendorIds.length ? m.vendorIds.map(id => getVendor(id)?.name || id).join(', ') : '—'}</span>
+      </div>
+      <div className="so-extra-2" style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5, ...clk }} onClick={go(`sales-orders/${so.id}`)} title="Open Sales Order">
+          <span className="muted">Client quotation</span><span className="mono right">{inr(m.sell)}</span>
+          <span className="muted">Vendor cost</span><span className="mono right">{inr(m.vendorSpend)}</span>
+          <span className="muted" style={{ fontWeight: 600 }}>Our profit</span><span className="mono right" style={{ color: mColor, fontWeight: 600 }}>{inr(m.margin)} · {m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</span>
+          <span className="muted">Billed to client</span><span className="mono right">{inr(m.invoicedAmt)}{m.invoiceCount ? <span className="tiny muted"> ({m.invoiceCount})</span> : ''}</span>
+        </div>
+        <div style={{ marginTop: 9, ...clk }} onClick={go(`godown/${so.id}`)} title="Open Virtual Godown">
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
+            <span className="muted">Material received</span>
+            <span className="mono">{m.recvUnits}/{m.reqUnits} units · {m.remainingUnits} left</span>
+          </div>
+          <div style={{ height: 4, background: 'var(--bg-subtle)', borderRadius: 3, overflow: 'hidden', marginTop: 3 }}>
+            <div style={{ width: `${matPct}%`, height: '100%', background: matPct >= 100 ? 'var(--success)' : 'var(--accent)' }}/>
+          </div>
+          <div className="tiny muted" style={{ marginTop: 2 }}>{m.distinctDone}/{m.distinctReq} item(s) fully in hand</div>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Vendor POs ({m.pos.length})</div>
+          {m.pos.length === 0 && <div className="tiny muted">No POs raised yet.</div>}
+          {m.pos.slice(0, 10).map(p => (
+            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 11, padding: '2px 0' }}>
+              <a className="trunc" style={clk} onClick={go(`vendor-pos/${p.id}`)}>{getVendor(p.vendor_id)?.name || p.vendor_id}</a>
+              <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '0 0 auto' }}>
+                <StatusBadge status={p.status}/>
+                <span className="mono">{inr(p.amount || 0)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Invoices ({(so.invoices || []).length})</div>
+          {(so.invoices || []).length === 0 && <div className="tiny muted">None raised yet.</div>}
+          {(so.invoices || []).map(inv => (
+            <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 11, padding: '2px 0' }}>
+              <a className="trunc mono" style={{ cursor: 'pointer', color: (inv.consolidated || inv.type === 'Final') ? 'var(--success)' : 'var(--accent)' }} onClick={go(`invoices/${so.id}/${inv.id}`)}>{inv.no}</a>
+              <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '0 0 auto' }}>
+                <span className="tiny muted">{inv.consolidated ? 'Final' : (inv.type || 'Partial')}</span>
+                <span className="mono">{inr(inv.total || 0)}</span>
+              </span>
+            </div>
+          ))}
+          {(so.invoices || []).length === 0 && so.status !== 'Draft' && (
+            <a className="tiny" style={{ cursor: 'pointer', color: 'var(--accent)' }} onClick={go(`invoices/${so.id}`)}>Open invoicing →</a>
+          )}
+        </div>
+      </div>
+      <div className="so-extra-3" style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)', ...clk }} onClick={go(`sales-orders/${so.id}`)} title="Open Sales Order">
+        <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Bill of materials · {(so.lines || []).length} line(s)</div>
+        {(so.lines || []).map(l => {
+          const cat = getCategory(l.category_id) || { name: l.category_id };
+          return (
+            <div key={l.id} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 500, gap: 8 }}>
+                <span className="trunc">{cat.name} <span className="tiny muted">×{l.bundle_qty}</span></span>
+                <span className="mono" style={{ flex: '0 0 auto' }}>{inr((Number(l.bundle_qty) || 0) * (Number(l.unit_price) || 0))}</span>
+              </div>
+              {(l.components || []).map(c => {
+                const p = getProduct(c.product_id);
+                return (
+                  <div key={c.product_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: 'var(--text-muted)', paddingLeft: 8, gap: 8 }}>
+                    <span className="trunc">{p ? p.name : c.product_id}</span>
+                    <span className="mono" style={{ flex: '0 0 auto' }}>×{(Number(c.qty) || 0) * (Number(l.bundle_qty) || 1)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+        {(so.lines || []).length === 0 && <div className="tiny muted">No line items.</div>}
+      </div>
+    </div>
+  );
+}
+
 // ===== View 1 — Excel-like board of resizable SO cards =====
 function SOBoardDashboard() {
   const { state, navigate, soSubtotal, getCustomer, getUser, getVendor, getCategory, getProduct } = useStore();
@@ -143,6 +280,16 @@ function SOBoardDashboard() {
   const [dir, setDir] = React.useState('desc');
   const [page, setPage] = React.useState(0);
   const PER = 48;
+
+  // Restore the board scroll on return (Back button) and remember it while scrolling.
+  React.useEffect(() => {
+    const main = document.querySelector('.main');
+    if (!main) return;
+    const raf = requestAnimationFrame(() => { if (boardScroll) main.scrollTop = boardScroll; });
+    const onScroll = () => { boardScroll = main.scrollTop; };
+    main.addEventListener('scroll', onScroll, { passive: true });
+    return () => { cancelAnimationFrame(raf); main.removeEventListener('scroll', onScroll); };
+  }, []);
 
   const statuses = [...new Set(state.sales_orders.map(s => s.status))];
   const pms = [...new Set(state.sales_orders.map(s => s.pm).filter(Boolean))];
@@ -186,7 +333,7 @@ function SOBoardDashboard() {
       </div></div>
 
       <style>{`
-        .so-card { container-type: size; container-name: socard; scrollbar-width: thin; scrollbar-color: #e8e8e8 transparent; }
+        .so-card { container-type: size; container-name: socard; flex: 0 0 auto; width: calc(25% - 9px); min-width: 200px; height: 152px; min-height: 120px; max-width: 100%; resize: both; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 11px; cursor: default; transition: border-color .15s, box-shadow .15s; scrollbar-width: thin; scrollbar-color: #e8e8e8 transparent; }
         .so-card::-webkit-scrollbar { width: 3px; height: 3px; }
         .so-card::-webkit-scrollbar-track { background: transparent; }
         .so-card::-webkit-scrollbar-thumb { background: #ececec; border-radius: 10px; }
@@ -198,131 +345,9 @@ function SOBoardDashboard() {
         @container socard (min-height: 450px) { .so-card .so-extra-3 { display: block; } }
       `}</style>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-        {slice.map(({ so, m, cust }) => {
-          const mColor = m.margin >= 0 ? 'var(--success)' : 'var(--danger)';
-          return (
-            <div key={so.id} className="so-card" onDoubleClick={() => navigate(`sales-orders/${so.id}`)}
-              style={{ flex: '0 0 auto', width: 'calc(25% - 9px)', minWidth: 200, height: 152, minHeight: 120, maxWidth: '100%', resize: 'both', overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)', padding: 11, cursor: 'default', transition: 'border-color .15s, box-shadow .15s' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cust ? cust.name : '—'}</div>
-                  <a className="mono tiny muted" style={{ cursor: 'pointer' }} onClick={() => navigate(`sales-orders/${so.id}`)}>{so.so_no}</a>
-                </div>
-                <PriorityBadge priority={so.priority}/>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, margin: '8px 0 5px' }}>
-                <StatusBadge status={so.status}/>
-                <span className="tiny mono muted">{m.progress}%</span>
-              </div>
-              <div style={{ height: 5, background: 'var(--bg-subtle)', borderRadius: 3, overflow: 'hidden' }}>
-                <div style={{ width: `${m.progress}%`, height: '100%', background: m.progress >= 100 ? 'var(--success)' : 'var(--accent)', transition: 'width .3s' }}/>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 9 }}>
-                <div style={{ background: 'var(--bg-subtle)', borderRadius: 5, padding: '5px 8px' }}>
-                  <div className="tiny muted">Value</div>
-                  <div className="mono" style={{ fontWeight: 600, fontSize: 12.5 }}>{inr(m.sell)}</div>
-                </div>
-                <div style={{ background: 'var(--bg-subtle)', borderRadius: 5, padding: '5px 8px' }}>
-                  <div className="tiny muted">Margin</div>
-                  <div className="mono" style={{ fontWeight: 600, fontSize: 12.5, color: mColor }}>{m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</div>
-                </div>
-              </div>
-              {(() => {
-                const impl = so.extra && so.extra.implementation;
-                const supervisor = impl ? getUser(impl.supervisor_id) : null;
-                const matPct = m.reqUnits > 0 ? Math.round((m.recvUnits / m.reqUnits) * 100) : 0;
-                return (
-                  <>
-                    <div className="so-extra" style={{ gridTemplateColumns: 'auto 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5, marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
-                      <span className="muted">PM</span><span className="right trunc">{getUser(so.pm)?.name || 'Unassigned'}</span>
-                      <span className="muted">Order type</span><span className="right trunc">{so.order_type || 'Supply'}{impl ? ' + Implementation' : ''}</span>
-                      {supervisor && <><span className="muted">Supervisor</span><span className="right trunc">{supervisor.name}</span></>}
-                      <span className="muted">Created</span><span className="mono right">{fmtDate(so.date)}</span>
-                      <span className="muted">Delivery</span><span className="mono right">{fmtDate(so.expected)}</span>
-                      <span className="muted">Vendors</span><span className="right trunc">{m.vendorIds.length ? m.vendorIds.map(id => getVendor(id)?.name || id).join(', ') : '—'}</span>
-                    </div>
-                    <div className="so-extra-2" style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
-                      {/* Money: our quote to client · vendor cost · profit · billed */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5 }}>
-                        <span className="muted">Client quotation</span><span className="mono right">{inr(m.sell)}</span>
-                        <span className="muted">Vendor cost</span><span className="mono right">{inr(m.vendorSpend)}</span>
-                        <span className="muted" style={{ fontWeight: 600 }}>Our profit</span><span className="mono right" style={{ color: mColor, fontWeight: 600 }}>{inr(m.margin)} · {m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</span>
-                        <span className="muted">Billed to client</span><span className="mono right">{inr(m.invoicedAmt)}{m.invoiceCount ? <span className="tiny muted"> ({m.invoiceCount})</span> : ''}</span>
-                      </div>
-                      {/* Materials received vs remaining */}
-                      <div style={{ marginTop: 9 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
-                          <span className="muted">Material received</span>
-                          <span className="mono">{m.recvUnits}/{m.reqUnits} units · {m.remainingUnits} left</span>
-                        </div>
-                        <div style={{ height: 4, background: 'var(--bg-subtle)', borderRadius: 3, overflow: 'hidden', marginTop: 3 }}>
-                          <div style={{ width: `${matPct}%`, height: '100%', background: matPct >= 100 ? 'var(--success)' : 'var(--accent)' }}/>
-                        </div>
-                        <div className="tiny muted" style={{ marginTop: 2 }}>{m.distinctDone}/{m.distinctReq} item(s) fully in hand</div>
-                      </div>
-                      {/* Vendor POs */}
-                      <div style={{ marginTop: 10 }}>
-                        <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Vendor POs ({m.pos.length})</div>
-                        {m.pos.length === 0 && <div className="tiny muted">No POs raised yet.</div>}
-                        {m.pos.slice(0, 10).map(p => (
-                          <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 11, padding: '2px 0' }}>
-                            <a className="trunc" style={{ cursor: 'pointer' }} onClick={() => navigate(`vendor-pos/${p.id}`)}>{getVendor(p.vendor_id)?.name || p.vendor_id}</a>
-                            <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '0 0 auto' }}>
-                              <StatusBadge status={p.status}/>
-                              <span className="mono">{inr(p.amount || 0)}</span>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                      {/* Client invoices — partial + final · click to open */}
-                      <div style={{ marginTop: 10 }}>
-                        <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Invoices ({(so.invoices || []).length})</div>
-                        {(so.invoices || []).length === 0 && <div className="tiny muted">None raised yet.</div>}
-                        {(so.invoices || []).map(inv => (
-                          <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 11, padding: '2px 0' }}>
-                            <a className="trunc mono" style={{ cursor: 'pointer', color: (inv.consolidated || inv.type === 'Final') ? 'var(--success)' : 'var(--accent)' }} onClick={() => navigate(`invoices/${so.id}/${inv.id}`)}>{inv.no}</a>
-                            <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '0 0 auto' }}>
-                              <span className="tiny muted">{inv.consolidated ? 'Final' : (inv.type || 'Partial')}</span>
-                              <span className="mono">{inr(inv.total || 0)}</span>
-                            </span>
-                          </div>
-                        ))}
-                        {(so.invoices || []).length === 0 && so.status !== 'Draft' && (
-                          <a className="tiny" style={{ cursor: 'pointer', color: 'var(--accent)' }} onClick={() => navigate(`invoices/${so.id}`)}>Open invoicing →</a>
-                        )}
-                      </div>
-                    </div>
-                    {/* Bill of materials — bundles + components */}
-                    <div className="so-extra-3" style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
-                      <div className="tiny muted" style={{ marginBottom: 5, fontWeight: 600 }}>Bill of materials · {(so.lines || []).length} line(s)</div>
-                      {(so.lines || []).map(l => {
-                        const cat = getCategory(l.category_id) || { name: l.category_id };
-                        return (
-                          <div key={l.id} style={{ marginBottom: 6 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 500, gap: 8 }}>
-                              <span className="trunc">{cat.name} <span className="tiny muted">×{l.bundle_qty}</span></span>
-                              <span className="mono" style={{ flex: '0 0 auto' }}>{inr((Number(l.bundle_qty) || 0) * (Number(l.unit_price) || 0))}</span>
-                            </div>
-                            {(l.components || []).map(c => {
-                              const p = getProduct(c.product_id);
-                              return (
-                                <div key={c.product_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: 'var(--text-muted)', paddingLeft: 8, gap: 8 }}>
-                                  <span className="trunc">{p ? p.name : c.product_id}</span>
-                                  <span className="mono" style={{ flex: '0 0 auto' }}>×{(Number(c.qty) || 0) * (Number(l.bundle_qty) || 1)}</span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      })}
-                      {(so.lines || []).length === 0 && <div className="tiny muted">No line items.</div>}
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          );
-        })}
+        {slice.map(({ so, m, cust }) => (
+          <SOCard key={so.id} so={so} m={m} cust={cust} navigate={navigate} getUser={getUser} getVendor={getVendor} getCategory={getCategory} getProduct={getProduct}/>
+        ))}
         {slice.length === 0 && <div className="card" style={{ flex: 1 }}><div className="empty">No SOs match the filters.</div></div>}
       </div>
 
