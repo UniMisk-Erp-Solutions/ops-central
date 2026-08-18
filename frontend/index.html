@@ -21,6 +21,20 @@
        e.g. the public Cloudflare-tunnel Supabase URL. config.js falls back to
        its built-in dev defaults when OPC_ENV is not pre-set.
        <script src="env.js"></script> -->
+
+  <!-- Maintenance gate. A SEPARATE cloud monitoring project (Maintenance Control)
+       tells this app when to show an "Under Maintenance" screen. It ONLY does a
+       GET on one public table in that other project via plain fetch(), never
+       touches this app's own backend/session, and is FAIL-OPEN: any error,
+       timeout, missing config or unknown key renders the real app.
+       Loaded before any app script. window.MC.key is empty by default so the gate
+       stays inert; to activate, set window.MC (with the PUBLIC maintenance anon
+       key) via an env.js / deploy snippet — same override idiom as OPC_ENV above,
+       so the key is never committed. See frontend/.env.example. -->
+  <script>
+    window.MC = window.MC || { url: 'https://qknaxyagucgepawvrgto.supabase.co', key: '', project: 'so-po' };
+  </script>
+  <script src="vanilla-guard.js"></script>
 </head>
 <body>
   <div id="root"></div>
