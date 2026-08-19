@@ -32,7 +32,11 @@
        key) via an env.js / deploy snippet — same override idiom as OPC_ENV above,
        so the key is never committed. See frontend/.env.example. -->
   <script>
-    window.MC = window.MC || { url: 'https://qknaxyagucgepawvrgto.supabase.co', key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrbmF4eWFndWNnZXBhd3ZyZ3RvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NTM2NzgsImV4cCI6MjEwMjUyOTY3OH0.4xa8a27PK3gn_2GtXQCQGFmYdz2ASYPcGGm7rUYMc8c', project: 'so-po' };
+    // publicPaths: pages that stay reachable during maintenance. SO-PO is an internal,
+    // hash-routed ERP (window.location.pathname is always "/") with no public landing/
+    // marketing/legal pages — so nothing is public and the whole app (incl. login) is
+    // gated. Do NOT add "/" here: it would match every route and disable maintenance.
+    window.MC = window.MC || { url: 'https://qknaxyagucgepawvrgto.supabase.co', key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrbmF4eWFndWNnZXBhd3ZyZ3RvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NTM2NzgsImV4cCI6MjEwMjUyOTY3OH0.4xa8a27PK3gn_2GtXQCQGFmYdz2ASYPcGGm7rUYMc8c', project: 'so-po', publicPaths: [] };
   </script>
   <script src="vanilla-guard.js"></script>
 </head>
