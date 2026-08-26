@@ -220,3 +220,21 @@ select public.opc_set_org_feature('<org id>', 'surplus_pool', false);
 ```
 `FEATURE_ROUTES` in `frontend/src/permissions.jsx` maps a feature key to the nav
 routes it controls; both the sidebar and `canAccess()` honour it.
+
+---
+
+## 10. Duplication across organizations — what collides and what doesn't
+
+| Thing | Can two orgs both have it? | Why |
+|---|---|---|
+| Document numbers (`SO/FY26/0001`, `INQ/…`, `PO/…`, `GRN/…`) | **Yes** | No unique constraint on `so_no`/`src_no`/`po_no`/`grn_no` — each org numbers independently and identical numbers never clash. |
+| Record ids (`sales_orders.id`, etc.) | n/a | Client-generated from `Date.now()`, globally unique in practice. |
+| Customer / vendor **names** | **Yes** | Only `id` is unique; names are free text. |
+| Catalogue ids (`products.id`, `categories.id`, BOM per category) | **Yes — since `023`** | Keys are now `(organization_id, id)`. Before this they were global, so the 2nd tenant to write master data would have hit a PK violation. |
+| **User email** | **No — by design** | `users.email` (and Supabase Auth) is globally unique: one email = one login = one person. That person can belong to **many** organizations via `organization_memberships`; they just can't have two separate accounts on the same address. |
+| Subdomain | **No** | Enforced case-insensitively by `idx_orgs_subdomain_lower_unique`, plus the `reserved_subdomains` list. |
+| Org slug | **No** | `organizations.slug` is unique. |
+
+So: an org's data is invisible to other orgs, **and** nothing an org creates can be
+blocked by another org already having used that name or number — the only
+deliberate global uniques are login email, org slug and subdomain.
