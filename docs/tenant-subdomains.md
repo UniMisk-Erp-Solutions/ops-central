@@ -46,7 +46,7 @@ only the orgs they are a member of.
 |---|---|---|
 | **1** (`017`, `018`) | Control plane: tables, helper functions, RPCs, default org seeded | ✅ applied |
 | **2** (`019`) | `organization_id` on every tenant table + backfill + auto-stamp default | ✅ applied |
-| **3** | **Enforcement**: `NOT NULL` + swap `member_all_*` for tenant-scoped policies; per-org `config` | ⏳ **not yet — scheduled** |
+| **3** (`020`, `021`) | **Enforcement**: `NOT NULL` + `member_all_*` → `tenant_all_*`; per-org `config`; org-scoped `users` | ✅ **applied — isolation is LIVE** |
 | **4** | Feature flags wired into the app's permission system | ⏳ pending |
 
 Phases 1–2 are **non-breaking by construction**: `organization_id` is nullable
@@ -54,11 +54,43 @@ and no existing policy was modified, so the app behaves exactly as before. New
 rows are already stamped (column `DEFAULT public.default_org_id()`), so by the
 time Phase 3 runs the data is ready.
 
-### Before Phase 3 can run
-1. Every tenant table must have **0 rows with `organization_id IS NULL`** (verified by `scripts/ssh-apply-tenancy.py`).
-2. The **edge function** must stamp `organization_id` when it inserts (it uses the service key, so `auth.uid()` is NULL and the column default does not apply — currently affects `rfqs` inserted by `float-rfq`).
-3. `config` must be split to one row per org (the column already exists).
-4. A tested rollback script that restores the `member_all_*` policies.
+### Phase 3 — what is now enforced
+
+A row is visible only to members of its organization:
+```sql
+create policy tenant_all_<table> on <table> for all to authenticated
+  using (public.is_org_member(organization_id))
+  with check (public.is_org_member(organization_id));
+```
+`is_org_member` joins `organization_memberships` against `auth.uid()`. The
+hostname is never consulted, and `organization_id` is never accepted from the
+client — new rows are stamped by the column default `public.default_org_id()`.
+
+`config` and `users` are scoped too: you see config for your org, and only the
+profiles of people you share an organization with.
+
+**Verified on the live database:**
+
+| Check | Result |
+|---|---|
+| Member of the live org | sees 39 SOs / 23 sourcings / 5 customers — unchanged |
+| User with **no** membership | sees **0** rows |
+| Second tenant's user | sees only its **own** row, never the live tenant's |
+| Live tenant's plain user | **0** rows leaked from the second tenant |
+| Duplicate subdomain (different case) | rejected by the unique index |
+| `anon` (logged out) | 401 on every table |
+
+**Rollback:** `supabase/migrations/021_phase3_tenant_rls_ROLLBACK.sql` restores the
+tenant-blind `member_all_*` policies and drops the `NOT NULL`, without touching
+data — so re-applying 021 afterwards is a clean forward step.
+Run it with `python scripts/ssh-apply-sql.py supabase/migrations/021_phase3_tenant_rls_ROLLBACK.sql`.
+
+### Gotchas that are already handled
+- **New users** get a membership in their creator's org automatically
+  (`opc_create_user`) — otherwise they would belong to no org and see nothing.
+- **The edge function** runs with the service key (`auth.uid()` is NULL), so the
+  column default cannot apply. `float-rfq` derives `organization_id` from the
+  parent sourcing and returns a clear 409 if it cannot.
 
 ---
 
