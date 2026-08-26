@@ -99,7 +99,19 @@ Deno.serve(async (req: Request) => {
     const floatedIds = new Set(withEmail.map((v: any) => v.vendor_id));
     const mergedVendors = [ ...existingVendors.filter((x: any) => !floatedIds.has(x.vendor_id)), ...floatedVendors ];
 
-    const up = await fetch(SB_URL + "/rest/v1/rfqs?on_conflict=id", { method: "POST", headers: { ...sbHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ id: rfqId, rfq_no: (exRow && exRow.rfq_no) || ("RFQ/" + (src_no || src_id)), so_id: src_id, items_label: cleanItems.map((i: any) => i.qty + "× " + i.name).join(", ").slice(0, 240), floated_date: now.slice(0, 10), status: "Floated", vendors: mergedVendors, quotes: (exRow && exRow.quotes) || [], selected_vendor: (exRow && exRow.selected_vendor) || null }) });
+    // Tenant stamp: this function runs with the SERVICE key, so auth.uid() is
+    // NULL and the organization_id column DEFAULT cannot apply. Derive the org
+    // from the parent sourcing — never from the request body (client input is
+    // never trusted for tenancy).
+    let orgId: string | null = (exRow && exRow.organization_id) || null;
+    if (!orgId) {
+      const sres = await fetch(SB_URL + "/rest/v1/sourcings?id=eq." + encodeURIComponent(src_id) + "&select=organization_id", { headers: sbHeaders() });
+      const srow = (await sres.json().catch(() => []))[0];
+      orgId = (srow && srow.organization_id) || null;
+    }
+    if (!orgId) return json({ error: "Could not determine the organization for this inquiry — open and save the inquiry once, then retry" }, 409);
+
+    const up = await fetch(SB_URL + "/rest/v1/rfqs?on_conflict=id", { method: "POST", headers: { ...sbHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ id: rfqId, organization_id: orgId, rfq_no: (exRow && exRow.rfq_no) || ("RFQ/" + (src_no || src_id)), so_id: src_id, items_label: cleanItems.map((i: any) => i.qty + "× " + i.name).join(", ").slice(0, 240), floated_date: now.slice(0, 10), status: "Floated", vendors: mergedVendors, quotes: (exRow && exRow.quotes) || [], selected_vendor: (exRow && exRow.selected_vendor) || null }) });
     if (!up.ok) return json({ error: "Could not save RFQ: " + (await up.text().catch(() => "")).slice(0, 200) }, 502);
     const mkRows = (its: any[]) => its.map((i: any) => `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">${esc(i.name)}${i.code ? ` <span style="color:#999">(${esc(i.code)})</span>` : ""}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">${i.qty}</td></tr>`).join("");
     const sent: any[] = [];

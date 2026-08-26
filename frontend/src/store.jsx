@@ -160,10 +160,21 @@ function StoreProvider({ children }) {
     (async () => {
       if (!window.OPC_SB || !realUserId) return;
       try {
-        const { data, error } = await window.OPC_SB
-          .from('config').select('data').eq('id', 'singleton').maybeSingle();
-        if (error || !data || cancelled) return;
-        const blob = data.data || {};
+        // Config is per-organization. opc_get_config() resolves the caller's org
+        // server-side from auth.uid() — the org is never supplied by the client.
+        // Falls back to the legacy singleton row if the RPC isn't deployed yet.
+        let blob = null;
+        try {
+          const rpc = await window.OPC_SB.rpc('opc_get_config');
+          if (!rpc.error && rpc.data && typeof rpc.data === 'object') blob = rpc.data;
+        } catch (e) { /* fall through */ }
+        if (blob === null) {
+          const { data, error } = await window.OPC_SB
+            .from('config').select('data').eq('id', 'singleton').maybeSingle();
+          if (error || !data) return;
+          blob = data.data || {};
+        }
+        if (cancelled) return;
         const { org, ...rest } = blob;
         if (rest.permissions) window.__opcPerms = rest.permissions;
         const customProds = Array.isArray(rest.custom_products) ? rest.custom_products : [];
@@ -321,9 +332,15 @@ function StoreProvider({ children }) {
       try {
         // upsert (not update) so the singleton is created if missing — an update
         // against a non-existent row silently affects 0 rows and looks like a save.
-        const { error } = await window.OPC_SB.from('config')
-          .upsert({ id: 'singleton', data: snapshot, updated_at: new Date().toISOString() }, { onConflict: 'id' });
-        if (error) { console.error('[OPC] saveConfig failed', error.message); return { ok: false, error: error.message }; }
+        // Per-org write. opc_save_config() derives the organization from
+        // auth.uid() server-side, so one tenant can never write another's config.
+        const rpc = await window.OPC_SB.rpc('opc_save_config', { p_data: snapshot });
+        if (rpc.error) {
+          // Legacy fallback (RPC not deployed yet) — keeps older installs working.
+          const { error } = await window.OPC_SB.from('config')
+            .upsert({ id: 'singleton', data: snapshot, updated_at: new Date().toISOString() }, { onConflict: 'id' });
+          if (error) { console.error('[OPC] saveConfig failed', error.message); return { ok: false, error: error.message }; }
+        }
       } catch (e) {
         console.error('[OPC] saveConfig failed (kept local change)', e);
         return { ok: false, error: String(e.message || e) };
