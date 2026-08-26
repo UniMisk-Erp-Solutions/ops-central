@@ -9,7 +9,7 @@ How OP Central serves many organizations from **one deployment and one database*
 | Mode | Host | Who uses it |
 |---|---|---|
 | **Shared / generic host** | `ops-central.unimisk.com` | The default. An org with `subdomain = NULL` lives here. After login the user's data comes from their **membership**, not the hostname. |
-| **Dedicated tenant subdomain** | `acme.unimisk.com` | An org with `subdomain = 'acme'`. Same code, same deployment — the app resolves the label to an org for branding/login. |
+| **Dedicated tenant subdomain** | `acme.ops-central.unimisk.com` | An org with `subdomain = 'acme'`. Same code, same deployment — the app resolves the label to an org for branding/login. |
 
 **The hostname is never the security boundary.** It is a UX/branding signal only.
 Data access is decided server-side by RLS against `organization_memberships`
@@ -22,7 +22,7 @@ only the orgs they are a member of.
 
 | Thing | Where | Notes |
 |---|---|---|
-| Base domain | `frontend/src/config.js` → `OPC_ENV.APP_BASE_DOMAIN` | **Single source of truth** — now `unimisk.com`, so tenants are `acme.unimisk.com` (a 1-level wildcard Cloudflare's free SSL covers). Change this one value to move the platform. |
+| Base domain | `frontend/src/config.js` → `OPC_ENV.APP_BASE_DOMAIN` | **Single source of truth** — `ops-central.unimisk.com`, so tenants are `acme.ops-central.unimisk.com`. Change this one value to move the platform. |
 | Dev tenant simulation | `OPC_ENV.DEV_TENANT_SUBDOMAIN` | Set to e.g. `acme` to test a tenant host on `localhost` with no DNS. |
 | Reserved labels | table `reserved_subdomains` | Labels no tenant may claim (`so-po`, `ops-central`, `api`, `www`, …). A table, so it is editable without a deploy. |
 | CORS for edge functions | `supabase/functions/_shared/cors.ts` | One module, imported by every function. Tenant origins match a regex anchored on the apex — never a per-tenant list. |
@@ -135,16 +135,27 @@ update public.organizations
 
 > ⚠️ **These are required before any tenant subdomain will actually load.**
 
-1. **Wildcard DNS** — add `*.unimisk.com` (proxied) pointing at the same Vercel
-   deployment as `ops-central.unimisk.com`. Existing records (`ops-central`,
-   `so-po`) keep winning over the wildcard, so nothing you run today changes.
-2. **TLS — resolved.** The base domain is now `unimisk.com`, so tenant hosts are
-   `acme.unimisk.com` — a **1-level wildcard that Cloudflare's free Universal SSL
-   already covers**. No Advanced Certificate Manager needed.
-3. **Vercel domains** — add `*.unimisk.com` to the project (one entry covers every
-   tenant; never one entry per organization).
+1. **Wildcard DNS** — add CNAME `*.ops-central` → the same Vercel target as
+   `ops-central.unimisk.com`, set to **DNS only (grey cloud)**. It does not affect
+   `ops-central.unimisk.com` or `so-po.unimisk.com`, which have their own records.
+2. **TLS — who actually issues the certificate.** `ops-central.unimisk.com` is
+   **DNS-only in Cloudflare (grey cloud)** and resolves straight to Vercel, so
+   **Vercel terminates TLS and issues the certificate** (verified: `Server: Vercel`,
+   no `cf-ray`, cert = Let's Encrypt `CN=ops-central.unimisk.com`).
+   Cloudflare's 1-level Universal SSL limit therefore **does not apply to the app**
+   — that limit only affects hosts Cloudflare proxies, like the `so-po` tunnel
+   (Google Trust Services cert for `unimisk.com`).
+   So a **2-level wildcard is fine here**: add `*.ops-central.unimisk.com` as a
+   Vercel domain and Vercel issues a wildcard Let's Encrypt cert. Vercel will ask
+   for a one-time DNS TXT record (`_acme-challenge.ops-central.unimisk.com`) to
+   validate it — add that in Cloudflare.
+   ⚠️ Keep the wildcard record **DNS-only / grey cloud**. If you proxy it through
+   Cloudflare, Cloudflare terminates TLS again and the 1-level limit comes back.
+3. **Vercel domains** — add `*.ops-central.unimisk.com` to the project (one entry
+   covers every tenant; never one entry per organization). Complete the TXT
+   validation Vercel shows.
 4. **Auth redirect allowlist** — if magic links / OAuth are ever enabled, add
-   `https://*.unimisk.com/**`.
+   `https://*.ops-central.unimisk.com/**`.
 5. **Kong CORS (known limitation).** The self-hosted Supabase gateway applies a
    `cors` plugin per route in `volumes/api/kong.yml` that returns
    `Access-Control-Allow-Origin: *`, which **overrides** whatever an edge

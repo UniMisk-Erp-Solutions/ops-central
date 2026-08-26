@@ -17,7 +17,7 @@
 (function () {
   'use strict';
 
-  var DEFAULT_BASE_DOMAIN = 'unimisk.com';
+  var DEFAULT_BASE_DOMAIN = 'ops-central.unimisk.com';
 
   // Labels that are platform infrastructure, not tenants. Mirrors the DB's
   // reserved_subdomains table for the hosts that actually exist here, so the
