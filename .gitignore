@@ -18,3 +18,7 @@ supabase/_*.sql
 # Full cluster dump — large (~99MB) AND contains role password hashes. Never commit.
 full_cluster.sql
 *.dump
+
+# Throwaway diagnostic output from ssh-* scripts
+scripts/_*.txt
+scripts/_*.out.txt

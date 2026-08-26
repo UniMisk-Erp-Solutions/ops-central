@@ -18,6 +18,15 @@
 window.OPC_ENV = window.OPC_ENV || {
   SUPABASE_URL: 'https://so-po.unimisk.com',
   SUPABASE_ANON_KEY: 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc4MDM4NDg2MCwiZXhwIjo0OTM2MDU4NDYwLCJyb2xlIjoiYW5vbiJ9.0AhbGOMbIybN0azUCAuoriNKGtSwdpznBqCQbZDpxZM',
+
+  // --- Multi-tenancy -------------------------------------------------------
+  // THE single source of truth for "the apex". Tenants live one label below it,
+  // e.g. acme.ops-central.unimisk.com. Change this ONE value (here, or via an
+  // env.js override) to move the platform to another base domain — for example
+  // 'unimisk.com' to get acme.unimisk.com. Nothing else needs editing.
+  APP_BASE_DOMAIN: 'ops-central.unimisk.com',
+  // Simulate a tenant host on localhost (no DNS needed): set to e.g. 'acme'.
+  DEV_TENANT_SUBDOMAIN: '',
 };
 
 (function initSupabase() {

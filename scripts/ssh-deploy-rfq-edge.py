@@ -22,6 +22,8 @@ if not PW:
     print("Set SSH_PASSWORD", file=sys.stderr); sys.exit(1)
 
 idx_b64 = base64.b64encode(open("supabase/functions/main/index.ts", "rb").read()).decode()
+# Shared modules live one level up (…/functions/_shared) so every function can import them.
+cors_b64 = base64.b64encode(open("supabase/functions/_shared/cors.ts", "rb").read()).decode()
 
 # Optional Brevo secrets from the runner's env (never hardcoded).
 secrets = {}
@@ -45,9 +47,15 @@ SUDO(){{ echo '{sp}' | sudo -S "$@" 2>/dev/null; }}
 SID={SID}
 EF="supabase-edge-functions-$SID"
 FNDIR="/data/coolify/services/$SID/volumes/functions/main"
+SHDIR="/data/coolify/services/$SID/volumes/functions/_shared"
+echo "=== write _shared/cors.ts ==="
+SUDO mkdir -p "$SHDIR"
+echo '{cors_b64}' | base64 -d > /tmp/rfq_cors.ts
+SUDO cp /tmp/rfq_cors.ts "$SHDIR/cors.ts" && echo "wrote _shared/cors.ts"
+rm -f /tmp/rfq_cors.ts
 echo "=== write main/index.ts ==="
 echo '{idx_b64}' | base64 -d > /tmp/rfq_index.ts
-SUDO cp /tmp/rfq_index.ts "$FNDIR/index.ts" && echo "wrote index.ts ($(SUDO wc -c < "$FNDIR/index.ts") bytes)"
+SUDO cp /tmp/rfq_index.ts "$FNDIR/index.ts" && echo "wrote index.ts"
 rm -f /tmp/rfq_index.ts
 {write_secrets}echo "=== restart SO-PO edge container only ==="
 SUDO docker restart "$EF" >/dev/null 2>&1 && echo "restarted $EF"

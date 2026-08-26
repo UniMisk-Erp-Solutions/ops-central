@@ -5,13 +5,10 @@
 //   the server-side file /home/deno/functions/main/_secrets.json (never served).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const cors: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Content-Type": "application/json",
-};
-const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: cors });
+// CORS comes from ONE shared module (../_shared/cors.ts) so the tenant-origin
+// rule lives in a single place. Headers are per-request because the allowed
+// origin depends on the caller's Origin (and must carry Vary: Origin).
+import { corsHeaders } from "../_shared/cors.ts";
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" } as Record<string, string>)[c]);
 
 const SB_URL = Deno.env.get("SUPABASE_URL") || "http://supabase-kong:8000";
@@ -41,6 +38,8 @@ function normalize(path: string) {
 }
 
 Deno.serve(async (req: Request) => {
+  const cors = corsHeaders(req.headers.get("origin"));
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: cors });
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   const url = new URL(req.url);
   const path = normalize(url.pathname);
