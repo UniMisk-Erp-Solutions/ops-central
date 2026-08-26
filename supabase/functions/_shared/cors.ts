@@ -15,7 +15,7 @@
 
 // Single source of truth for the apex (override with APP_BASE_DOMAIN in the
 // function's env to move the platform without editing code).
-const BASE_DOMAIN = (Deno.env.get("APP_BASE_DOMAIN") || "ops-central.unimisk.com")
+const BASE_DOMAIN = (Deno.env.get("APP_BASE_DOMAIN") || "unimisk.com")
   .trim().toLowerCase().replace(/^www\./, "");
 
 function escapeForRegex(s: string): string {
@@ -28,7 +28,8 @@ const TENANT_SUBDOMAIN_RE = new RegExp(
 );
 
 export const ALLOWED_EXACT_ORIGINS: string[] = [
-  `https://${BASE_DOMAIN}`,          // the shared/generic host
+  `https://${BASE_DOMAIN}`,                  // the apex
+  "https://ops-central.unimisk.com",         // the shared/generic app host
   "https://ops-central.vercel.app",  // Vercel default domain for this project
   "http://localhost:5173",
   "http://localhost:3000",

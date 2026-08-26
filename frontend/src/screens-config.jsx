@@ -388,6 +388,7 @@ function Settings() {
 
   const tabs = [
     { id: 'branding', label: 'Identity & branding', icon: 'sparkles' },
+    { id: 'features', label: 'Organization features', icon: 'layers' },
     { id: 'users', label: 'Users', icon: 'users' },
     { id: 'structure', label: 'Org structure', icon: 'users' },
     { id: 'permissions', label: 'Permissions', icon: 'check' },
@@ -430,6 +431,7 @@ function Settings() {
           </div>
           <div style={{ padding: 18 }}>
             {tab === 'branding' && <BrandingPane/>}
+            {tab === 'features' && <OrgFeaturesPane/>}
             {tab === 'users' && <UsersPane/>}
             {tab === 'soform' && <SoFormFieldsPane/>}
             {tab === 'structure' && <StructurePane/>}
@@ -1280,3 +1282,97 @@ function WizardPane() {
 
 window.OnboardingWizard = OnboardingWizard;
 window.Settings = Settings;
+
+// ===== Per-organization feature flags =====
+// Reads organization_features for the ACTIVE org and toggles them via
+// opc_set_org_feature (org-admin only, server-side authorised). Turning a
+// capability off hides its screens for this organization only — other tenants
+// on the same database are unaffected.
+function OrgFeaturesPane() {
+  const toast = useToast();
+  const [flags, setFlags] = React.useState(() => (window.__opcFeatures || {}));
+  const [org, setOrg] = React.useState(() => (window.__opcOrg || null));
+  const [busy, setBusy] = React.useState('');
+  const [err, setErr] = React.useState('');
+
+  const CATALOGUE = [
+    { key: 'presales',          label: 'Pre-sales / Sourcing',   hint: 'Inquiries, vendor comparison, Float RFQ' },
+    { key: 'sales_desk',        label: 'Sales desk',             hint: 'Sales Orders + Customers' },
+    { key: 'stores',            label: 'Stores & Godown',        hint: 'Virtual Godowns + GRN' },
+    { key: 'surplus_pool',      label: 'Master Surplus Pool',    hint: 'Shared surplus stock' },
+    { key: 'cross_so_transfer', label: 'Cross-SO transfers',     hint: 'Move stock between orders' },
+    { key: 'rfq_email',         label: 'RFQ comparison',         hint: 'Vendor quote comparison screen' },
+    { key: 'implementation',    label: 'Implementation / BOQ',   hint: 'Site supervisor + daily logs' },
+    { key: 'partial_invoicing', label: 'Partial invoicing',      hint: 'Invoice in fractions' },
+    { key: 'e_invoice',         label: 'e-Invoice',              hint: 'IRN generation' },
+    { key: 'e_way_bill',        label: 'e-Way Bill',             hint: 'Transport documents' },
+    { key: 'whatsapp',          label: 'WhatsApp alerts',        hint: 'Outbound notifications' },
+    { key: 'sms',               label: 'SMS alerts',             hint: 'Outbound notifications' },
+  ];
+
+  React.useEffect(() => {
+    if (!window.OPC_SB) return;
+    window.OPC_SB.rpc('opc_my_context').then(r => {
+      if (!r.error && r.data) {
+        setFlags(r.data.features || {});
+        setOrg(r.data.organization || null);
+        window.__opcFeatures = r.data.features || {};
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Absent key => inherited (on). Explicit false => off.
+  const isOn = (k) => !(k in flags) || !!flags[k];
+
+  const toggle = async (k) => {
+    if (!window.OPC_SB || !org) { toast('No organization context'); return; }
+    const next = !isOn(k);
+    setBusy(k); setErr('');
+    const r = await window.OPC_SB.rpc('opc_set_org_feature',
+      { p_org_id: org.id, p_key: k, p_enabled: next });
+    setBusy('');
+    if (r.error) { setErr(r.error.message || String(r.error)); toast('Could not change that feature'); return; }
+    const merged = { ...flags, [k]: next };
+    setFlags(merged); window.__opcFeatures = merged;
+    toast(`${k} ${next ? 'enabled' : 'disabled'} for ${org.name}`, 'success');
+  };
+
+  return (
+    <div>
+      <div className="form-section-title">Organization features</div>
+      <div className="tiny muted mb-2">
+        Capabilities for <strong>{org ? org.name : '—'}</strong>. Switching one off hides its
+        screens for this organization only — every other organization on the platform is
+        unaffected. A capability with no saved row is <em>inherited</em> (on).
+        Changes apply on the next page load.
+      </div>
+      {err && <div className="tiny" style={{ color: 'var(--danger)', marginBottom: 8 }}>{err}</div>}
+      <div className="card"><div className="card-body flush">
+        <table className="t">
+          <thead><tr><th>Capability</th><th>What it controls</th><th className="num">State</th><th></th></tr></thead>
+          <tbody>
+            {CATALOGUE.map(f => {
+              const on = isOn(f.key);
+              const inherited = !(f.key in flags);
+              return (
+                <tr key={f.key}>
+                  <td><strong className="small">{f.label}</strong><div className="tiny muted mono">{f.key}</div></td>
+                  <td className="tiny muted">{f.hint}</td>
+                  <td className="num">
+                    {on ? <span className="badge success dot">On{inherited ? ' (inherited)' : ''}</span>
+                        : <span className="badge dot">Off</span>}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button className="btn btn-sm" disabled={busy === f.key} onClick={() => toggle(f.key)}>
+                      {busy === f.key ? '…' : (on ? 'Turn off' : 'Turn on')}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div></div>
+    </div>
+  );
+}

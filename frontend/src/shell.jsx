@@ -46,9 +46,12 @@ function Sidebar() {
     ]},
   ];
 
-  // Filter groups & items by role's allowed nav list
+  // Filter groups & items by the role's allowed nav list, then drop anything a
+  // capability that this ORGANIZATION has switched off controls (a feature row
+  // with enabled=false; an absent key inherits, so nothing disappears by default).
   const filteredGroups = navGroups
-    .map(g => ({ ...g, items: g.items.filter(it => allowed.includes(it.id)) }))
+    .map(g => ({ ...g, items: g.items.filter(it =>
+      allowed.includes(it.id) && !(window.featureBlocks && window.featureBlocks(it.id))) }))
     .filter(g => g.items.length > 0);
 
   return (

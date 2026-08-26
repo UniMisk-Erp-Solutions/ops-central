@@ -83,6 +83,44 @@ function perm(role) {
   if (overrides && overrides[role]) return overrides[role];
   return PERMISSIONS[role] || PERMISSIONS['Org Admin'];
 }
+// ===== Per-organization feature flags =====
+// Maps a feature_key (organization_features) to the nav routes it controls.
+// A route disappears ONLY when its feature row explicitly says enabled=false.
+// An absent key inherits (visible), so an org with no rows is never blank.
+const FEATURE_ROUTES = {
+  presales:          ['sourcing'],
+  sales_desk:        ['sales-orders', 'customers'],
+  stores:            ['godown', 'grn'],
+  surplus_pool:      ['pool'],
+  cross_so_transfer: ['transfers'],
+  rfq_email:         ['rfq'],
+  partial_invoicing: [],            // capability, not a nav item
+  implementation:    [],
+  e_invoice:         [],
+  e_way_bill:        [],
+  whatsapp:          [],
+  sms:               [],
+};
+
+// Is a capability on for the active org? Absent => inherit (true).
+function featureOn(key) {
+  const f = (typeof window !== 'undefined' && window.__opcFeatures) || null;
+  if (!f || !(key in f)) return true;
+  return !!f[key];
+}
+
+// Is a nav route blocked by a disabled feature?
+function featureBlocks(route) {
+  const f = (typeof window !== 'undefined' && window.__opcFeatures) || null;
+  if (!f) return false;
+  const root = String(route || '').split('/')[0];
+  for (const key of Object.keys(FEATURE_ROUTES)) {
+    if (!(key in f) || f[key]) continue;           // absent or on -> no block
+    if (FEATURE_ROUTES[key].indexOf(root) !== -1) return true;
+  }
+  return false;
+}
+
 function canDo(role, capability) {
   const p = perm(role).can || {};
   return !!(p.all || p[capability]);
@@ -91,6 +129,8 @@ function canAccess(role, route) {
   // Strip subpaths
   const root = route.split('/')[0];
   const allowed = perm(role).nav;
+  // A capability switched off for this organization hides its routes entirely.
+  if (featureBlocks(root)) return false;
   // A specific SO's invoice (invoices/<soId>[/<invId>]) is opened from the SO or
   // its Virtual Godown, so anyone who can see the SO / VG may view it — even
   // without the Invoices list in their nav. The bare 'invoices' list stays gated.
@@ -549,6 +589,9 @@ function tasksForRole(state, role, mutate, navigate, toast) {
 }
 
 window.PERMISSIONS = PERMISSIONS;
+window.featureOn = featureOn;
+window.featureBlocks = featureBlocks;
+window.FEATURE_ROUTES = FEATURE_ROUTES;
 window.perm = perm;
 window.canDo = canDo;
 window.canAccess = canAccess;

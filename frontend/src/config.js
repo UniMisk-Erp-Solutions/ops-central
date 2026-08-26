@@ -21,10 +21,12 @@ window.OPC_ENV = window.OPC_ENV || {
 
   // --- Multi-tenancy -------------------------------------------------------
   // THE single source of truth for "the apex". Tenants live one label below it,
-  // e.g. acme.ops-central.unimisk.com. Change this ONE value (here, or via an
-  // env.js override) to move the platform to another base domain — for example
-  // 'unimisk.com' to get acme.unimisk.com. Nothing else needs editing.
-  APP_BASE_DOMAIN: 'ops-central.unimisk.com',
+  // e.g. acme.unimisk.com. Change this ONE value (here, or via an env.js override)
+  // to move the platform to another base domain. Kept at the 1-level apex so
+  // Cloudflare's free Universal SSL (*.unimisk.com) covers every tenant host —
+  // a 2-level wildcard like *.ops-central.unimisk.com would NOT be covered.
+  // ops-central.unimisk.com stays the shared/generic host.
+  APP_BASE_DOMAIN: 'unimisk.com',
   // Simulate a tenant host on localhost (no DNS needed): set to e.g. 'acme'.
   DEV_TENANT_SUBDOMAIN: '',
 };

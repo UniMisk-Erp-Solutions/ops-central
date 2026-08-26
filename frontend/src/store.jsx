@@ -177,6 +177,17 @@ function StoreProvider({ children }) {
         if (cancelled) return;
         const { org, ...rest } = blob;
         if (rest.permissions) window.__opcPerms = rest.permissions;
+        // Per-org tenant context + feature flags. A feature is hidden ONLY when
+        // its row says enabled=false; an absent key inherits (stays visible), so
+        // an org with no rows yet is never a blank app.
+        try {
+          const ctx = await window.OPC_SB.rpc('opc_my_context');
+          if (!ctx.error && ctx.data && typeof ctx.data === 'object') {
+            window.__opcFeatures = ctx.data.features || {};
+            window.__opcOrg = ctx.data.organization || null;
+            window.__opcIsMaster = !!ctx.data.is_master_admin;
+          }
+        } catch (e) { /* fail open — features stay unrestricted */ }
         const customProds = Array.isArray(rest.custom_products) ? rest.custom_products : [];
         setState(prev => ({
           ...prev,

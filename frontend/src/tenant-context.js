@@ -17,7 +17,15 @@
 (function () {
   'use strict';
 
-  var DEFAULT_BASE_DOMAIN = 'ops-central.unimisk.com';
+  var DEFAULT_BASE_DOMAIN = 'unimisk.com';
+
+  // Labels that are platform infrastructure, not tenants. Mirrors the DB's
+  // reserved_subdomains table for the hosts that actually exist here, so the
+  // shared app host (ops-central.unimisk.com) is treated as the generic host
+  // rather than a tenant that cannot be found. UX signal only — the DB table is
+  // the authority when an org is actually created.
+  var RESERVED_LABELS = ['www', 'api', 'app', 'ops-central', 'so-po', 'quote',
+                         'supabase', 'db', 'storage', 'functions', 'mail', 'status'];
 
   // Single source of truth for "the apex". Change it in ONE place
   // (window.OPC_ENV.APP_BASE_DOMAIN in config.js / env.js) to move the platform
@@ -48,7 +56,8 @@
     var suffix = '.' + base;
     if (host.length > suffix.length && host.slice(-suffix.length) === suffix) {
       var label = host.slice(0, -suffix.length);
-      if (label.length > 0 && label.indexOf('.') === -1) {
+      if (label.length > 0 && label.indexOf('.') === -1 &&
+          RESERVED_LABELS.indexOf(label) === -1) {
         return { subdomainLabel: label, isTenantHost: true };
       }
     }

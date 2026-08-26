@@ -9,7 +9,7 @@ How OP Central serves many organizations from **one deployment and one database*
 | Mode | Host | Who uses it |
 |---|---|---|
 | **Shared / generic host** | `ops-central.unimisk.com` | The default. An org with `subdomain = NULL` lives here. After login the user's data comes from their **membership**, not the hostname. |
-| **Dedicated tenant subdomain** | `acme.ops-central.unimisk.com` | An org with `subdomain = 'acme'`. Same code, same deployment — the app resolves the label to an org for branding/login. |
+| **Dedicated tenant subdomain** | `acme.unimisk.com` | An org with `subdomain = 'acme'`. Same code, same deployment — the app resolves the label to an org for branding/login. |
 
 **The hostname is never the security boundary.** It is a UX/branding signal only.
 Data access is decided server-side by RLS against `organization_memberships`
@@ -22,7 +22,7 @@ only the orgs they are a member of.
 
 | Thing | Where | Notes |
 |---|---|---|
-| Base domain | `frontend/src/config.js` → `OPC_ENV.APP_BASE_DOMAIN` | **Single source of truth.** Change this one value to move the platform (e.g. to `unimisk.com` for `acme.unimisk.com`). |
+| Base domain | `frontend/src/config.js` → `OPC_ENV.APP_BASE_DOMAIN` | **Single source of truth** — now `unimisk.com`, so tenants are `acme.unimisk.com` (a 1-level wildcard Cloudflare's free SSL covers). Change this one value to move the platform. |
 | Dev tenant simulation | `OPC_ENV.DEV_TENANT_SUBDOMAIN` | Set to e.g. `acme` to test a tenant host on `localhost` with no DNS. |
 | Reserved labels | table `reserved_subdomains` | Labels no tenant may claim (`so-po`, `ops-central`, `api`, `www`, …). A table, so it is editable without a deploy. |
 | CORS for edge functions | `supabase/functions/_shared/cors.ts` | One module, imported by every function. Tenant origins match a regex anchored on the apex — never a per-tenant list. |
@@ -47,7 +47,7 @@ only the orgs they are a member of.
 | **1** (`017`, `018`) | Control plane: tables, helper functions, RPCs, default org seeded | ✅ applied |
 | **2** (`019`) | `organization_id` on every tenant table + backfill + auto-stamp default | ✅ applied |
 | **3** (`020`, `021`) | **Enforcement**: `NOT NULL` + `member_all_*` → `tenant_all_*`; per-org `config`; org-scoped `users` | ✅ **applied — isolation is LIVE** |
-| **4** | Feature flags wired into the app's permission system | ⏳ pending |
+| **4** (`022`) | Active-org scoping + per-org feature flags wired into nav & Settings | ✅ applied |
 
 Phases 1–2 are **non-breaking by construction**: `organization_id` is nullable
 and no existing policy was modified, so the app behaves exactly as before. New
@@ -135,18 +135,16 @@ update public.organizations
 
 > ⚠️ **These are required before any tenant subdomain will actually load.**
 
-1. **Wildcard DNS** — add `*.ops-central.unimisk.com` pointing at the same Vercel
-   deployment as the apex.
-2. **TLS — the important one.** Cloudflare's free **Universal SSL only covers one
-   level** (`*.unimisk.com`). `*.ops-central.unimisk.com` is **two levels deep**
-   and is **not covered**. Options:
-   - buy Cloudflare **Advanced Certificate Manager**, or
-   - move the base domain to `unimisk.com` (tenants become `acme.unimisk.com`) —
-     one-line change to `APP_BASE_DOMAIN`, or
-   - add each tenant subdomain to Vercel individually (does not scale).
-3. **Vercel domains** — add the wildcard domain to the project.
+1. **Wildcard DNS** — add `*.unimisk.com` (proxied) pointing at the same Vercel
+   deployment as `ops-central.unimisk.com`. Existing records (`ops-central`,
+   `so-po`) keep winning over the wildcard, so nothing you run today changes.
+2. **TLS — resolved.** The base domain is now `unimisk.com`, so tenant hosts are
+   `acme.unimisk.com` — a **1-level wildcard that Cloudflare's free Universal SSL
+   already covers**. No Advanced Certificate Manager needed.
+3. **Vercel domains** — add `*.unimisk.com` to the project (one entry covers every
+   tenant; never one entry per organization).
 4. **Auth redirect allowlist** — if magic links / OAuth are ever enabled, add
-   `https://*.ops-central.unimisk.com/**`.
+   `https://*.unimisk.com/**`.
 5. **Kong CORS (known limitation).** The self-hosted Supabase gateway applies a
    `cors` plugin per route in `volumes/api/kong.yml` that returns
    `Access-Control-Allow-Origin: *`, which **overrides** whatever an edge
@@ -167,3 +165,47 @@ every hostname, so no per-tenant deployment config is ever needed.
 - **Never** make the hostname the security boundary.
 - Keep **features** (booleans) and **settings** (parameters) in separate tables.
 - New capabilities default to **off** — add a row to turn them on, never seed them.
+
+---
+
+## 8. Active organization (who sees what, when)
+
+Every user — **including platform super-admins** — works inside exactly ONE
+organization at a time.
+
+- `active_org_id()` = the org you last switched to, else your primary membership.
+- `is_org_member()` / `is_org_admin()` are scoped to that active org, so a master
+  admin no longer matches every tenant at once. Without this, the moment a second
+  tenant existed a platform admin's app would load every tenant's rows into one
+  list, and new rows could be stamped with the wrong org.
+- Switch with `select public.opc_set_active_org('<org id>');`
+  (any org for a master admin; only your own orgs otherwise).
+- New rows are stamped with the **active** org, so work done while switched into
+  a tenant belongs to that tenant.
+- Master admins can still *list* every organization (to switch into one) — they
+  just cannot see two tenants' operational data simultaneously.
+
+Default active org = your primary membership, so behaviour for everyone today is
+unchanged.
+
+## 9. Per-organization features
+
+`organization_features` rows drive what a tenant can see:
+
+| State | Meaning |
+|---|---|
+| row `enabled = true` | on |
+| row `enabled = false` | **off — its screens disappear for that org only** |
+| no row at all | *inherited* → on |
+
+The "no row = inherited" rule is a deliberate deviation from "no row = off":
+these are core ERP modules, so a brand-new tenant gets a working app and the
+admin switches OFF what they don't want, rather than starting with a blank
+screen. The live organization was seeded with explicit `true` rows by `022`.
+
+Toggle from **Settings → Organization features**, or in SQL:
+```sql
+select public.opc_set_org_feature('<org id>', 'surplus_pool', false);
+```
+`FEATURE_ROUTES` in `frontend/src/permissions.jsx` maps a feature key to the nav
+routes it controls; both the sidebar and `canAccess()` honour it.
