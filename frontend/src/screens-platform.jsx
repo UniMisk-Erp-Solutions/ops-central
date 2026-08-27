@@ -21,6 +21,8 @@ const PLATFORM_FEATURES = [
   { key: 'surplus_pool',      label: 'Master Surplus Pool',   routes: 'pool' },
   { key: 'cross_so_transfer', label: 'Cross-SO transfers',    routes: 'transfers' },
   { key: 'rfq_email',         label: 'RFQ comparison',        routes: 'rfq' },
+  { key: 'scm_tracking',      label: 'SCM Tracking + dispatch', routes: 'scm' },
+  { key: 'item_mapping',      label: 'Item name mapping',     routes: 'mapping' },
   { key: 'implementation',    label: 'Implementation / BOQ',  routes: '—' },
   { key: 'partial_invoicing', label: 'Partial invoicing',     routes: '—' },
   { key: 'e_invoice',         label: 'e-Invoice',             routes: '—' },

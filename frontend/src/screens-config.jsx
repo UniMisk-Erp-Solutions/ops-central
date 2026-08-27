@@ -1302,6 +1302,8 @@ function OrgFeaturesPane() {
     { key: 'surplus_pool',      label: 'Master Surplus Pool',    hint: 'Shared surplus stock' },
     { key: 'cross_so_transfer', label: 'Cross-SO transfers',     hint: 'Move stock between orders' },
     { key: 'rfq_email',         label: 'RFQ comparison',         hint: 'Vendor quote comparison screen' },
+    { key: 'scm_tracking',      label: 'SCM Tracking + dispatch', hint: 'In/out tracking, outward dispatch, delivery challan' },
+    { key: 'item_mapping',      label: 'Item name mapping',      hint: 'customer name -> our item -> vendor part no.' },
     { key: 'implementation',    label: 'Implementation / BOQ',   hint: 'Site supervisor + daily logs' },
     { key: 'partial_invoicing', label: 'Partial invoicing',      hint: 'Invoice in fractions' },
     { key: 'e_invoice',         label: 'e-Invoice',              hint: 'IRN generation' },
