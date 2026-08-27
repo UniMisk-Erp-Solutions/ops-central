@@ -89,6 +89,8 @@ function perm(role) {
 // An absent key inherits (visible), so an org with no rows is never blank.
 const FEATURE_ROUTES = {
   presales:          ['sourcing'],
+  scm_tracking:      ['scm'],
+  item_mapping:      ['mapping'],
   sales_desk:        ['sales-orders', 'customers'],
   stores:            ['godown', 'grn'],
   surplus_pool:      ['pool'],
@@ -125,6 +127,11 @@ function canDo(role, capability) {
   const p = perm(role).can || {};
   return !!(p.all || p[capability]);
 }
+// Routes added for the procurement-only flow. They are not in the historic
+// PERMISSIONS constant, so allow them for the roles that own that flow.
+const SCM_ROUTES = ['scm', 'mapping'];
+const SCM_ROLES = ['Purchase', 'Stores', 'Org Admin', 'Managing Director'];
+
 function canAccess(role, route) {
   // Strip subpaths
   const root = route.split('/')[0];
@@ -133,6 +140,7 @@ function canAccess(role, route) {
   if (root === 'platform') return !!(typeof window !== 'undefined' && window.__opcIsMaster);
   // A capability switched off for this organization hides its routes entirely.
   if (featureBlocks(root)) return false;
+  if (SCM_ROUTES.indexOf(root) !== -1) return SCM_ROLES.indexOf(role) !== -1;
   // A specific SO's invoice (invoices/<soId>[/<invId>]) is opened from the SO or
   // its Virtual Godown, so anyone who can see the SO / VG may view it — even
   // without the Invoices list in their nav. The bare 'invoices' list stays gated.
@@ -593,6 +601,8 @@ function tasksForRole(state, role, mutate, navigate, toast) {
 window.PERMISSIONS = PERMISSIONS;
 window.featureOn = featureOn;
 window.featureBlocks = featureBlocks;
+window.canAccess = canAccess;
+window.SCM_ROUTES_SET = { scm: true, mapping: true };
 window.FEATURE_ROUTES = FEATURE_ROUTES;
 window.perm = perm;
 window.canDo = canDo;

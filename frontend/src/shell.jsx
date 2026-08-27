@@ -22,6 +22,7 @@ function Sidebar() {
     ]},
     { label: 'Inventory', items: [
       { id: 'godown', label: 'Virtual Godowns', icon: 'box' },
+      { id: 'scm', label: 'SCM Tracking', icon: 'repeat' },
       { id: 'pool', label: 'Master Surplus Pool', icon: 'layers' },
       { id: 'transfers', label: 'Cross-SO Transfers', icon: 'arrowLeftRight', badge: pendingTransfers || null },
     ]},
@@ -31,6 +32,7 @@ function Sidebar() {
       { id: 'grn', label: 'GRN', icon: 'package' },
       { id: 'three-way', label: '3-Way Match', icon: 'check', badge: pendingMatches || null },
       { id: 'vendors', label: 'Vendors', icon: 'factory' },
+      { id: 'mapping', label: 'Item Name Mapping', icon: 'arrowLeftRight' },
     ]},
     { label: 'Billing', items: [
       { id: 'invoices', label: 'Invoices & e-Way Bills', icon: 'file' },
@@ -51,7 +53,9 @@ function Sidebar() {
   // with enabled=false; an absent key inherits, so nothing disappears by default).
   const filteredGroups = navGroups
     .map(g => ({ ...g, items: g.items.filter(it =>
-      allowed.includes(it.id) && !(window.featureBlocks && window.featureBlocks(it.id))) }))
+      (allowed.includes(it.id) || (window.SCM_ROUTES_SET && window.SCM_ROUTES_SET[it.id] &&
+        window.canAccess && window.canAccess(u.role, it.id)))
+      && !(window.featureBlocks && window.featureBlocks(it.id))) }))
     .filter(g => g.items.length > 0);
 
   // Platform console — visible only to platform (master) admins, never to tenants.
