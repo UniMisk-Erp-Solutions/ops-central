@@ -145,6 +145,40 @@ function StoreProvider({ children }) {
     return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, []);
 
+  // Tenant context + per-org feature flags. Deliberately its OWN effect, keyed on
+  // identity only: it used to hang off the config load, which returns early when
+  // an org has no config row (every brand-new tenant) — so features silently never
+  // loaded and the tenant saw capabilities that were switched off.
+  // Fail-open by design: if this call fails, nothing is hidden.
+  React.useEffect(() => {
+    if (!window.OPC_SB || !realUserId) return;
+    let dead = false;
+    (async () => {
+      try {
+        const ctx = await window.OPC_SB.rpc('opc_my_context');
+        if (dead) return;
+        if (!ctx.error && ctx.data && typeof ctx.data === 'object') {
+          window.__opcFeatures = ctx.data.features || {};
+          window.__opcOrg = ctx.data.organization || null;
+          window.__opcIsMaster = !!ctx.data.is_master_admin;
+          // A PLATFORM-ONLY account is a master admin belonging to no organization:
+          // it gets the standalone console, never a tenant's app.
+          setState(prev => ({ ...prev, platform: {
+            ready: true,
+            isMaster: !!ctx.data.is_master_admin,
+            orgId: ctx.data.active_org_id || null,
+            org: ctx.data.organization || null,
+          } }));
+        } else {
+          setState(prev => ({ ...prev, platform: { ready: true, isMaster: false, orgId: null, org: null } }));
+        }
+      } catch (e) {
+        if (!dead) setState(prev => ({ ...prev, platform: { ready: true, isMaster: false, orgId: null, org: null } }));
+      }
+    })();
+    return () => { dead = true; };
+  }, [realUserId]);
+
   // Keep per-org feature access fresh without polling: re-check only when the tab
   // regains focus, and only re-render if something actually changed. One tiny RPC,
   // so a platform-admin toggle reaches the tenant within seconds at almost no cost.
@@ -198,27 +232,6 @@ function StoreProvider({ children }) {
         if (cancelled) return;
         const { org, ...rest } = blob;
         if (rest.permissions) window.__opcPerms = rest.permissions;
-        // Per-org tenant context + feature flags. A feature is hidden ONLY when
-        // its row says enabled=false; an absent key inherits (stays visible), so
-        // an org with no rows yet is never a blank app.
-        try {
-          const ctx = await window.OPC_SB.rpc('opc_my_context');
-          if (!ctx.error && ctx.data && typeof ctx.data === 'object') {
-            window.__opcFeatures = ctx.data.features || {};
-            window.__opcOrg = ctx.data.organization || null;
-            window.__opcIsMaster = !!ctx.data.is_master_admin;
-            // A PLATFORM-ONLY account is a master admin that belongs to no
-            // organization. It gets its own standalone console, never a tenant's app.
-            setState(prev => ({ ...prev, platform: {
-              ready: true,
-              isMaster: !!ctx.data.is_master_admin,
-              orgId: ctx.data.active_org_id || null,
-              org: ctx.data.organization || null,
-            } }));
-          } else {
-            setState(prev => ({ ...prev, platform: { ready: true, isMaster: false, orgId: null, org: null } }));
-          }
-        } catch (e) { /* fail open — features stay unrestricted */ }
         const customProds = Array.isArray(rest.custom_products) ? rest.custom_products : [];
         setState(prev => ({
           ...prev,
