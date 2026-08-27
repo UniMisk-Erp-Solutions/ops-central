@@ -170,7 +170,7 @@ function Topbar({ onOpenTweaks }) {
           <div className="org-pill" title={state.org.gstin}>
             <div className="org-pill-dot">{state.org.logo_letter}</div>
             <span>{state.org.short}</span>
-            <span className="mono tiny muted">· FY{state.org.fiscal_year.replace('20','')}</span>
+            <span className="mono tiny muted">· FY{String((state.org && state.org.fiscal_year) || '').replace('20','') || '—'}</span>
           </div>
           {isAdmin && state.users.length > 1 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

@@ -55,13 +55,29 @@ function __syncTables(prev, next) {
 }
 
 function loadInitialState() {
+  const defaults = buildDefaultState();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed.__version === window.OPC_SEED.version) return { ...parsed, loaded: false };
+      if (parsed && parsed.__version === window.OPC_SEED.version) {
+        // Layer the cache OVER the defaults instead of replacing them. Returning
+        // the cached object verbatim meant any key it happened not to contain —
+        // an older build, a partially-written save — arrived as undefined, and a
+        // single undefined field in the always-mounted shell blanks every page.
+        return {
+          ...defaults, ...parsed,
+          org: { ...defaults.org, ...(parsed.org || {}) },
+          config: { ...defaults.config, ...(parsed.config || {}) },
+          loaded: false,
+        };
+      }
     }
-  } catch (e) {}
+  } catch (e) { /* unreadable cache -> defaults */ }
+  return defaults;
+}
+
+function buildDefaultState() {
   return {
     __version: window.OPC_SEED.version,
     loaded: false,   // becomes true once the DB load (or offline/seed fallback) resolves
@@ -162,6 +178,10 @@ function StoreProvider({ children }) {
         window.__opcFeatures = undefined;
         window.__opcWorkflow = undefined;
         window.__opcWorkflowProfile = undefined;
+        // Nav/capability customisations belong to ONE organization. Leaving the
+        // previous tenant's blob in place applied their menu to the next user
+        // and, if it was partial, crashed the shell outright.
+        window.__opcPerms = null;
         window.__opcOrg = null;
         window.__opcIsMaster = false;
       }
@@ -268,6 +288,10 @@ function StoreProvider({ children }) {
         // Config is per-organization. opc_get_config() resolves the caller's org
         // server-side from auth.uid() — the org is never supplied by the client.
         // Falls back to the legacy singleton row if the RPC isn't deployed yet.
+        // Reset first: this effect returns early for a tenant that has no config
+        // row yet (every brand-new organization), and anything left on window
+        // from the previous tenant would silently stay in force.
+        window.__opcPerms = null;
         let blob = null;
         try {
           const rpc = await window.OPC_SB.rpc('opc_get_config');
@@ -281,7 +305,8 @@ function StoreProvider({ children }) {
         }
         if (cancelled) return;
         const { org, ...rest } = blob;
-        if (rest.permissions) window.__opcPerms = rest.permissions;
+        window.__opcPerms = (rest.permissions && typeof rest.permissions === 'object')
+          ? rest.permissions : null;
         const customProds = Array.isArray(rest.custom_products) ? rest.custom_products : [];
         setState(prev => ({
           ...prev,
