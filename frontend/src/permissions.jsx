@@ -79,9 +79,21 @@ const PERMISSIONS = {
 // roles; the built-in PERMISSIONS constant is the exact fallback, so default
 // behavior is unchanged until an admin actually edits a role.
 function perm(role) {
+  const base = PERMISSIONS[role] || PERMISSIONS['Org Admin'];
   const overrides = (typeof window !== 'undefined' && window.__opcPerms) || null;
-  if (overrides && overrides[role]) return overrides[role];
-  return PERMISSIONS[role] || PERMISSIONS['Org Admin'];
+  const o = overrides && overrides[role];
+  if (!o || typeof o !== 'object') return base;
+  // MERGE over the built-in shape rather than returning the override verbatim.
+  // A customisation that only carries `can`, or an older blob written before a
+  // key existed, used to reach callers as { nav: undefined } — and canAccess
+  // then did undefined.includes(...), which threw inside the Sidebar and blanked
+  // EVERY page. A partial customisation must degrade, never crash.
+  return {
+    ...base, ...o,
+    nav: Array.isArray(o.nav) ? o.nav : base.nav,
+    can: (o.can && typeof o.can === 'object') ? o.can : base.can,
+    primary: (o.primary && typeof o.primary === 'object') ? o.primary : base.primary,
+  };
 }
 // ===== Per-organization feature flags =====
 // Maps a feature_key (organization_features) to the nav routes it controls.
@@ -174,8 +186,12 @@ const SCM_ROLES = ['Purchase', 'Stores', 'Org Admin', 'Managing Director'];
 
 function canAccess(role, route) {
   // Strip subpaths
-  const root = route.split('/')[0];
-  const allowed = perm(role).nav;
+  const root = String(route || '').split('/')[0];
+  // Belt and braces: perm() now guarantees an array, but canAccess runs inside
+  // the Sidebar and the App route guard — the two places where a throw takes the
+  // whole page down — so it must not depend on that guarantee being kept.
+  const p = perm(role) || {};
+  const allowed = Array.isArray(p.nav) ? p.nav : [];
   // The platform console is gated on being a PLATFORM admin, not on an app role.
   if (root === 'platform') return !!(typeof window !== 'undefined' && window.__opcIsMaster);
   // A capability switched off for this organization hides its routes entirely.
