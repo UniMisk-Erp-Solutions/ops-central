@@ -27,7 +27,8 @@ cors_b64 = base64.b64encode(open("supabase/functions/_shared/cors.ts", "rb").rea
 
 # Optional Brevo secrets from the runner's env (never hardcoded).
 secrets = {}
-for k in ("BREVO_API_KEY", "SENDER_EMAIL", "SENDER_NAME", "QUOTE_BASE_URL"):
+for k in ("BREVO_API_KEY", "SENDER_EMAIL", "SENDER_NAME", "QUOTE_BASE_URL",
+          "VERCEL_TOKEN", "VERCEL_PROJECT_ID", "CF_API_TOKEN", "CF_ZONE_ID"):
     if os.environ.get(k):
         secrets[k] = os.environ[k]
 secrets_b64 = base64.b64encode(json.dumps(secrets).encode()).decode() if secrets else ""

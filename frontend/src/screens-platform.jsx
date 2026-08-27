@@ -91,11 +91,50 @@ function PlatformConsole() {
     setBusy(org.id + 'sub');
     const r = await window.OPC_SB.rpc('opc_admin_set_subdomain',
       { p_org_id: org.id, p_subdomain: val.trim() });
-    setBusy('');
-    if (r.error) { toast(r.error.message || 'Could not set subdomain'); return; }
-    patch(org.id, { subdomain: (r.data && r.data.subdomain) || null });
+    if (r.error) { setBusy(''); toast(r.error.message || 'Could not set subdomain'); return; }
+    const sub = (r.data && r.data.subdomain) || null;
+    patch(org.id, { subdomain: sub });
     setSubEdit(s => { const n = { ...s }; delete n[org.id]; return n; });
-    toast('Subdomain saved', 'success');
+
+    // Provision the host end-to-end: register it on Vercel, write the _vercel
+    // TXT challenge into Cloudflare, verify. No Vercel/Cloudflare UI needed.
+    if (!sub) { setBusy(''); toast('Subdomain cleared — org is on the shared host', 'success'); return; }
+    toast('Subdomain saved · provisioning the host…', 'success');
+    const host = sub + '.' + baseDomain;
+    try {
+      const sess = await window.OPC_SB.auth.getSession();
+      const jwt = (sess.data && sess.data.session && sess.data.session.access_token) || '';
+      const env = window.OPC_ENV || {};
+      const res = await fetch(String(env.SUPABASE_URL).replace(/\/$/, '') + '/functions/v1/main/provision-subdomain', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: env.SUPABASE_ANON_KEY,
+          Authorization: 'Bearer ' + env.SUPABASE_ANON_KEY,
+          'x-caller-jwt': jwt,
+        },
+        body: JSON.stringify({ host }),
+      });
+      const j = await res.json().catch(() => ({}));
+      setBusy('');
+      if (j && j.needs_manual_txt) {
+        patch(org.id, { provision: 'manual' });
+        toast('Add this TXT in Cloudflare: ' + j.needs_manual_txt.name + ' = ' + j.needs_manual_txt.value);
+      } else if (j && j.ok && j.verified) {
+        patch(org.id, { provision: 'live' });
+        toast(host + ' provisioned — live within a minute', 'success');
+      } else if (j && j.ok) {
+        patch(org.id, { provision: 'pending' });
+        toast('DNS still propagating for ' + host + ' — save again shortly to finish');
+      } else {
+        patch(org.id, { provision: 'error' });
+        toast((j && j.error) || 'Could not provision the host');
+      }
+    } catch (e) {
+      setBusy('');
+      patch(org.id, { provision: 'error' });
+      toast('Subdomain saved, but provisioning failed: ' + String(e.message || e));
+    }
   };
 
   const setBilling = async (org, plan, billing) => {
@@ -175,7 +214,12 @@ function PlatformConsole() {
                         ) : (
                           <span style={{ cursor: 'pointer' }} onClick={() => setSubEdit(s => ({ ...s, [o.id]: o.subdomain || '' }))}>
                             {o.subdomain
-                              ? <span className="mono small">{o.subdomain}<span className="tiny muted">.{baseDomain}</span></span>
+                              ? <span className="mono small">{o.subdomain}<span className="tiny muted">.{baseDomain}</span>
+                                  {o.provision === 'live' && <span className="badge success tiny" style={{ marginLeft: 4 }}>live</span>}
+                                  {o.provision === 'pending' && <span className="badge warning tiny" style={{ marginLeft: 4 }}>propagating</span>}
+                                  {o.provision === 'manual' && <span className="badge warning tiny" style={{ marginLeft: 4 }}>needs TXT</span>}
+                                  {o.provision === 'error' && <span className="badge danger tiny" style={{ marginLeft: 4 }}>failed</span>}
+                                </span>
                               : <span className="tiny muted">shared host — click to assign</span>}
                             <Icon name="edit" size={10} color="var(--text-muted)"/>
                           </span>

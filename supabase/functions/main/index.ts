@@ -15,6 +15,43 @@ const SB_URL = Deno.env.get("SUPABASE_URL") || "http://supabase-kong:8000";
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_KEY") || Deno.env.get("SERVICE_KEY") || "";
 const sbHeaders = () => ({ apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": "application/json" });
 
+// Platform secrets (Vercel + Cloudflare) for tenant-subdomain provisioning.
+// Read from env or the server-side _secrets.json — never from the request.
+async function platformConfig() {
+  const fromEnv = {
+    VERCEL_TOKEN: Deno.env.get("VERCEL_TOKEN") || "",
+    VERCEL_PROJECT_ID: Deno.env.get("VERCEL_PROJECT_ID") || "",
+    CF_API_TOKEN: Deno.env.get("CF_API_TOKEN") || "",
+    CF_ZONE_ID: Deno.env.get("CF_ZONE_ID") || "",
+  };
+  if (fromEnv.VERCEL_TOKEN && fromEnv.CF_API_TOKEN) return fromEnv;
+  try {
+    const f = JSON.parse(await Deno.readTextFile("/home/deno/functions/main/_secrets.json"));
+    return {
+      VERCEL_TOKEN: fromEnv.VERCEL_TOKEN || f.VERCEL_TOKEN || "",
+      VERCEL_PROJECT_ID: fromEnv.VERCEL_PROJECT_ID || f.VERCEL_PROJECT_ID || "",
+      CF_API_TOKEN: fromEnv.CF_API_TOKEN || f.CF_API_TOKEN || "",
+      CF_ZONE_ID: fromEnv.CF_ZONE_ID || f.CF_ZONE_ID || "",
+    };
+  } catch (_) { return fromEnv; }
+}
+
+// Is the CALLER a platform admin? Verified by replaying their own JWT against
+// the database — never trusted from the request body.
+async function callerIsMasterAdmin(req: Request): Promise<boolean> {
+  const jwt = req.headers.get("x-caller-jwt") || "";
+  if (!jwt) return false;
+  try {
+    const r = await fetch(SB_URL + "/rest/v1/rpc/is_master_admin", {
+      method: "POST",
+      headers: { apikey: SB_KEY, Authorization: "Bearer " + jwt, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!r.ok) return false;
+    return (await r.json()) === true;
+  } catch (_) { return false; }
+}
+
 async function brevoConfig() {
   let key = Deno.env.get("BREVO_API_KEY") || "";
   let email = Deno.env.get("SENDER_EMAIL") || "info@unimisk.com";
@@ -182,6 +219,89 @@ Deno.serve(async (req: Request) => {
       await fetch(SB_URL + "/rest/v1/sourcings?id=eq." + encodeURIComponent(row.so_id), { method: "PATCH", headers: { ...sbHeaders(), Prefer: "return=minimal" }, body: JSON.stringify({ prices: np, quote_vendors: qv }) });
     }
     return json({ ok: true });
+  }
+
+  // ---------- Provision a tenant subdomain (platform admins only) ----------
+  // Registers <host> on the Vercel project, writes the _vercel TXT challenge
+  // into Cloudflare, then asks Vercel to verify.
+  // SAFETY: the Cloudflare write is hard-limited to TXT records whose name
+  // starts with "_vercel". No other record type or name can ever be created,
+  // modified or deleted by this endpoint.
+  if (path === "/provision-subdomain" && req.method === "POST") {
+    if (!(await callerIsMasterAdmin(req))) return json({ error: "Platform admins only" }, 403);
+    const body = await req.json().catch(() => ({}));
+    const host = String(body.host || "").trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]*\.[a-z0-9.-]+$/.test(host)) return json({ error: "A valid host is required" }, 400);
+
+    const cfg = await platformConfig();
+    if (!cfg.VERCEL_TOKEN || !cfg.VERCEL_PROJECT_ID) return json({ error: "Vercel is not configured on the server" }, 500);
+
+    const vh = { Authorization: "Bearer " + cfg.VERCEL_TOKEN, "Content-Type": "application/json" };
+    const steps: any[] = [];
+
+    const add = await fetch("https://api.vercel.com/v10/projects/" + cfg.VERCEL_PROJECT_ID + "/domains",
+      { method: "POST", headers: vh, body: JSON.stringify({ name: host }) });
+    const addJson = await add.json().catch(() => ({}));
+    const code = addJson && addJson.error && addJson.error.code;
+    const already = code === "domain_already_in_use" || code === "domain_already_exists";
+    if (!add.ok && !already) {
+      return json({ error: "Vercel: " + ((addJson.error && addJson.error.message) || add.status), steps }, 502);
+    }
+    steps.push({ step: "vercel_add_domain", ok: true, already: !!already });
+
+    const info = await fetch("https://api.vercel.com/v9/projects/" + cfg.VERCEL_PROJECT_ID +
+      "/domains/" + encodeURIComponent(host), { headers: vh });
+    const infoJson = await info.json().catch(() => ({}));
+    if (infoJson && infoJson.verified === true) {
+      steps.push({ step: "already_verified", ok: true });
+      return json({ ok: true, host, verified: true, steps });
+    }
+    const chal = ((infoJson && infoJson.verification) || []).find((v: any) => v.type === "TXT");
+    if (!chal) return json({ error: "Vercel returned no TXT challenge", steps }, 502);
+    steps.push({ step: "challenge", ok: true, name: chal.domain });
+
+    if (!cfg.CF_API_TOKEN || !cfg.CF_ZONE_ID) {
+      return json({ ok: false, host, needs_manual_txt: { name: chal.domain, value: chal.value },
+        error: "Cloudflare is not configured — add this TXT record manually", steps }, 200);
+    }
+    const recName = String(chal.domain || "");
+    if (!/^_vercel(\.|$)/.test(recName)) {
+      return json({ error: "Refusing to write an unexpected DNS record: " + recName, steps }, 400);
+    }
+    const cfh = { Authorization: "Bearer " + cfg.CF_API_TOKEN, "Content-Type": "application/json" };
+    const listed = await fetch("https://api.cloudflare.com/client/v4/zones/" + cfg.CF_ZONE_ID +
+      "/dns_records?type=TXT&name=" + encodeURIComponent(recName) + "&per_page=100", { headers: cfh });
+    const listJson = await listed.json().catch(() => ({}));
+    const exists = ((listJson && listJson.result) || []).some((r: any) =>
+      String(r.content || "").replace(/^"|"$/g, "") === chal.value);
+    if (!exists) {
+      const cr = await fetch("https://api.cloudflare.com/client/v4/zones/" + cfg.CF_ZONE_ID + "/dns_records", {
+        method: "POST", headers: cfh,
+        body: JSON.stringify({ type: "TXT", name: recName, content: chal.value, ttl: 60,
+          comment: "vercel tenant subdomain verification (auto)" }),
+      });
+      const crJson = await cr.json().catch(() => ({}));
+      if (!crJson || crJson.success !== true) {
+        return json({ error: "Cloudflare: " + JSON.stringify((crJson && crJson.errors) || crJson), steps }, 502);
+      }
+      steps.push({ step: "cloudflare_txt_created", ok: true });
+    } else {
+      steps.push({ step: "cloudflare_txt_exists", ok: true });
+    }
+
+    let verified = false;
+    for (let i = 0; i < 3 && !verified; i++) {
+      await new Promise((r) => setTimeout(r, i === 0 ? 1500 : 3000));
+      const vr = await fetch("https://api.vercel.com/v9/projects/" + cfg.VERCEL_PROJECT_ID +
+        "/domains/" + encodeURIComponent(host) + "/verify", { method: "POST", headers: vh });
+      const vrJson = await vr.json().catch(() => ({}));
+      verified = !!(vrJson && vrJson.verified === true);
+    }
+    steps.push({ step: "vercel_verify", ok: verified });
+
+    return json({ ok: true, host, verified, steps,
+      note: verified ? "Certificate issues automatically; the host is usually live within a minute."
+                     : "DNS is still propagating — press Provision again shortly." });
   }
 
   return json({ ok: false, error: "Not found", path }, 404);
