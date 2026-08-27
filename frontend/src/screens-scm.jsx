@@ -30,6 +30,21 @@ function scmLineTotals(state, so) {
     onPO[it.product_id] = (onPO[it.product_id] || 0) + (Number(it.qty) || 0);
   }));
 
+  // What has physically LEFT the vendor, from the PO's in-transit record.
+  // Without this, "in transit" can only be inferred as (ordered - received),
+  // which wrongly counts material the vendor has not even shipped yet. With an
+  // LR recorded we know the real split, so the two are reported separately.
+  const shippedMap = {};
+  pos.forEach(p => {
+    const di = p.dispatch_info || {};
+    if (!di.lr_no && !di.carrier && !di.shipped_on) return;      // nothing recorded
+    const list = Array.isArray(di.items) && di.items.length ? di.items : (p.items || []);
+    list.forEach(it => {
+      shippedMap[it.product_id] = (shippedMap[it.product_id] || 0) + (Number(it.qty) || 0);
+    });
+  });
+  const trackShipments = typeof wfOn === 'function' ? wfOn('intransit_tracking') : false;
+
   const poIds = new Set(pos.map(p => p.id));
   const received = {};
   (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => {
@@ -57,11 +72,19 @@ function scmLineTotals(state, so) {
     const disp = dispatched[pid] || 0;
     const out = pooledOut[pid] || 0;
     const inVG = Math.max(0, rec - disp - out);
+    // With shipment tracking on, in-transit is what was actually shipped and has
+    // not arrived. Without it, fall back to the historic (ordered - received).
+    const shipped = shippedMap[pid] || 0;
+    const transit = trackShipments
+      ? Math.max(0, Math.min(shipped, po) - rec)
+      : Math.max(0, po - rec);
     return {
       product_id: pid,
       required: req,
       onPO: po,
-      inTransit: Math.max(0, po - rec),
+      onOrder: Math.max(0, po - rec - transit),   // ordered, not yet shipped
+      shipped,
+      inTransit: transit,
       received: rec,
       inVG,
       dispatched: disp,
@@ -78,7 +101,8 @@ function scmStatusChips(r) {
   if (r.received > 0) chips.push(<span key="r" className="badge success tiny" style={{ marginRight: 4 }}>Received {r.received}</span>);
   if (r.inTransit > 0) chips.push(<span key="t" className="badge tiny" style={{ marginRight: 4 }}>In transit {r.inTransit}</span>);
   if (r.dispatched > 0) chips.push(<span key="d" className="badge info tiny" style={{ marginRight: 4 }}>Out for delivery {r.dispatched}</span>);
-  if (r.pending > 0 && r.received === 0 && r.inTransit === 0) chips.push(<span key="p" className="badge warning tiny" style={{ marginRight: 4 }}>Pending {r.pending}</span>);
+  if (r.onOrder > 0) chips.push(<span key="o" className="badge tiny" style={{ marginRight: 4 }} title="On a vendor PO, not dispatched by the vendor yet">On order {r.onOrder}</span>);
+  if (r.pending > 0 && r.received === 0 && r.inTransit === 0 && !r.onOrder) chips.push(<span key="p" className="badge warning tiny" style={{ marginRight: 4 }}>Pending {r.pending}</span>);
   if (!chips.length) chips.push(<span key="n" className="tiny muted">—</span>);
   return chips;
 }
@@ -104,10 +128,11 @@ function SCMTracking() {
     return `${p.name || ''} ${p.code || ''} ${r.product_id}`.toLowerCase().includes(q.trim().toLowerCase());
   });
   const tot = rows.reduce((a, r) => ({
-    required: a.required + r.required, onPO: a.onPO + r.onPO, inTransit: a.inTransit + r.inTransit,
+    required: a.required + r.required, onPO: a.onPO + r.onPO, onOrder: a.onOrder + (r.onOrder || 0),
+    inTransit: a.inTransit + r.inTransit,
     received: a.received + r.received, inVG: a.inVG + r.inVG,
     dispatched: a.dispatched + r.dispatched, pending: a.pending + r.pending,
-  }), { required: 0, onPO: 0, inTransit: 0, received: 0, inVG: 0, dispatched: 0, pending: 0 });
+  }), { required: 0, onPO: 0, onOrder: 0, inTransit: 0, received: 0, inVG: 0, dispatched: 0, pending: 0 });
 
   const dcs = (state.outward_dispatches || []).filter(d => so && d.so_id === so.id);
   const cust = so ? getCustomer(so.customer_id) : null;
@@ -135,6 +160,7 @@ function SCMTracking() {
               ['Ordered', tot.required, ''],
               ['On PO', tot.onPO, ''],
               ['In transit', tot.inTransit, 'var(--text-2)'],
+              ...(wfOn('intransit_tracking') ? [['Not shipped yet', tot.onOrder, tot.onOrder ? 'var(--warning)' : '']] : []),
               ['Received', tot.received, 'var(--success)'],
               ['In stock (VG)', tot.inVG, 'var(--accent)'],
               ['Dispatched', tot.dispatched, 'var(--info)'],
@@ -213,7 +239,7 @@ function SCMTracking() {
                       <tr key={d.id} style={{ cursor: 'pointer' }} onClick={() => setViewDC(d)}>
                         <td className="mono small"><a>{d.dc_no}</a></td>
                         <td className="mono small">{fmtDate(d.date)}</td>
-                        <td className="small trunc">{(d.items || []).map(i => `${i.qty}× ${i.name}`).join(', ')}</td>
+                        <td className="small trunc">{(d.items || []).map(i => `${i.qty}× ${(wfOn('customer_language') && (i.cust_name || i.cust_code)) || i.name}`).join(', ')}</td>
                         <td className="num">{(d.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0)}</td>
                         <td className="tiny muted">{(d.transport || {}).mode || '—'}{(d.transport || {}).lr ? ' · LR ' + d.transport.lr : ''}</td>
                       </tr>
@@ -238,6 +264,11 @@ function SCMTracking() {
 function OutwardDispatchModal({ so, onClose }) {
   const { state, mutate, getProduct, getCustomer, currentUser } = useStore();
   const toast = useToast();
+  // The customer's own wording for these items, so the challan they receive
+  // reads in THEIR language. Captured onto the challan at dispatch time rather
+  // than looked up when printing: a delivery note is a historical document and
+  // must not silently change if the mapping is edited next month.
+  const custAliases = useAliasMap('customer', so.customer_id);
   const rows = scmLineTotals(state, so).filter(r => r.inVG > 0);
   const [sel, setSel] = React.useState({});
   const [tr, setTr] = React.useState({ mode: 'Road', vehicle: '', lr: '', carrier: '', tracking: '', contact: '', notes: '' });
@@ -257,7 +288,12 @@ function OutwardDispatchModal({ so, onClose }) {
       so_id: so.id,
       dc_no: `DC/OUT/${String(seq).padStart(4, '0')}`,
       date: TODAY,
-      items: picked.map(r => { const p = getProduct(r.product_id) || {}; return { product_id: r.product_id, name: p.name || r.product_id, code: p.code || '', qty: sel[r.product_id] }; }),
+      items: picked.map(r => {
+        const p = getProduct(r.product_id) || {};
+        const a = custAliases[r.product_id] || {};
+        return { product_id: r.product_id, name: p.name || r.product_id, code: p.code || '',
+                 cust_name: a.name || '', cust_code: a.code || '', qty: sel[r.product_id] };
+      }),
       transport: { ...tr },
       status: 'Dispatched',
       created_by: currentUser,
@@ -341,7 +377,18 @@ function CustomerChallanModal({ dc, onClose }) {
 
   const printIt = () => {
     const esc = (x) => String(x == null ? '' : x).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-    const rows = (dc.items || []).map((i, n) => `<tr><td>${n + 1}</td><td>${esc(i.name)}${i.code ? `<div class="mut mono">${esc(i.code)}</div>` : ''}</td><td class="r mono">${esc(i.qty)}</td></tr>`).join('');
+    // Print in the customer's wording when the org works that way and a mapping
+    // was captured on this challan; otherwise print ours. Our own code is always
+    // shown underneath so the storekeeper can still find the item.
+    const useCust = wfOn('customer_language');
+    const rows = (dc.items || []).map((i, n) => {
+      const head = (useCust && (i.cust_name || i.cust_code)) ? (i.cust_name || i.cust_code) : i.name;
+      const sub = [];
+      if (useCust && i.cust_code && i.cust_code !== head) sub.push(esc(i.cust_code));
+      if (i.code) sub.push(esc(i.code));
+      if (useCust && (i.cust_name || i.cust_code) && i.name && i.name !== head) sub.push(esc(i.name));
+      return `<tr><td>${n + 1}</td><td>${esc(head)}${sub.length ? `<div class="mut mono">${sub.join(' · ')}</div>` : ''}</td><td class="r mono">${esc(i.qty)}</td></tr>`;
+    }).join('');
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(dc.dc_no)}</title><style>
       *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;margin:0;padding:26px;font-size:12.5px}
       .paper{max-width:720px;margin:0 auto;border:1px solid #e2e2e2;border-radius:10px;padding:24px}

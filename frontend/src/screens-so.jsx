@@ -453,6 +453,12 @@ function SalesOrderNew() {
                             <td>
                               <input className="input" value={l.client_name || ''} onChange={e => updateLine(l.id, { client_name: e.target.value })} placeholder="Client's name for this item" style={{ height: 24, fontSize: 12.5, fontWeight: 500, marginBottom: 3, width: 220 }}/>
                               <div className="tiny muted">Maps to <strong>{cat.name}</strong> · HSN <span className="mono">{cat.hsn}</span> · {l.components.length} components</div>
+                              {wfOn('customer_language') && l.customer_ref && (l.customer_ref.code || l.customer_ref.desc) && (
+                                <div className="tiny muted" title="Exactly as it appeared on the customer's own sheet — kept so their reference can always be quoted back">
+                                  Customer ref:{l.customer_ref.sr ? ` #${l.customer_ref.sr}` : ''} <span className="mono">{l.customer_ref.code || ''}</span>
+                                  {l.customer_ref.desc ? ` · ${l.customer_ref.desc}` : ''}
+                                </div>
+                              )}
                             </td>
                             <td className="num">
                               <input type="number" className="input mono" min="1" value={l.bundle_qty}

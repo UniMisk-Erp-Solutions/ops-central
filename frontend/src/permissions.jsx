@@ -123,6 +123,46 @@ function featureBlocks(route) {
   return false;
 }
 
+// ===== Per-organization WORKFLOW =====
+// Feature flags decide what an org can SEE. These decide how its PROCESS runs.
+// Resolved server-side (preset defaults + per-org overrides) and delivered by
+// opc_my_context. Every fallback below is the historic behaviour, so a failed
+// load, an old cached tab, or an org with no profile behaves exactly as before.
+const WORKFLOW_FALLBACK = {
+  receiving_flow:      'purchase_to_stores',
+  po_item_language:    'ours',
+  intransit_tracking:  false,
+  customer_language:   false,
+  supervisor_signoff:  true,
+  auto_invoice_on_grn: true,
+  outward_dispatch:    false,
+};
+
+function wf(key) {
+  const w = (typeof window !== 'undefined' && window.__opcWorkflow) || null;
+  if (w && key in w && w[key] != null) return w[key];
+  return WORKFLOW_FALLBACK[key];
+}
+function wfOn(key) { return !!wf(key); }
+
+// Who ticks what physically arrived, and who accepts it and posts the GRN.
+// The ACCEPTOR can also post directly (no point asking themselves); everyone
+// else raises a request that the acceptor approves. Swapping the direction is
+// therefore one setting, not a second code path.
+function wfReceiving() {
+  const reversed = wf('receiving_flow') === 'stores_to_purchase';
+  return reversed
+    ? { mode: 'stores_to_purchase',
+        requesterLabel: 'Stores',   requesterRoles: ['Stores'],
+        approverLabel:  'Purchase', approverRoles:  ['Purchase', 'Org Admin'],
+        note: 'Stores confirms what arrived · Purchase accepts and posts the GRN' }
+    : { mode: 'purchase_to_stores',
+        requesterLabel: 'Purchase', requesterRoles: ['Purchase', 'Project Manager'],
+        approverLabel:  'Stores',   approverRoles:  ['Stores', 'Org Admin'],
+        note: 'Purchase marks material received · Stores accepts and posts the GRN' };
+}
+function wfCanAcceptReceipt(role) { return wfReceiving().approverRoles.indexOf(role) !== -1; }
+
 function canDo(role, capability) {
   const p = perm(role).can || {};
   return !!(p.all || p[capability]);
@@ -601,6 +641,11 @@ function tasksForRole(state, role, mutate, navigate, toast) {
 window.PERMISSIONS = PERMISSIONS;
 window.featureOn = featureOn;
 window.featureBlocks = featureBlocks;
+window.wf = wf;
+window.wfOn = wfOn;
+window.wfReceiving = wfReceiving;
+window.wfCanAcceptReceipt = wfCanAcceptReceipt;
+window.WORKFLOW_FALLBACK = WORKFLOW_FALLBACK;
 window.canAccess = canAccess;
 window.SCM_ROUTES_SET = { scm: true, mapping: true };
 window.FEATURE_ROUTES = FEATURE_ROUTES;

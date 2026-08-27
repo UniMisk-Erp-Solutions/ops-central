@@ -750,6 +750,19 @@ function VendorPODetail({ poId }) {
   const ebilled = po.ebill && po.ebill.generated;
   const [showVI, setShowVI] = React.useState(false);
   const [showChange, setShowChange] = React.useState(false);
+  const [showTransit, setShowTransit] = React.useState(false);
+  // The vendor's OWN part numbers for the items on this PO. An org running the
+  // procurement profile prints the PO in the vendor's catalogue; everyone else
+  // keeps printing ours. Unmapped lines always fall back to our names, so the
+  // PO is never blank — it is flagged instead.
+  const vendorAliases = useAliasMap('vendor', po.vendor_id);
+  const poLang = wf('po_item_language');
+  const inVendorLang = poLang === 'vendor';
+  const unmapped = inVendorLang
+    ? po.items.filter(it => { const a = vendorAliases[it.product_id]; return !a || !(a.code || a.name); }).length
+    : 0;
+  const dispatch = po.dispatch_info || {};
+  const inTransit = !!(dispatch.lr_no || dispatch.carrier || dispatch.shipped_on);
 
   // Sibling POs for the same project (SO) — the vendors selected for this order.
   const siblings = state.vendor_pos.filter(p => p.so_id === po.so_id);
@@ -816,6 +829,7 @@ function VendorPODetail({ poId }) {
       {po.status === 'Rejected' && <div className="mb-2" style={{ padding: '10px 12px', background: 'var(--danger-bg)', borderRadius: 'var(--radius)', fontSize: 12.5 }}><Icon name="alert" size={14} color="var(--danger)"/> <strong>Rejected by MD.</strong> Re-create a PO via the Vendor POs tab if needed.</div>}
       {showVI && <RecordVendorInvoiceModal poId={po.id} onClose={() => setShowVI(false)}/>}
       {showChange && <ChangeVendorModal po={po} onClose={() => setShowChange(false)}/>}
+      {showTransit && <InTransitModal po={po} onClose={() => setShowTransit(false)}/>}
 
       <div className="card mb-2"><div className="card-body" style={{ padding: '10px 14px' }}>
         <div className="h-timeline">
@@ -848,18 +862,30 @@ function VendorPODetail({ poId }) {
       <div className="detail-grid">
         <div className="stack">
           <div className="card">
-            <div className="card-header"><h3 className="card-title">PO Items</h3></div>
+            <div className="card-header">
+              <h3 className="card-title">PO Items</h3>
+              {inVendorLang && <div className="tiny muted" title="Set on the Item Mapping screen">Printed in <strong>{v.name}</strong> part numbers{unmapped > 0 ? ` · ${unmapped} line(s) not mapped yet` : ' · all lines mapped'} · <a style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate('mapping')}>edit mapping</a></div>}
+            </div>
             <div className="card-body flush">
               <table className="t">
-                <thead><tr><th>Product</th><th>HSN</th><th className="num">Qty</th><th className="num">Rate</th><th className="num">Amount</th></tr></thead>
+                <thead><tr><th>{inVendorLang ? `${v.name} part no. / description` : 'Product'}</th><th>{inVendorLang ? 'Our item' : 'HSN'}</th><th className="num">Qty</th><th className="num">Rate</th><th className="num">Amount</th></tr></thead>
                 <tbody>
                   {po.items.map((it, i) => {
                     const p = getProduct(it.product_id);
+                    const n = partyItemName(vendorAliases, p, poLang);
                     return (
                       <tr key={i}>
-                        <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
-                        <td className="mono small">{p.hsn}</td>
-                        <td className="num">{it.qty} {p.uom}</td>
+                        <td>
+                          {n.name}
+                          <div className="tiny muted mono">{n.code}</div>
+                          {inVendorLang && !n.mapped && <div className="tiny" style={{ color: 'var(--warning)' }} title="No part number recorded for this vendor — our own name is printed instead">&#9888; not mapped to {v.name}</div>}
+                        </td>
+                        <td className="mono small">
+                          {inVendorLang
+                            ? <span title="Our catalogue">{n.altCode || p.code}<div className="tiny muted" style={{ fontFamily: 'inherit' }}>{n.altName || p.name}</div></span>
+                            : p.hsn}
+                        </td>
+                        <td className="num">{it.qty} {(inVendorLang && n.uom) || p.uom}</td>
                         <td className="num">{inr(it.rate)}</td>
                         <td className="num">{inr(it.qty * it.rate)}</td>
                       </tr>
@@ -903,12 +929,29 @@ function VendorPODetail({ poId }) {
             </div>
           </div>
           <div className="card">
-            <div className="card-header"><h3 className="card-title">Delivery</h3></div>
+            <div className="card-header">
+              <h3 className="card-title">Delivery</h3>
+              {wfOn('intransit_tracking') && canProcurePO && !grn &&
+                <button className="btn btn-sm" onClick={() => setShowTransit(true)}><Icon name="truck" size={12}/>{inTransit ? 'Update transit' : 'Mark dispatched'}</button>}
+            </div>
             <div className="card-body">
               <div className="dl">
                 <dt>Expected</dt><dd className="mono">{fmtDate(po.expected)}</dd>
-                <dt>LR / Tracking</dt><dd className="mono">TCI-MUM-99821</dd>
-                <dt>Ship to</dt><dd className="small">Brightline Godown · Powai · Mumbai 400076</dd>
+                {wfOn('intransit_tracking') ? (
+                  inTransit ? <>
+                    <dt>Status</dt><dd>{grn ? <span className="badge success dot">Delivered · GRN posted</span> : <span className="badge accent dot">In transit</span>}</dd>
+                    <dt>Dispatched</dt><dd className="mono">{dispatch.shipped_on ? fmtDate(dispatch.shipped_on) : '—'}</dd>
+                    <dt>LR / docket</dt><dd className="mono">{dispatch.lr_no || '—'}</dd>
+                    <dt>Carrier</dt><dd className="small">{dispatch.carrier || '—'}</dd>
+                    {dispatch.tracking_url && <><dt>Track</dt><dd className="small"><a href={dispatch.tracking_url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline' }}>open tracking</a></dd></>}
+                    {dispatch.contact && <><dt>Driver / contact</dt><dd className="mono small">{dispatch.contact}</dd></>}
+                    <dt>ETA</dt><dd className="mono">{dispatch.eta ? fmtDate(dispatch.eta) : '—'}</dd>
+                    {dispatch.notes && <><dt>Notes</dt><dd className="small">{dispatch.notes}</dd></>}
+                  </> : <>
+                    <dt>Status</dt><dd><span className="badge dot">Not dispatched yet</span></dd>
+                  </>
+                ) : <><dt>LR / Tracking</dt><dd className="mono">{dispatch.lr_no || '—'}</dd></>}
+                <dt>Ship to</dt><dd className="small">{state.org.address}</dd>
               </div>
             </div>
           </div>
@@ -962,7 +1005,10 @@ function GRNList() {
   const { state, navigate, getVendor, getProduct, getUser, mutate, addToPool, consumeFromPool, currentUser } = useStore();
   const toast = useToast();
   const role = (getUser(currentUser) || {}).role;
-  const canAccept = ['Stores', 'Org Admin'].includes(role);
+  // Per-org: standard = Stores accepts what Purchase marked;
+  // procurement-only = Purchase accepts what Stores confirmed.
+  const flow = wfReceiving();
+  const canAccept = flow.approverRoles.includes(role);
   const [busy, setBusy] = React.useState('');
   const [viewRec, setViewRec] = React.useState(null);
   // Receipts marked by Purchase/PM at the Virtual Godown, awaiting Stores' acceptance.
@@ -1011,18 +1057,18 @@ function GRNList() {
     mutate(s => ({
       ...s,
       sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Accepted', accepted_by: currentUser, accepted_date: TODAY } : p) } } : x),
-      notifications: [{ id: 'n-reca-' + Date.now(), kind: 'grn', text: `${so.so_no}: receipt accepted by Stores · GRN posted · client invoice auto-raised`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
-    }), { action: 'receipt-accept', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Stores accepted receipt · GRN posted · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+      notifications: [{ id: 'n-reca-' + Date.now(), kind: 'grn', text: `${so.so_no}: receipt accepted by ${flow.approverLabel} · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice auto-raised' : ''}`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
+    }), { action: 'receipt-accept', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} accepted receipt · GRN posted · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
     setBusy('');
-    toast(`Accepted · ${r.units} unit(s) received · GRN posted · client invoice raised`, 'success');
+    toast(`Accepted · ${r.units} unit(s) received · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice raised' : ''}`, 'success');
   };
   const rejectReceipt = ({ so, pr }) => {
     mutate(s => ({
       ...s,
       sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Rejected', rejected_by: currentUser, rejected_date: TODAY } : p) } } : x),
-      notifications: [{ id: 'n-recr-' + Date.now(), kind: 'grn', text: `${so.so_no}: Stores could not accept the marked receipt — please re-check`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
-    }), { action: 'receipt-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Stores rejected marked receipt · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
-    toast('Receipt returned to Purchase', '');
+      notifications: [{ id: 'n-recr-' + Date.now(), kind: 'grn', text: `${so.so_no}: ${flow.approverLabel} could not accept the confirmed receipt — please re-check`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
+    }), { action: 'receipt-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} rejected confirmed receipt · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+    toast(`Receipt returned to ${flow.requesterLabel}`, '');
   };
 
   return (
@@ -1030,7 +1076,7 @@ function GRNList() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Goods Receipt Notes (GRN)</h1>
-          <div className="page-sub">Stores' record of material received · auto-allocated to source SO's Virtual Godown</div>
+          <div className="page-sub">{flow.note} · auto-allocated to the SO's Virtual Godown</div>
         </div>
         <div className="page-actions">
           <span className="tiny muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={12} color="var(--success)"/>Auto-created on receipt at the Virtual Godown</span>
@@ -1040,10 +1086,10 @@ function GRNList() {
 
       {pending.length > 0 && (
         <div className="card" style={{ marginBottom: 14, borderColor: 'var(--warning)' }}>
-          <div className="card-header"><div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="clock" size={14} color="var(--warning)"/>Awaiting Stores acceptance <span className="badge warn dot">{pending.length}</span></div><div className="tiny muted">Purchase marked these received — accept to post the GRN &amp; raise the client invoice</div></div>
+          <div className="card-header"><div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="clock" size={14} color="var(--warning)"/>Awaiting {flow.approverLabel} acceptance <span className="badge warn dot">{pending.length}</span></div><div className="tiny muted">{flow.requesterLabel} confirmed these received — accept to post the GRN{wfOn('auto_invoice_on_grn') ? ' & raise the client invoice' : ''}</div></div>
           <div className="card-body flush">
             <table className="t">
-              <thead><tr><th>Sales Order</th><th>Marked by</th><th>Date</th><th>Items received</th><th className="num">Units</th><th></th></tr></thead>
+              <thead><tr><th>Sales Order</th><th>Confirmed by</th><th>Date</th><th>Items received</th><th className="num">Units</th><th></th></tr></thead>
               <tbody>
                 {pending.map(({ so, pr }) => (
                   <tr key={pr.id}>
@@ -1058,7 +1104,7 @@ function GRNList() {
                           <button className="btn sm primary" disabled={busy === pr.id} onClick={() => acceptReceipt({ so, pr })}>{busy === pr.id ? 'Posting…' : 'Accept & post GRN'}</button>
                           <button className="btn sm ghost" disabled={busy === pr.id} onClick={() => rejectReceipt({ so, pr })} style={{ marginLeft: 6 }}>Reject</button>
                         </>
-                      ) : <span className="tiny muted">awaiting Stores</span>}
+                      ) : <span className="tiny muted">awaiting {flow.approverLabel}</span>}
                     </td>
                   </tr>
                 ))}
@@ -1145,7 +1191,7 @@ function GRNList() {
                 );
               })}
               {state.grns.length === 0 && (
-                <tr><td colSpan="7"><div className="empty">No GRNs yet — they appear here once Stores receives material against a Vendor PO.</div></td></tr>
+                <tr><td colSpan="7"><div className="empty">No GRNs yet — they appear here once material is received against a Vendor PO.</div></td></tr>
               )}
             </tbody>
           </table>
@@ -1998,10 +2044,140 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
   );
 }
 
+// ===== In transit — the gap between "PO issued" and "GRN posted" =====
+// Without this, material that has left the vendor but not arrived is invisible:
+// the PO reads "Issued" and the godown reads "nothing received", so nobody can
+// answer "where is it?". Writing the LR here makes that leg trackable and feeds
+// the In-transit column on SCM Tracking.
+//
+// Stored on vendor_pos.dispatch_info (jsonb) so it needs no new table and no
+// migration per field. Only shown when the org workflow asks for it.
+function InTransitModal({ po, onClose }) {
+  const { mutate, getVendor, getProduct } = useStore();
+  const toast = useToast();
+  const d = po.dispatch_info || {};
+  const v = getVendor(po.vendor_id);
+  const [shippedOn, setShippedOn] = React.useState(d.shipped_on || TODAY);
+  const [lr, setLr] = React.useState(d.lr_no || '');
+  const [carrier, setCarrier] = React.useState(d.carrier || '');
+  const [track, setTrack] = React.useState(d.tracking_url || '');
+  const [contact, setContact] = React.useState(d.contact || '');
+  const [eta, setEta] = React.useState(d.eta || '');
+  const [notes, setNotes] = React.useState(d.notes || '');
+  // Quantity-wise: a vendor may ship a PO in more than one lorry.
+  const [qty, setQty] = React.useState(() => {
+    const prev = {};
+    ((d.items) || []).forEach(it => { prev[it.product_id] = it.qty; });
+    const init = {};
+    (po.items || []).forEach(it => { init[it.product_id] = prev[it.product_id] != null ? prev[it.product_id] : it.qty; });
+    return init;
+  });
+
+  const shippedUnits = (po.items || []).reduce((a, it) => a + (Number(qty[it.product_id]) || 0), 0);
+  const orderedUnits = (po.items || []).reduce((a, it) => a + (Number(it.qty) || 0), 0);
+
+  const save = () => {
+    if (!lr.trim() && !carrier.trim()) { toast('Enter an LR / docket number or a carrier'); return; }
+    if (shippedUnits <= 0) { toast('Nothing to dispatch — enter at least one quantity'); return; }
+    const info = {
+      shipped_on: shippedOn || TODAY,
+      lr_no: lr.trim(), carrier: carrier.trim(), tracking_url: track.trim(),
+      contact: contact.trim(), eta: eta || '', notes: notes.trim(),
+      items: (po.items || []).map(it => ({ product_id: it.product_id, qty: Number(qty[it.product_id]) || 0 })).filter(x => x.qty > 0),
+      updated_at: new Date().toISOString(),
+    };
+    mutate(st => ({
+      ...st,
+      vendor_pos: st.vendor_pos.map(x => x.id === po.id
+        ? { ...x, dispatch_info: info, status: x.status === 'Issued' ? 'In Transit' : x.status }
+        : x),
+      notifications: [{
+        id: 'n-transit-' + Date.now(), kind: 'po',
+        text: `${po.po_no}: ${shippedUnits} unit(s) dispatched by ${v ? v.name : 'vendor'}${lr.trim() ? ' · LR ' + lr.trim() : ''}${eta ? ' · ETA ' + fmtDate(eta) : ''}`,
+        date: TODAY, read: false, role: wfReceiving().requesterLabel,
+      }, ...st.notifications],
+    }), {
+      action: 'po-in-transit', entity: 'VendorPO', entity_id: po.id,
+      detail: `${shippedUnits}/${orderedUnits} unit(s) in transit${lr.trim() ? ' · LR ' + lr.trim() : ''}${carrier.trim() ? ' · ' + carrier.trim() : ''}`,
+    });
+    toast(`Marked in transit · ${shippedUnits} unit(s)${lr.trim() ? ' · LR ' + lr.trim() : ''}`, 'success');
+    onClose();
+  };
+
+  const clear = () => {
+    mutate(st => ({ ...st, vendor_pos: st.vendor_pos.map(x => x.id === po.id ? { ...x, dispatch_info: {}, status: x.status === 'In Transit' ? 'Issued' : x.status } : x) }),
+      { action: 'po-in-transit-clear', entity: 'VendorPO', entity_id: po.id, detail: 'In-transit details cleared' });
+    toast('In-transit details cleared', '');
+    onClose();
+  };
+
+  return (
+    <Modal title={`In transit — ${po.po_no}`} onClose={onClose} size="lg" footer={
+      <>
+        {(po.dispatch_info && Object.keys(po.dispatch_info).length > 0) && <button className="btn" onClick={clear}>Clear</button>}
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" onClick={save}><Icon name="truck" size={13}/>Save transit details</button>
+      </>
+    }>
+      <div className="tiny muted mb-2">
+        Material has left <strong>{v ? v.name : 'the vendor'}</strong> but has not been received yet.
+        Recording it here shows the units as <strong>In transit</strong> on SCM Tracking until a GRN is posted.
+      </div>
+      <div className="grid-2">
+        <div className="field"><label className="field-label">Dispatched on</label>
+          <input className="input" type="date" value={shippedOn} onChange={e => setShippedOn(e.target.value)}/></div>
+        <div className="field"><label className="field-label">Expected arrival (ETA)</label>
+          <input className="input" type="date" value={eta} onChange={e => setEta(e.target.value)}/></div>
+        <div className="field"><label className="field-label">LR / docket / AWB no.</label>
+          <input className="input mono" value={lr} onChange={e => setLr(e.target.value)} placeholder="e.g. TCI-MUM-99821"/></div>
+        <div className="field"><label className="field-label">Carrier / transporter</label>
+          <input className="input" value={carrier} onChange={e => setCarrier(e.target.value)} placeholder="e.g. TCI Express"/></div>
+        <div className="field"><label className="field-label">Tracking link</label>
+          <input className="input" value={track} onChange={e => setTrack(e.target.value)} placeholder="https://…"/></div>
+        <div className="field"><label className="field-label">Driver / contact no.</label>
+          <input className="input mono" value={contact} onChange={e => setContact(e.target.value)} placeholder="e.g. 98200 00000"/></div>
+      </div>
+      <div className="field"><label className="field-label">Notes</label>
+        <input className="input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Part shipment, damaged carton, etc."/></div>
+
+      <div className="card mt-2">
+        <div className="card-header">
+          <h3 className="card-title">What is on this lorry</h3>
+          <div className="tiny muted">{shippedUnits} of {orderedUnits} ordered unit(s) — reduce a line for a part shipment</div>
+        </div>
+        <div className="card-body flush">
+          <table className="t">
+            <thead><tr><th>Item</th><th className="num">Ordered</th><th className="num">Dispatched</th></tr></thead>
+            <tbody>
+              {(po.items || []).map((it, i) => {
+                const pr = getProduct(it.product_id);
+                return (
+                  <tr key={i}>
+                    <td>{pr ? pr.name : it.product_id}<div className="tiny muted mono">{pr ? pr.code : ''}</div></td>
+                    <td className="num">{it.qty}</td>
+                    <td className="num" style={{ width: 120 }}>
+                      <input className="input num" type="number" min="0" max={it.qty} value={qty[it.product_id] != null ? qty[it.product_id] : ''}
+                        onChange={e => {
+                          const n = Math.max(0, Math.min(Number(it.qty) || 0, Number(e.target.value) || 0));
+                          setQty(q => ({ ...q, [it.product_id]: n }));
+                        }}/>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 window.CreateVendorPOModal = CreateVendorPOModal;
 window.RFQList = RFQList;
 window.VendorPOList = VendorPOList;
 window.VendorPODetail = VendorPODetail;
+window.InTransitModal = InTransitModal;
 window.GRNList = GRNList;
 window.GRNDetail = GRNDetail;
 window.GRNNew = GRNNew;

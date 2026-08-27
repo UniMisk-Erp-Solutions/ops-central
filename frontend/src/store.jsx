@@ -160,6 +160,8 @@ function StoreProvider({ children }) {
         LOADED_TABLES.forEach(t => { next[t] = []; });
         next.__orgId = null;
         window.__opcFeatures = undefined;
+        window.__opcWorkflow = undefined;
+        window.__opcWorkflowProfile = undefined;
         window.__opcOrg = null;
         window.__opcIsMaster = false;
       }
@@ -181,6 +183,11 @@ function StoreProvider({ children }) {
         if (dead) return;
         if (!ctx.error && ctx.data && typeof ctx.data === 'object') {
           window.__opcFeatures = ctx.data.features || {};
+          // How this org's PROCESS runs (receiving direction, PO language, ...).
+          // Absent keys fall back to the historic behaviour at every call site,
+          // so a failed load or an unassigned profile changes nothing.
+          window.__opcWorkflow = ctx.data.workflow || {};
+          window.__opcWorkflowProfile = ctx.data.workflow_profile || 'standard';
           window.__opcOrg = ctx.data.organization || null;
           window.__opcIsMaster = !!ctx.data.is_master_admin;
           // A PLATFORM-ONLY account is a master admin belonging to no organization:
@@ -220,12 +227,22 @@ function StoreProvider({ children }) {
     if (!window.OPC_SB || !realUserId) return;
     const refresh = async () => {
       try {
-        const r = await window.OPC_SB.rpc('opc_my_features');
-        if (r.error || !r.data) return;
-        if (JSON.stringify(r.data) !== JSON.stringify(window.__opcFeatures || {})) {
-          window.__opcFeatures = r.data;
-          setFeatureTick(t => t + 1);          // re-render so the nav updates
+        // ONE call returns both the flags and the workflow, so a platform-admin
+        // change to either reaches the tenant on the next focus at the same cost.
+        const r = await window.OPC_SB.rpc('opc_my_context');
+        if (r.error || !r.data || typeof r.data !== 'object') return;
+        const f = r.data.features || {};
+        const w = r.data.workflow || {};
+        let changed = false;
+        if (JSON.stringify(f) !== JSON.stringify(window.__opcFeatures || {})) {
+          window.__opcFeatures = f; changed = true;
         }
+        if (JSON.stringify(w) !== JSON.stringify(window.__opcWorkflow || {})) {
+          window.__opcWorkflow = w;
+          window.__opcWorkflowProfile = r.data.workflow_profile || 'standard';
+          changed = true;
+        }
+        if (changed) setFeatureTick(t => t + 1);   // re-render so nav + flow update
       } catch (e) { /* fail open — access is unchanged */ }
     };
     window.addEventListener('focus', refresh);

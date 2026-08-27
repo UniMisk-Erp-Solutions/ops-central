@@ -85,7 +85,8 @@ function VGReceivePanel({ so }) {
   const { state, mutate, addToPool, getProduct, getVendor, getUser, currentUser } = useStore();
   const toast = useToast();
   const role = getUser(currentUser)?.role;
-  const canReceive = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const canReceive = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role)
+    || wfReceiving().requesterRoles.includes(role) || wfReceiving().approverRoles.includes(role);
 
   const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
   const acceptedKey = {};
@@ -972,7 +973,8 @@ function VirtualGodownView({ soId, embedded }) {
   const cust = getCustomer(so.customer_id);
   const role = getUser(currentUser)?.role;
   const canEditBOM = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
-  const canReceive = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const canReceive = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role)
+    || wfReceiving().requesterRoles.includes(role) || wfReceiving().approverRoles.includes(role);
   const removeComponent = (pid) => {
     const p = getProduct(pid);
     if (!window.confirm(`Remove ${p ? p.name : pid} from this SO's requirements? Procurement & receiving will no longer expect it.`)) return;
@@ -1047,19 +1049,22 @@ function VirtualGodownView({ soId, embedded }) {
   const doMarkReceived = async () => {
     if (!recvPicks.length) { toast('Tick the items you received'); return; }
     setRecvBusy(true);
-    if (role === 'Stores' || role === 'Org Admin') {
-      // Stores (or admin) posts directly → GRN + client invoice now.
+    // WHO accepts is a per-org workflow setting, not a hard-coded role.
+    //   standard          Purchase/PM tick  -> Stores accepts
+    //   procurement-only  Stores ticks      -> Purchase accepts
+    // The acceptor posts directly (no point asking themselves); anyone else
+    // raises a request the acceptor approves. One path, two directions.
+    const flow = wfReceiving();
+    if (flow.approverRoles.includes(role)) {
       const r = await vgReceiveComponents(so, recvPicks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
       setRecvBusy(false); setRecvSel({});
-      toast(`Received ${r.units} unit(s) · ${r.posted} GRN(s) posted · client invoice auto-raised${r.createdPONeedsMD ? ' · a high-value PO needs MD approval first' : ''}`, 'success');
+      toast(`Received ${r.units} unit(s) · ${r.posted} GRN(s) posted${wfOn('auto_invoice_on_grn') ? ' · client invoice auto-raised' : ''}${r.createdPONeedsMD ? ' · a high-value PO needs MD approval first' : ''}`, 'success');
     } else {
-      // Purchase / PM mark received → the request goes to Stores; the GRN + invoice
-      // are created only when Stores accepts.
       const units = recvPicks.reduce((a, p) => a + (Number(p.qty) || 0), 0);
-      const pr = { id: 'pr-' + Date.now(), by: currentUser, date: TODAY, status: 'Pending', picks: recvPicks.map(p => ({ product_id: p.product_id, qty: p.qty, name: getProduct(p.product_id)?.name || p.product_id })) };
-      mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: [...((x.extra && x.extra.pending_receipts) || []), pr] } } : x), notifications: [{ id: 'n-recq-' + Date.now(), kind: 'grn', text: `${so.so_no}: ${units} unit(s) marked received by ${role} · Stores to accept & post GRN`, date: TODAY, read: false, role: 'Stores' }, ...s.notifications] }), { action: 'receipt-request', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Receipt sent to Stores · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+      const pr = { id: 'pr-' + Date.now(), by: currentUser, date: TODAY, status: 'Pending', flow: flow.mode, picks: recvPicks.map(p => ({ product_id: p.product_id, qty: p.qty, name: getProduct(p.product_id)?.name || p.product_id })) };
+      mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: [...((x.extra && x.extra.pending_receipts) || []), pr] } } : x), notifications: [{ id: 'n-recq-' + Date.now(), kind: 'grn', text: `${so.so_no}: ${units} unit(s) confirmed by ${role} · ${flow.approverLabel} to accept & post GRN`, date: TODAY, read: false, role: flow.approverLabel }, ...s.notifications] }), { action: 'receipt-request', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Receipt sent to ${flow.approverLabel} · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
       setRecvBusy(false); setRecvSel({});
-      toast(`Sent to Stores for acceptance · ${units} unit(s)`, 'success');
+      toast(`Sent to ${flow.approverLabel} for acceptance · ${units} unit(s)`, 'success');
     }
   };
   const totalIn = Object.values(transferredIn).reduce((a, b) => a + b, 0);
@@ -1110,7 +1115,7 @@ function VirtualGodownView({ soId, embedded }) {
               {allReceived
                 ? <span className="badge success dot">All received</span>
                 : canReceive
-                  ? <><span className="tiny muted">Tick what arrived →</span><button className="btn btn-primary btn-sm" disabled={recvBusy || recvPicks.length === 0} onClick={doMarkReceived}><Icon name="check" size={12}/>{recvBusy ? 'Posting…' : `Mark Received (${recvPicks.length})`}</button></>
+                  ? <><span className="tiny muted" title={wfReceiving().note}>Tick what arrived →</span><button className="btn btn-primary btn-sm" disabled={recvBusy || recvPicks.length === 0} onClick={doMarkReceived} title={wfReceiving().approverRoles.includes(role) ? 'Posts the GRN now' : `Goes to ${wfReceiving().approverLabel} to accept`}><Icon name="check" size={12}/>{recvBusy ? 'Posting…' : wfReceiving().approverRoles.includes(role) ? `Receive & post GRN (${recvPicks.length})` : `Confirm & send to ${wfReceiving().approverLabel} (${recvPicks.length})`}</button></>
                   : <span className="tiny muted">{receivable.length} remaining</span>}
             </div>
           </div>

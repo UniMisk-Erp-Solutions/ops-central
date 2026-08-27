@@ -30,6 +30,34 @@ const PLATFORM_FEATURES = [
   { key: 'whatsapp',          label: 'WhatsApp alerts',       routes: '—' },
   { key: 'sms',               label: 'SMS alerts',            routes: '—' },
 ];
+// The behaviour switches a profile is made of. Labels live here; the VALUES and
+// the presets live in the database (workflow_profiles), so onboarding a new kind
+// of company is an INSERT, not a release.
+const WORKFLOW_KEYS = [
+  { key: 'receiving_flow', label: 'Receiving direction', type: 'choice',
+    options: [
+      { value: 'purchase_to_stores', label: 'Purchase marks received -> Stores accepts' },
+      { value: 'stores_to_purchase', label: 'Stores confirms GRN -> Purchase accepts' },
+    ],
+    hint: 'Who ticks what physically arrived, and who accepts it and posts the GRN.' },
+  { key: 'po_item_language', label: 'Vendor PO prints in', type: 'choice',
+    options: [
+      { value: 'ours',   label: 'Our own item names' },
+      { value: 'vendor', label: "The vendor's part numbers" },
+    ],
+    hint: 'Needs the item mapping to be filled in for that vendor; unmapped lines fall back to ours.' },
+  { key: 'intransit_tracking', label: 'Track material in transit', type: 'bool',
+    hint: 'Capture LR / carrier / ETA on the vendor PO, between issuing it and the GRN.' },
+  { key: 'customer_language', label: "Show the customer's own wording", type: 'bool',
+    hint: 'Prints the customer name for an item beside ours on orders and challans.' },
+  { key: 'outward_dispatch', label: 'Outward dispatch + delivery challan', type: 'bool',
+    hint: 'Stock leaves the Virtual Godown in partial quantities on a printable challan.' },
+  { key: 'supervisor_signoff', label: 'Supervisor sign-off before final invoice', type: 'bool',
+    hint: 'Site-implementation orders wait for the supervisor to mark the work done.' },
+  { key: 'auto_invoice_on_grn', label: 'Auto-raise the client invoice on GRN', type: 'bool',
+    hint: 'Off for companies that invoice outside this system.' },
+];
+
 const PLANS = ['free-trial', 'starter', 'pro'];
 const BILLING = ['active', 'pending', 'overdue', 'suspended', 'cancelled'];
 
@@ -287,6 +315,7 @@ function PlatformConsole() {
                             );
                           })}
                         </div>
+                        <OrgWorkflowPanel org={o} onChanged={fields => patch(o.id, fields)}/>
                         <OrgLoginsPanel org={o}/>
                         <OrgConfigPanel org={o}/>
                       </td></tr>
@@ -312,6 +341,114 @@ function PlatformConsole() {
 // ---- per-org permissions / workflow / structure -----------------------------
 // Writes the SAME config blob the tenant app reads, but for any org — so roles
 // and workflow stages can be shaped per tenant without switching into it.
+// ===========================================================================
+// Workflow profile — HOW this organization's process runs
+// ===========================================================================
+// Feature flags decide what a tenant can SEE. This decides how their process
+// behaves. Both are per-org data, so two companies can run opposite flows on
+// the same deployment and a third can be onboarded without a code change.
+function OrgWorkflowPanel({ org, onChanged }) {
+  const [profiles, setProfiles] = React.useState([]);
+  const [busy, setBusy] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const profile = org.workflow_profile || 'standard';
+  const effective = org.workflow || {};
+  const overrides = org.workflow_overrides || {};
+
+  React.useEffect(() => {
+    let dead = false;
+    (async () => {
+      if (!window.OPC_SB) return;
+      const r = await window.OPC_SB.rpc('opc_admin_list_workflow_profiles');
+      if (!dead && !r.error && Array.isArray(r.data)) setProfiles(r.data);
+    })();
+    return () => { dead = true; };
+  }, []);
+
+  const setProfile = async (id) => {
+    setBusy('profile'); setErr('');
+    const r = await window.OPC_SB.rpc('opc_admin_set_workflow_profile', { p_org_id: org.id, p_profile: id });
+    setBusy('');
+    if (r.error) { setErr(r.error.message || String(r.error)); return; }
+    onChanged({ workflow_profile: id, workflow: (r.data && r.data.workflow) || {} });
+  };
+
+  // null clears the override so the org falls back to its preset and keeps
+  // inheriting any future improvement to it.
+  const setKey = async (key, value) => {
+    setBusy(key); setErr('');
+    const r = await window.OPC_SB.rpc('opc_admin_set_workflow_key',
+      { p_org_id: org.id, p_key: key, p_value: value === null ? null : value });
+    setBusy('');
+    if (r.error) { setErr(r.error.message || String(r.error)); return; }
+    onChanged({ workflow: (r.data && r.data.workflow) || {}, workflow_overrides: (r.data && r.data.overrides) || {} });
+  };
+
+  const active = profiles.find(x => x.id === profile);
+
+  return (
+    <div className="card mt-2">
+      <div className="card-header">
+        <h3 className="card-title">Workflow — how this company actually works</h3>
+        <span className="tiny muted">Applies on the tenant's next page load or tab focus</span>
+      </div>
+      <div className="card-body">
+        {err && <div className="tiny mb-2" style={{ color: 'var(--danger)' }}>{err}</div>}
+
+        <div className="field">
+          <label className="field-label">Profile</label>
+          <select className="select" value={profile} disabled={busy === 'profile'}
+            onChange={e => setProfile(e.target.value)} style={{ maxWidth: 420 }}>
+            {profiles.length === 0 && <option value={profile}>{profile}</option>}
+            {profiles.map(pr => <option key={pr.id} value={pr.id}>{pr.label}</option>)}
+          </select>
+          {active && active.description && <div className="tiny muted mt-1">{active.description}</div>}
+        </div>
+
+        <div className="tiny muted mt-2 mb-1">
+          The profile sets every switch below. Change one here and it becomes an <strong>override</strong> for
+          this organization only — everything else still follows the profile.
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 8 }}>
+          {WORKFLOW_KEYS.map(k => {
+            const val = effective[k.key];
+            const isOverride = k.key in overrides;
+            return (
+              <div key={k.key} style={{ border: '1px solid ' + (isOverride ? 'var(--accent)' : 'var(--border)'),
+                borderRadius: 6, padding: '8px 10px', background: 'var(--surface)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
+                  <span className="small" style={{ fontWeight: 500 }}>{k.label}</span>
+                  {isOverride
+                    ? <a className="tiny" style={{ cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }}
+                        onClick={() => setKey(k.key, null)} title="Remove the override and follow the profile again">override · reset</a>
+                    : <span className="tiny muted" style={{ whiteSpace: 'nowrap' }}>from profile</span>}
+                </div>
+                <div className="mt-1">
+                  {k.type === 'bool' ? (
+                    <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={!!val} disabled={busy === k.key}
+                        onChange={e => setKey(k.key, e.target.checked)}/>
+                      <span className="tiny">{val ? 'On' : 'Off'}</span>
+                    </label>
+                  ) : (
+                    <select className="select" value={val == null ? '' : String(val)} disabled={busy === k.key}
+                      onChange={e => setKey(k.key, e.target.value)} style={{ width: '100%' }}>
+                      {k.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  )}
+                </div>
+                <div className="tiny muted mt-1">{k.hint}</div>
+                <div className="tiny muted mono trunc">{k.key}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OrgConfigPanel({ org }) {
   const toast = useToast();
   const [cfg, setCfg] = React.useState(null);
@@ -371,8 +508,22 @@ function NewOrgModal({ onClose, onCreated }) {
   const [admin, setAdmin] = React.useState('');
   const [feats, setFeats] = React.useState(() =>
     Object.fromEntries(PLATFORM_FEATURES.map(f => [f.key, true])));
+  const [profile, setProfile] = React.useState('standard');
+  const [profiles, setProfiles] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const baseDomain = (window.OPC_TENANT && window.OPC_TENANT.getAppBaseDomain()) || '';
+
+  // The preset list comes from the DB, so a new kind of company becomes
+  // available here the moment it is seeded — no rebuild of this screen.
+  React.useEffect(() => {
+    let dead = false;
+    (async () => {
+      if (!window.OPC_SB) return;
+      const r = await window.OPC_SB.rpc('opc_admin_list_workflow_profiles');
+      if (!dead && !r.error && Array.isArray(r.data)) setProfiles(r.data);
+    })();
+    return () => { dead = true; };
+  }, []);
 
   const autoSlug = (v) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63);
 
@@ -384,8 +535,16 @@ function NewOrgModal({ onClose, onCreated }) {
       p_name: name.trim(), p_slug: s, p_subdomain: sub.trim() || null,
       p_plan: plan, p_features: feats, p_admin_user_id: admin || null,
     });
+    if (r.error) { setBusy(false); toast(r.error.message || 'Could not create organization'); return; }
+    // Assign the workflow profile through the ONE audited creator + a second
+    // call, rather than a parallel "create with everything" function that would
+    // have to be kept in step with it.
+    const newId = r.data && (r.data.id || (r.data.organization && r.data.organization.id));
+    if (newId && profile && profile !== 'standard') {
+      const wr = await window.OPC_SB.rpc('opc_admin_set_workflow_profile', { p_org_id: newId, p_profile: profile });
+      if (wr.error) toast(`${name} created, but the workflow profile did not apply: ${wr.error.message}`);
+    }
     setBusy(false);
-    if (r.error) { toast(r.error.message || 'Could not create organization'); return; }
     // Creating an org WITH a subdomain must provision the host too — otherwise the
     // DB has the subdomain but Vercel never heard of it and the URL is "not secure".
     if (sub.trim() && window.__opcProvisionHost) {
@@ -424,6 +583,16 @@ function NewOrgModal({ onClose, onCreated }) {
           <select className="select" value={plan} onChange={e => setPlan(e.target.value)}>
             {PLANS.map(p => <option key={p} value={p}>{p}</option>)}
           </select></div>
+      </div>
+      <div className="field mt-2"><label className="field-label">Workflow profile</label>
+        <select className="select" value={profile} onChange={e => setProfile(e.target.value)}>
+          {profiles.length === 0 && <option value="standard">Standard (full ERP)</option>}
+          {profiles.map(pr => <option key={pr.id} value={pr.id}>{pr.label}</option>)}
+        </select>
+        <div className="tiny muted mt-1">
+          {(profiles.find(x => x.id === profile) || {}).description
+            || 'Decides how this company\'s process runs — receiving direction, whose part numbers a PO prints in, dispatch. Changeable later.'}
+        </div>
       </div>
       <div className="field mt-2"><label className="field-label">First admin <span className="tiny muted">(optional — an existing login)</span></label>
         <select className="select" value={admin} onChange={e => setAdmin(e.target.value)}>
@@ -589,3 +758,4 @@ function OrgLoginsPanel({ org }) {
 }
 
 window.PlatformConsole = PlatformConsole;
+window.OrgWorkflowPanel = OrgWorkflowPanel;

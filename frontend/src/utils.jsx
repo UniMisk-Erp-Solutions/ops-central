@@ -203,8 +203,62 @@ function Modal({ title, children, onClose, footer, size }) {
   );
 }
 
+// ===== Party name mapping =====
+// One physical item carries three names: the customer's, ours, and the vendor's.
+// This hook fetches the outer name for ONE party, as { product_id: {code,name,uom} }.
+//
+// Cached per (scope, party) for the life of the tab: a vendor's part numbers do
+// not change while a PO is open, and the box is small — re-fetching on every
+// render of every line would be the expensive way to be correct.
+const __aliasCache = {};
+function useAliasMap(scope, partyId) {
+  const key = String(scope || '') + '|' + String(partyId || '');
+  const [map, setMap] = React.useState(() => __aliasCache[key] || {});
+  React.useEffect(() => {
+    let dead = false;
+    if (!window.OPC_SB || !scope || !partyId) { setMap({}); return; }
+    if (__aliasCache[key]) { setMap(__aliasCache[key]); return; }
+    (async () => {
+      try {
+        const r = await window.OPC_SB.rpc('opc_alias_map', { p_scope: scope, p_party_id: partyId });
+        if (dead) return;
+        const m = (!r.error && r.data && typeof r.data === 'object') ? r.data : {};
+        __aliasCache[key] = m;
+        setMap(m);
+      } catch (e) { if (!dead) setMap({}); }   // fail open -> our own names
+    })();
+    return () => { dead = true; };
+  }, [key]);
+  return map;
+}
+// Call after writing a mapping so open screens pick it up.
+function invalidateAliasMap(scope, partyId) {
+  if (scope == null) { Object.keys(__aliasCache).forEach(k => delete __aliasCache[k]); return; }
+  delete __aliasCache[String(scope) + '|' + String(partyId || '')];
+}
+
+// Resolve the name to PRINT for one line, honouring the org's po_item_language.
+// Always returns both, so a screen can show the counterpart underneath and
+// nobody has to guess which catalogue a code belongs to.
+function partyItemName(aliasMap, product, mode) {
+  const a = (aliasMap || {})[product ? product.id : ''] || null;
+  const ourCode = product ? (product.code || '') : '';
+  const ourName = product ? (product.name || '') : '';
+  const useTheirs = mode === 'vendor' || mode === 'customer';
+  const theirCode = a && a.code ? a.code : '';
+  const theirName = a && a.name ? a.name : '';
+  const mapped = !!(theirCode || theirName);
+  if (useTheirs && mapped) {
+    return { code: theirCode || ourCode, name: theirName || ourName,
+             altCode: ourCode, altName: ourName, mapped: true, uom: a.uom || null };
+  }
+  return { code: ourCode, name: ourName,
+           altCode: theirCode, altName: theirName, mapped: mapped, uom: a ? a.uom : null };
+}
+
 Object.assign(window, {
   inrFmt, inr, inrK, fmtDate, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
   Icon, StatusBadge, PriorityBadge, Avatar, Delta, Toggle, Modal,
   ToastProvider, useToast,
+  useAliasMap, invalidateAliasMap, partyItemName,
 });
