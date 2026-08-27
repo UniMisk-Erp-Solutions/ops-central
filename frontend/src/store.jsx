@@ -145,6 +145,27 @@ function StoreProvider({ children }) {
     return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, []);
 
+  // Keep per-org feature access fresh without polling: re-check only when the tab
+  // regains focus, and only re-render if something actually changed. One tiny RPC,
+  // so a platform-admin toggle reaches the tenant within seconds at almost no cost.
+  const [, setFeatureTick] = React.useState(0);
+  React.useEffect(() => {
+    if (!window.OPC_SB || !realUserId) return;
+    const refresh = async () => {
+      try {
+        const r = await window.OPC_SB.rpc('opc_my_features');
+        if (r.error || !r.data) return;
+        if (JSON.stringify(r.data) !== JSON.stringify(window.__opcFeatures || {})) {
+          window.__opcFeatures = r.data;
+          setFeatureTick(t => t + 1);          // re-render so the nav updates
+        }
+      } catch (e) { /* fail open — access is unchanged */ }
+    };
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    return () => { window.removeEventListener('focus', refresh); window.removeEventListener('online', refresh); };
+  }, [realUserId]);
+
   // Persist app state locally (offline cache; source of truth is Supabase).
   React.useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}

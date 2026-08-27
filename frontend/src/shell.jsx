@@ -54,6 +54,13 @@ function Sidebar() {
       allowed.includes(it.id) && !(window.featureBlocks && window.featureBlocks(it.id))) }))
     .filter(g => g.items.length > 0);
 
+  // Platform console — visible only to platform (master) admins, never to tenants.
+  if (window.__opcIsMaster) {
+    filteredGroups.push({ label: 'Platform', items: [
+      { id: 'platform', label: 'Organizations', icon: 'layers' },
+    ] });
+  }
+
   return (
     <aside className="sidebar">
       <div style={{ padding: '4px 14px 10px', fontSize: 11, color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between' }}>

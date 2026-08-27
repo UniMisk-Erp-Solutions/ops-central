@@ -63,6 +63,7 @@ function App() {
   let Content;
   if (route === 'dashboard') Content = <Dashboard/>;
   else if (route === 'inbox') Content = <ApprovalInbox/>;
+  else if (route === 'platform') Content = <PlatformConsole/>;
   else if (route === 'sales-orders') Content = <SalesOrdersList/>;
   else if (route === 'sales-orders/new') Content = <SalesOrderNew/>;
   else if (parts[0] === 'sales-orders' && parts[1]) Content = <SalesOrderDetail soId={parts[1]}/>;

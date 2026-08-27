@@ -129,6 +129,8 @@ function canAccess(role, route) {
   // Strip subpaths
   const root = route.split('/')[0];
   const allowed = perm(role).nav;
+  // The platform console is gated on being a PLATFORM admin, not on an app role.
+  if (root === 'platform') return !!(typeof window !== 'undefined' && window.__opcIsMaster);
   // A capability switched off for this organization hides its routes entirely.
   if (featureBlocks(root)) return false;
   // A specific SO's invoice (invoices/<soId>[/<invId>]) is opened from the SO or
