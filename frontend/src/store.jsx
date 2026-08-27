@@ -145,6 +145,25 @@ function StoreProvider({ children }) {
     return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, []);
 
+  // Cached state is per-BROWSER but the app is multi-tenant: signing in as another
+  // organization's user must never show the previous tenant's rows. The moment the
+  // identity changes, drop every cached tenant table and re-load from the DB.
+  React.useEffect(() => {
+    if (!realUserId) return;
+    setState(prev => {
+      if (prev.__uid === realUserId) return prev;
+      const next = { ...prev, __uid: realUserId, loaded: false };
+      if (prev.__uid) {              // a DIFFERENT user was cached here -> purge
+        LOADED_TABLES.forEach(t => { next[t] = []; });
+        next.__orgId = null;
+        window.__opcFeatures = undefined;
+        window.__opcOrg = null;
+        window.__opcIsMaster = false;
+      }
+      return next;
+    });
+  }, [realUserId]);
+
   // Tenant context + per-org feature flags. Deliberately its OWN effect, keyed on
   // identity only: it used to hang off the config load, which returns early when
   // an org has no config row (every brand-new tenant) — so features silently never
@@ -163,12 +182,23 @@ function StoreProvider({ children }) {
           window.__opcIsMaster = !!ctx.data.is_master_admin;
           // A PLATFORM-ONLY account is a master admin belonging to no organization:
           // it gets the standalone console, never a tenant's app.
-          setState(prev => ({ ...prev, platform: {
-            ready: true,
-            isMaster: !!ctx.data.is_master_admin,
-            orgId: ctx.data.active_org_id || null,
-            org: ctx.data.organization || null,
-          } }));
+          const orgId = ctx.data.active_org_id || null;
+          setState(prev => {
+            const next = { ...prev, platform: {
+              ready: true,
+              isMaster: !!ctx.data.is_master_admin,
+              orgId,
+              org: ctx.data.organization || null,
+            } };
+            // Switched into a different organization -> the cached rows belong to
+            // the previous tenant. Drop them and re-load.
+            if (prev.__orgId && orgId && prev.__orgId !== orgId) {
+              LOADED_TABLES.forEach(t => { next[t] = []; });
+              next.loaded = false;
+            }
+            next.__orgId = orgId;
+            return next;
+          });
         } else {
           setState(prev => ({ ...prev, platform: { ready: true, isMaster: false, orgId: null, org: null } }));
         }
@@ -281,6 +311,11 @@ function StoreProvider({ children }) {
         // it, so offline work is recovered — not lost. (Skip notifications so
         // locally-dismissed ones don't reappear.)
         const cur = stateRef.current;
+        // Only rows cached by THIS user may be recovered. Rows cached while a
+        // different tenant was signed in must never be pushed back — they belong
+        // to another organization (RLS would reject them anyway, but we must not
+        // even show them).
+        const sameIdentity = cur.__uid === realUserId;
         const RECOVER_SKIP = new Set(['notifications']);
         const merged = {};
         const toPush = [];
@@ -290,7 +325,9 @@ function StoreProvider({ children }) {
           const pk = SYNCED_TABLES[t];
           if (!pk || RECOVER_SKIP.has(t)) { merged[t] = data; return; }
           const dbIds = new Set(data.map(r => r[pk]));
-          const localOnly = (cur[t] || []).filter(r => r && r[pk] != null && !dbIds.has(r[pk]));
+          const localOnly = sameIdentity
+            ? (cur[t] || []).filter(r => r && r[pk] != null && !dbIds.has(r[pk]))
+            : [];
           merged[t] = localOnly.length ? [...localOnly, ...data] : data;
           localOnly.forEach(r => toPush.push({ t, pk, r }));
         });
@@ -298,6 +335,7 @@ function StoreProvider({ children }) {
           const next = { ...prev };
           Object.keys(merged).forEach(t => { next[t] = merged[t]; });
           next.loaded = true;   // DB data is in — detail screens may now decide "not found"
+          next.__uid = realUserId;
           return next;
         });
         // Persist the recovered local-only rows back to the DB.

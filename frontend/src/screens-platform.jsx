@@ -85,6 +85,27 @@ function PlatformConsole() {
     toast(`${key} ${next ? 'enabled' : 'disabled'} for ${org.name}`, 'success');
   };
 
+  // Register the host on Vercel + write its Cloudflare TXT + verify.
+  // Used by BOTH the inline subdomain edit and the New-Organization modal —
+  // creating an org with a subdomain used to skip this entirely.
+  const provisionHost = async (host) => {
+    const sess = await window.OPC_SB.auth.getSession();
+    const jwt = (sess.data && sess.data.session && sess.data.session.access_token) || '';
+    const env = window.OPC_ENV || {};
+    const res = await fetch(String(env.SUPABASE_URL).replace(/\/$/, '') + '/functions/v1/main/provision-subdomain', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: env.SUPABASE_ANON_KEY,
+        Authorization: 'Bearer ' + env.SUPABASE_ANON_KEY,
+        'x-caller-jwt': jwt,
+      },
+      body: JSON.stringify({ host }),
+    });
+    return await res.json().catch(() => ({}));
+  };
+  window.__opcProvisionHost = provisionHost;
+
   const saveSubdomain = async (org) => {
     const val = subEdit[org.id];
     if (val === undefined) return;
@@ -102,20 +123,7 @@ function PlatformConsole() {
     toast('Subdomain saved · provisioning the host…', 'success');
     const host = sub + '.' + baseDomain;
     try {
-      const sess = await window.OPC_SB.auth.getSession();
-      const jwt = (sess.data && sess.data.session && sess.data.session.access_token) || '';
-      const env = window.OPC_ENV || {};
-      const res = await fetch(String(env.SUPABASE_URL).replace(/\/$/, '') + '/functions/v1/main/provision-subdomain', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: env.SUPABASE_ANON_KEY,
-          Authorization: 'Bearer ' + env.SUPABASE_ANON_KEY,
-          'x-caller-jwt': jwt,
-        },
-        body: JSON.stringify({ host }),
-      });
-      const j = await res.json().catch(() => ({}));
+      const j = await provisionHost(host);
       setBusy('');
       if (j && j.needs_manual_txt) {
         patch(org.id, { provision: 'manual' });
@@ -376,7 +384,20 @@ function NewOrgModal({ onClose, onCreated }) {
     });
     setBusy(false);
     if (r.error) { toast(r.error.message || 'Could not create organization'); return; }
-    toast(`${name} created`, 'success');
+    // Creating an org WITH a subdomain must provision the host too — otherwise the
+    // DB has the subdomain but Vercel never heard of it and the URL is "not secure".
+    if (sub.trim() && window.__opcProvisionHost) {
+      toast(`${name} created · provisioning ${sub.trim()}.${baseDomain}…`, 'success');
+      try {
+        const pj = await window.__opcProvisionHost(sub.trim() + '.' + baseDomain);
+        if (pj && pj.needs_manual_txt) toast('Add TXT ' + pj.needs_manual_txt.name + ' = ' + pj.needs_manual_txt.value);
+        else if (pj && pj.ok && pj.verified) toast(sub.trim() + '.' + baseDomain + ' is live', 'success');
+        else if (pj && pj.ok) toast('DNS propagating — re-save the subdomain shortly to finish');
+        else toast((pj && pj.error) || 'Organization created, but provisioning failed');
+      } catch (e) { toast('Organization created, but provisioning failed: ' + String(e.message || e)); }
+    } else {
+      toast(`${name} created`, 'success');
+    }
     onCreated();
   };
 
