@@ -94,6 +94,13 @@ function App() {
   else if (route === 'audit') Content = <AuditLog/>;
   else Content = <Dashboard/>;
 
+  // ---- PLATFORM-ONLY ACCOUNT -------------------------------------------
+  // A master admin that belongs to no organization never sees a tenant's app:
+  // no sidebar, no tenant data, no ERP routes. Just the platform console.
+  if (state.platform && state.platform.ready && state.platform.isMaster && !state.platform.orgId) {
+    return <PlatformOnlyApp/>;
+  }
+
   return (
     <div className="app">
       <Topbar onOpenTweaks={openTweaks}/>
@@ -102,6 +109,35 @@ function App() {
         {Content}
       </main>
       <OpcTweaks t={t} setTweak={setTweak}/>
+    </div>
+  );
+}
+
+// === Standalone platform console (its own page, outside any organization) ===
+function PlatformOnlyApp() {
+  const { state, getUser, currentUser } = useStore();
+  const me = getUser(currentUser) || {};
+  const signOut = async () => {
+    try { if (window.OPC_SB) await window.OPC_SB.auth.signOut(); } catch (e) {}
+    window.location.hash = '';
+    window.location.reload();
+  };
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 18px',
+        borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+        <div className="brand-mark" style={{ width: 28, height: 28, fontSize: 14 }}>P</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>OP Central · Platform</div>
+          <div className="tiny muted">Developer console — not inside any organization</div>
+        </div>
+        <span className="badge accent dot">platform admin</span>
+        <span className="small muted">{me.email || me.name || ''}</span>
+        <button className="btn btn-sm" onClick={signOut}>Sign out</button>
+      </div>
+      <div style={{ padding: 0 }}>
+        <PlatformConsole/>
+      </div>
     </div>
   );
 }

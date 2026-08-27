@@ -207,6 +207,16 @@ function StoreProvider({ children }) {
             window.__opcFeatures = ctx.data.features || {};
             window.__opcOrg = ctx.data.organization || null;
             window.__opcIsMaster = !!ctx.data.is_master_admin;
+            // A PLATFORM-ONLY account is a master admin that belongs to no
+            // organization. It gets its own standalone console, never a tenant's app.
+            setState(prev => ({ ...prev, platform: {
+              ready: true,
+              isMaster: !!ctx.data.is_master_admin,
+              orgId: ctx.data.active_org_id || null,
+              org: ctx.data.organization || null,
+            } }));
+          } else {
+            setState(prev => ({ ...prev, platform: { ready: true, isMaster: false, orgId: null, org: null } }));
           }
         } catch (e) { /* fail open — features stay unrestricted */ }
         const customProds = Array.isArray(rest.custom_products) ? rest.custom_products : [];
