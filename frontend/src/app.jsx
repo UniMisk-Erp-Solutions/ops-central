@@ -12,7 +12,7 @@ function Splash({ label }) {
 }
 
 function App() {
-  const { route, currentUser, getUser, navigate, authReady } = useStore();
+  const { state, route, currentUser, getUser, navigate, authReady } = useStore();
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const u = getUser(currentUser);
 
