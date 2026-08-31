@@ -618,6 +618,8 @@ window.SplitAllocatorModal = SplitAllocatorModal;
 function VendorPOList() {
   const { state, navigate, getVendor, getSO, getCustomer, currentUser, getUser } = useStore();
   const [showPO, setShowPO] = React.useState(false);
+  const [allocSO, setAllocSO] = React.useState('');     // bulk assign for one SO
+  const [pickAlloc, setPickAlloc] = React.useState(false);
   const [search, setSearch] = React.useState('');
   const [vendorF, setVendorF] = React.useState('');
   const [statusF, setStatusF] = React.useState('');
@@ -674,10 +676,16 @@ function VendorPOList() {
         </div>
         <div className="page-actions">
           <button className={`btn ${groupBySO ? 'btn-primary' : ''}`} onClick={() => setGroupBySO(g => !g)}><Icon name="layers" size={13}/>{groupBySO ? 'Grouped by project' : 'Flat list'}</button>
-          {canCreate && <button className="btn btn-primary" onClick={() => setShowPO(true)}><Icon name="plus" size={13}/>Create Vendor PO</button>}
+          {canCreate && <button className="btn btn-primary" onClick={() => setPickAlloc(true)}
+            title="Pick vendors and prices for a whole order at once, then raise every PO together">
+            <Icon name="layers" size={13}/>Assign vendors &amp; prices</button>}
+          {canCreate && <button className="btn" onClick={() => setShowPO(true)}><Icon name="plus" size={13}/>Single PO</button>}
         </div>
       </div>
       {showPO && <CreateVendorPOModal onClose={() => setShowPO(false)}/>}
+      {pickAlloc && <AllocSOPicker onClose={() => setPickAlloc(false)}
+        onPick={id => { setPickAlloc(false); setAllocSO(id); }}/>}
+      {allocSO && <VendorAllocator soId={allocSO} onClose={() => setAllocSO('')}/>}
 
       <div className="card">
         <div className="filter-bar">
@@ -2123,7 +2131,7 @@ function InTransitModal({ po, onClose }) {
         Material has left <strong>{v ? v.name : 'the vendor'}</strong> but has not been received yet.
         Recording it here shows the units as <strong>In transit</strong> on SCM Tracking until a GRN is posted.
       </div>
-      <div className="grid-2">
+      <div className="field-row">
         <div className="field"><label className="field-label">Dispatched on</label>
           <input className="input" type="date" value={shippedOn} onChange={e => setShippedOn(e.target.value)}/></div>
         <div className="field"><label className="field-label">Expected arrival (ETA)</label>
