@@ -134,5 +134,55 @@ console.log('\n[5] Stores can receive, not only Purchase');
   check(`${r} can open the receive dialog`, ok, true);
 });
 
-console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — receiving is one click and cannot double-count');
+// ---------------------------------------------------------------------------
+// A queue nobody can find is a queue nobody clears. Stores confirm a receipt and
+// it goes to Purchase — who could only see it on the GRN screen, and only if
+// they already knew to look there.
+// ---------------------------------------------------------------------------
+console.log('\n[6] the pending receipt reaches Purchase wherever they are standing');
+const SO_PENDING = {
+  id: 'so-1', so_no: 'SO/FY26/0001', customer_id: 'c1', status: 'Draft', lines: [],
+  extra: { pending_receipts: [{
+    id: 'pr-1', by: 'u-stores', date: '2026-05-21', status: 'Pending', flow: 'stores_to_purchase',
+    picks: [{ product_id: 'p1', qty: 1, name: 'Cisco Catalyst 9600 XE 17.12 UNIVERSAL' }],
+  }] },
+};
+function renderAs(Comp, role, props) {
+  const st = Object.assign({}, STATE, { sales_orders: [SO_PENDING] });
+  const store = {
+    state: st, route: 'godown', currentUser: 'u1', authReady: true, loaded: true,
+    navigate: () => {}, mutate: () => {}, saveConfig: () => {}, addToPool: () => {},
+    consumeFromPool: () => {}, syncErrors: [], retrySync: () => {}, soSubtotal: () => 0,
+    getCustomer: () => undefined, getVendor: id => STATE.vendors.find(v => v.id === id),
+    getProduct: id => PRODUCTS.find(p => p.id === id), getCategory: () => undefined,
+    getUser: id => (id === 'u-stores'
+      ? { id: id, name: 'Stores Guy', role: 'Stores' }
+      : { id: 'u1', name: 'T', role: role }),
+    getSO: id => st.sales_orders.find(x => x.id === id),
+  };
+  return ReactDOMServer.renderToStaticMarkup(
+    React.createElement(sandbox.Store.Provider, { value: store },
+      React.createElement(sandbox.ToastProvider, null, React.createElement(Comp, props || {}))));
+}
+
+let out = renderAs(sandbox.PendingReceiptsPanel, 'Purchase', { soId: 'so-1' });
+check('Purchase is shown the confirmed receipt', /Awaiting Purchase acceptance/.test(out), true);
+check('...naming who confirmed it', /Stores Guy/.test(out), true);
+check('...with the items listed', /Cisco Catalyst 9600 XE/.test(out), true);
+check('...and an Accept action', /post GRN/.test(out), true);
+check('...and a Reject action', /Reject/.test(out), true);
+
+out = renderAs(sandbox.PendingReceiptsPanel, 'Stores', { soId: 'so-1' });
+check('Stores see it waiting, with no Accept button of their own',
+  /awaiting Purchase/.test(out) && !/post GRN/.test(out), true);
+
+out = renderAs(sandbox.PendingReceiptsPanel, 'Purchase', {});
+check('unscoped, it names the order it belongs to', out.indexOf('SO/FY26/0001') !== -1, true);
+
+// The wrapper always renders its own toast host, so check the PANEL added
+// nothing rather than that the whole tree is empty.
+check('it disappears when nothing is pending',
+  /Awaiting|post GRN/.test(renderAs(sandbox.PendingReceiptsPanel, 'Purchase', { soId: 'no-such-order' })), false);
+
+console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — one-click receiving, no double-counting, and the queue is findable');
 process.exit(bad ? 1 : 0);
