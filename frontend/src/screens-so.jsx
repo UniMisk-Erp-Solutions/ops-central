@@ -6,6 +6,7 @@ function SalesOrdersList() {
   const allowCreate = canDo(role, 'createSO') || role === 'Org Admin';
   const [filter, setFilter] = React.useState('all');
   const [search, setSearch] = React.useState('');
+  const [showImport, setShowImport] = React.useState(false);
 
   // A Supervisor only ever sees the SOs whose implementation is assigned to them.
   const visibleSOs = role === 'Supervisor'
@@ -34,6 +35,7 @@ function SalesOrdersList() {
 
   return (
     <div className="page">
+      {showImport && <SheetImportModal onClose={() => setShowImport(false)}/>}
       <div className="page-header">
         <div>
           <h1 className="page-title">Sales Orders</h1>
@@ -42,6 +44,12 @@ function SalesOrdersList() {
         <div className="page-actions">
           <button className="btn"><Icon name="filter" size={13}/>Filter</button>
           <button className="btn"><Icon name="download" size={13}/>Export</button>
+          {canImportSheet(role) && (
+            <button className="btn" onClick={() => setShowImport(true)}
+              title="Turn the customer's working sheet (Excel / CSV) into a draft order">
+              <Icon name="upload" size={13}/>Import customer sheet
+            </button>
+          )}
           {allowCreate && (
             <button className="btn btn-primary" onClick={() => navigate('sales-orders/new')}>
               <Icon name="plus" size={13}/>New Sales Order

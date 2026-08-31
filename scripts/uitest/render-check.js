@@ -106,7 +106,8 @@ const NEEDED = ['useStore', 'StoreProvider', 'App', 'useAliasMap', 'partyItemNam
   'wfReceiving', 'featureOn', 'canAccess', 'perm', 'Icon', 'Modal', 'useToast', 'inr', 'fmtDate',
   'InTransitModal', 'OrgWorkflowPanel', 'PlatformConsole', 'scmLineTotals', 'SCMTracking',
   'ItemMapping', 'SheetImportModal', 'VendorPODetail', 'GRNList', 'CustomerChallanModal',
-  'OutwardDispatchModal', 'CrashBoundary'];
+  'OutwardDispatchModal', 'CrashBoundary',
+  'impParseMatrix', 'impBuildLines', 'canImportSheet'];
 const missing = NEEDED.filter(n => typeof base[n] === 'undefined');
 if (missing.length) fail('globals never reached window: ' + missing.join(', '));
 else console.log('  ok  all files execute · all cross-file globals present');
