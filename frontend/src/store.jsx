@@ -58,26 +58,73 @@ function __auditRow(a) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// The real columns of each table, asked of the database once.
+//
+// The store upserts its in-memory rows straight to Supabase. Any screen that
+// puts an extra field on a row makes PostgREST reject the WHOLE row — which is
+// how an imported sales order came to exist only in one browser: the importer
+// set imported_from / po_ref / created_by, none of which are columns, so the
+// insert failed while products and customers around it saved.
+//
+// Asking the database beats hard-coding a list, which rots the next time a
+// migration adds a column. Until the answer arrives rows are sent unfiltered,
+// exactly as before — so this can only ever prevent failures, never cause them.
+// ---------------------------------------------------------------------------
+let __syncCols = null;
+async function __loadSyncColumns() {
+  if (__syncCols || !window.OPC_SB) return __syncCols;
+  try {
+    const r = await window.OPC_SB.rpc('opc_sync_columns');
+    if (!r.error && r.data && typeof r.data === 'object') {
+      const m = {};
+      Object.keys(r.data).forEach(t => { m[t] = new Set(r.data[t] || []); });
+      __syncCols = m;
+    }
+  } catch (e) { /* keep sending everything */ }
+  return __syncCols;
+}
+function __forTable(table, row) {
+  const cols = __syncCols && __syncCols[table];
+  if (!cols || !row || typeof row !== 'object') return row;
+  const out = {};
+  Object.keys(row).forEach(k => { if (cols.has(k)) out[k] = row[k]; });
+  return out;
+}
+
+// A write that fails must never look like a write that succeeded. The console
+// is not a place users look — the app now says so on screen and keeps the
+// details for a retry.
+function __syncFailed(table, op, message, rowId) {
+  try {
+    if (typeof window.__opcOnSyncError === 'function') {
+      window.__opcOnSyncError({ table, op, message, rowId, at: Date.now() });
+    }
+  } catch (e) { /* reporting must never break the app */ }
+  console.error('[OPC] sync ' + op + ' ' + table, message);
+}
+
 // Diff prev vs next for one table and push changes to Supabase (optimistic;
-// the UI already updated). Row objects map 1:1 to table columns by design.
+// the UI already updated).
 async function __syncTable(table, pk, prevArr, nextArr) {
   const sb = window.OPC_SB;
   if (!sb) return;
+  await __loadSyncColumns();
   const prevMap = new Map((prevArr || []).map(r => [r[pk], r]));
   const next = nextArr || [];
   for (const row of next) {
     const before = prevMap.get(row[pk]);
     if (!before || JSON.stringify(before) !== JSON.stringify(row)) {
-      const payload = table === 'audit' ? __auditRow(row) : row;
+      const payload = __forTable(table, table === 'audit' ? __auditRow(row) : row);
       const { error } = await sb.from(table).upsert(payload, { onConflict: pk });
-      if (error) console.error('[OPC] sync upsert ' + table, error.message);
+      if (error) __syncFailed(table, 'upsert', error.message, row[pk]);
     }
   }
   const nextIds = new Set(next.map(r => r[pk]));
   const dels = [...prevMap.keys()].filter(id => !nextIds.has(id));
   if (dels.length) {
     const { error } = await sb.from(table).delete().in(pk, dels);
-    if (error) console.error('[OPC] sync delete ' + table, error.message);
+    if (error) __syncFailed(table, 'delete', error.message, dels.join(','));
   }
 }
 
@@ -310,6 +357,31 @@ function StoreProvider({ children }) {
     })();
     return () => { dead = true; };
   }, [realUserId]);
+
+  // A failed write is the most dangerous thing this app can do quietly: the user
+  // sees their record on screen, it is only in localStorage, and every other
+  // browser shows nothing. Route those failures into state so the shell can say
+  // so, and remember them for a retry.
+  const [syncErrors, setSyncErrors] = React.useState([]);
+  React.useEffect(() => {
+    window.__opcOnSyncError = (e) => {
+      setSyncErrors(list => {
+        if (list.some(x => x.table === e.table && x.rowId === e.rowId && x.message === e.message)) return list;
+        return [...list.slice(-9), e];
+      });
+    };
+    return () => { window.__opcOnSyncError = null; };
+  }, []);
+  // Re-push everything the tables hold; used by the banner's Retry.
+  const retrySync = React.useCallback(async () => {
+    const cur = stateRef.current;
+    setSyncErrors([]);
+    __syncCols = null;
+    await __loadSyncColumns();
+    const empty = {};
+    Object.keys(SYNCED_TABLES).forEach(t => { empty[t] = []; });
+    __syncTables(empty, cur);
+  }, []);
 
   // Keep per-org feature access fresh without polling: re-check only when the tab
   // regains focus, and only re-render if something actually changed. One tiny RPC,
@@ -777,6 +849,7 @@ function StoreProvider({ children }) {
     currentUser, setCurrentUser,
     getCustomer, getVendor, getProduct, getCategory, getUser, getSO,
     soSubtotal, soBillAdjustment, soBilledSubtotal, soTotalWithGST,
+    syncErrors, retrySync,
   };
 
   return <Store.Provider value={ctx}>{children}</Store.Provider>;

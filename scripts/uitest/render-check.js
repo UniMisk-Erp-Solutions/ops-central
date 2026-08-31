@@ -108,7 +108,8 @@ const NEEDED = ['useStore', 'StoreProvider', 'App', 'useAliasMap', 'partyItemNam
   'ItemMapping', 'SheetImportModal', 'VendorPODetail', 'GRNList', 'CustomerChallanModal',
   'OutwardDispatchModal', 'CrashBoundary',
   'impParseMatrix', 'impBuildLines', 'canImportSheet',
-  'VendorAllocator', 'AllocSOPicker', 'allocBuildRows', 'allocLastBuy'];
+  'VendorAllocator', 'AllocSOPicker', 'allocBuildRows', 'allocLastBuy',
+  'SyncErrorBanner'];
 const missing = NEEDED.filter(n => typeof base[n] === 'undefined');
 if (missing.length) fail('globals never reached window: ' + missing.join(', '));
 else console.log('  ok  all files execute · all cross-file globals present');
@@ -140,6 +141,7 @@ function makeStore(s, { role = 'Org Admin', seeded = false, mixed = false, route
     state: st, route, currentUser: 'u1', authReady: true, loaded: true,
     navigate: () => {}, mutate: () => {}, saveConfig: () => {}, setRoute: () => {},
     addToPool: () => {}, consumeFromPool: () => {}, signOut: () => {},
+    syncErrors: [], retrySync: () => {},
     getCustomer: id => st.customers.find(c => c.id === id),
     getVendor: id => st.vendors.find(v => v.id === id),
     getProduct: id => st.products.find(p => p.id === id),
