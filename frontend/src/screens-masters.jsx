@@ -11,7 +11,6 @@ function CustomersList() {
           <div className="page-sub">{state.customers.length} customer{state.customers.length !== 1 ? 's' : ''} · GSTIN validated</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="upload" size={13}/>Import (Excel / Tally)</button>
           <button className="btn btn-primary" onClick={() => setShowNew(true)}><Icon name="plus" size={13}/>New customer</button>
         </div>
       </div>
@@ -170,7 +169,6 @@ function VendorsList() {
           <div className="page-sub">{state.vendors.length} vendors · used by Purchase when floating RFQs / POs</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="upload" size={13}/>Import</button>
           <button className="btn btn-primary" onClick={() => setShowNew(true)}><Icon name="plus" size={13}/>New vendor</button>
         </div>
       </div>
@@ -224,7 +222,6 @@ function ProductsList() {
           <div className="page-sub">Product catalogue · category BOMs auto-load when picked in SO line</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="upload" size={13}/>Import</button>
           <button className="btn btn-primary"><Icon name="plus" size={13}/>New {tab === 'products' ? 'product' : tab === 'bom' ? 'BOM' : 'category'}</button>
         </div>
       </div>
@@ -419,8 +416,6 @@ function AuditLog() {
           <div className="page-sub">Every write is logged · before/after diff · 7-year retention (GST)</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="filter" size={13}/>Filter</button>
-          <button className="btn"><Icon name="download" size={13}/>Export</button>
         </div>
       </div>
 

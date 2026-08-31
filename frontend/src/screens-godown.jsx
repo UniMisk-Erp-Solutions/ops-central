@@ -495,6 +495,53 @@ function PoolReceiptModal({ receipt: r, so, onClose }) {
 
 // Small proof/history of Master-Pool movements for this SO (add-from / send-to),
 // each row a POOL/… receipt. Click a row → printable receipt. Mirrors the GRN screen.
+// Goods receipts raised against this order, where the people who raise them
+// work. Same records as the GRN screen — one source, shown twice.
+function VGGrnCard({ so }) {
+  const { state, navigate, getProduct, getVendor } = useStore();
+  const poById = {};
+  (state.vendor_pos || []).forEach(p => { if (p.so_id === so.id) poById[p.id] = p; });
+  const grns = (state.grns || []).filter(g => poById[g.po_id]);
+  if (!grns.length) return null;
+  grns.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  return (
+    <div className="card">
+      <div className="card-header">
+        <h3 className="card-title">Goods received · {grns.length} GRN(s)</h3>
+        <span className="tiny muted">Proof of what physically arrived for this order</span>
+      </div>
+      <div className="card-body flush">
+        <table className="t">
+          <thead><tr><th>GRN</th><th>Date</th><th>Vendor</th><th>Items</th><th className="num">Accepted</th><th></th></tr></thead>
+          <tbody>
+            {grns.map(g => {
+              const po = poById[g.po_id] || {};
+              const v = getVendor(po.vendor_id);
+              const units = (g.items || []).reduce((a, i) => a + (Number(i.accepted) || 0), 0);
+              return (
+                <tr key={g.id}>
+                  <td><a className="mono small" style={{ cursor: 'pointer' }} onClick={() => navigate(`grn/${g.id}`)}>{g.grn_no}</a>
+                    {g.lr && <div className="tiny muted mono">LR {g.lr}</div>}</td>
+                  <td className="mono small">{fmtDate(g.date)}</td>
+                  <td className="small">{v ? v.name : '—'}<div className="tiny muted mono">{po.po_no || ''}</div></td>
+                  <td className="small trunc" style={{ maxWidth: 260 }}>
+                    {(g.items || []).map(i => `${i.accepted}x ${(getProduct(i.product_id) || {}).name || i.product_id}`).join(', ')}
+                  </td>
+                  <td className="num mono">{units}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button className="btn btn-sm" onClick={() => navigate(`grn/${g.id}`)}>Open</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+window.VGGrnCard = VGGrnCard;
+
 function VGPoolHistoryCard({ so }) {
   const { getUser } = useStore();
   const [view, setView] = React.useState(null);
@@ -1023,6 +1070,24 @@ function VirtualGodownView({ soId, embedded }) {
   const poolAllocByProd = {};
   (so.pool_alloc || []).forEach(a => { poolAllocByProd[a.product_id] = (poolAllocByProd[a.product_id] || 0) + (Number(a.qty) || 0); });
 
+  // On a vendor PO, and of that, what the vendor says has shipped. Both come
+  // from data the app already holds; showing them here is what turns the VG
+  // from "what arrived" into "where is everything".
+  const onPOByProd = {};
+  const shippedByProd = {};
+  (state.vendor_pos || []).forEach(po => {
+    if (po.so_id !== so.id || ['Rejected', 'Cancelled'].includes(po.status)) return;
+    (po.items || []).forEach(it => {
+      onPOByProd[it.product_id] = (onPOByProd[it.product_id] || 0) + (Number(it.qty) || 0);
+    });
+    const di = po.dispatch_info || {};
+    if (!di.lr_no && !di.carrier && !di.shipped_on) return;
+    const list = Array.isArray(di.items) && di.items.length ? di.items : (po.items || []);
+    list.forEach(it => {
+      shippedByProd[it.product_id] = (shippedByProd[it.product_id] || 0) + (Number(it.qty) || 0);
+    });
+  });
+
   // Pool check + transfer reflection
   const pool = state.pool;
   const enriched = allComponents.map(c => {
@@ -1039,7 +1104,12 @@ function VirtualGodownView({ soId, embedded }) {
     const available = Math.max(0, tIn - tOut);                // transfers only; pool alloc already counted above
     const inHand = Math.max(0, available + received);         // net stock this VG holds for the customer
     const remaining = Math.max(0, c.qty - grossReceived - available);   // still to physically receive
-    return { ...c, product, poolQty, fromPool, toProcure, transferredIn: tIn, transferredOut: tOut, available, received, grossReceived, sentToPool, inHand, remaining };
+    const onPO = onPOByProd[c.product_id] || 0;
+    // In transit = shipped but not yet received. Without an LR recorded we know
+    // only that it is on order, which is a different thing and is shown as such.
+    const inTransit = Math.max(0, Math.min(shippedByProd[c.product_id] || 0, onPO) - grossReceived);
+    const onOrder = Math.max(0, onPO - grossReceived - inTransit);
+    return { ...c, product, poolQty, fromPool, toProcure, transferredIn: tIn, transferredOut: tOut, available, received, grossReceived, sentToPool, inHand, remaining, onPO, inTransit, onOrder };
   });
   const allReceived = enriched.every(c => c.remaining <= 0);
   const receivable = enriched.filter(c => c.remaining > 0);
@@ -1082,7 +1152,7 @@ function VirtualGodownView({ soId, embedded }) {
         </div>
         <div className="page-actions">
           <button className="btn" onClick={() => navigate(`sales-orders/${so.id}`)}><Icon name="receipt" size={13}/>View SO</button>
-          <button className="btn"><Icon name="arrowLeftRight" size={13}/>Request transfer</button>
+
         </div>
       </div>
       {children}
@@ -1107,6 +1177,7 @@ function VirtualGodownView({ soId, embedded }) {
         <div className="stack">
         <VGAddFromPoolPanel so={so}/>
         <VGPoolSendPanel so={so}/>
+        <VGGrnCard so={so}/>
         <VGPoolHistoryCard so={so}/>
         <div className="card">
           <div className="card-header">
@@ -1124,7 +1195,8 @@ function VirtualGodownView({ soId, embedded }) {
               <thead><tr>
                 {canReceive && <th style={{ width: 60 }}><input type="checkbox" checked={allTicked} onChange={toggleAllRecv} title="Select all to receive"/></th>}
                 <th>Component</th><th>Code</th>
-                <th className="num">Required</th><th className="num">From Pool</th><th className="num">Transferred</th>
+                <th className="num">Required</th><th className="num">On PO</th><th className="num" title="Shipped by the vendor, not yet received">In transit</th>
+                <th className="num">From Pool</th><th className="num">Transferred</th>
                 <th className="num">Received</th><th className="num">→ Pool</th><th className="num">In hand</th><th className="num">Remaining</th><th>Status</th>{canEditBOM && <th></th>}
               </tr></thead>
               <tbody>
@@ -1141,6 +1213,12 @@ function VirtualGodownView({ soId, embedded }) {
                       <td>{c.product.name}</td>
                       <td className="mono small muted">{c.product.code}</td>
                       <td className="num">{c.qty}</td>
+                      <td className="num">{c.onPO > 0
+                        ? <span className="badge" style={{ minWidth: 28, justifyContent: 'center' }} title={c.onOrder > 0 ? `${c.onOrder} not shipped by the vendor yet` : 'All of it has shipped'}>{c.onPO}</span>
+                        : <span className="muted" title="Nothing ordered for this item yet">—</span>}</td>
+                      <td className="num">{c.inTransit > 0
+                        ? <span className="badge info" style={{ minWidth: 28, justifyContent: 'center' }} title="Shipped by the vendor, not yet received here">{c.inTransit}</span>
+                        : <span className="muted">—</span>}</td>
                       <td className="num"><span className="badge accent" style={{ minWidth: 28, justifyContent: 'center' }}>{c.fromPool}</span></td>
                       <td className="num">{net !== 0 ? <span className="badge info" style={{ minWidth: 28, justifyContent: 'center' }} title={`In ${c.transferredIn} · Out ${c.transferredOut}`}>{net > 0 ? '+' : ''}{net}</span> : <span className="muted">—</span>}</td>
                       <td className="num">{c.grossReceived > 0 ? <span className="badge success" style={{ minWidth: 28, justifyContent: 'center' }}>{c.grossReceived}</span> : <span className="muted">0</span>}</td>
@@ -1150,7 +1228,9 @@ function VirtualGodownView({ soId, embedded }) {
                       <td>
                         {c.qty > 0 && c.remaining <= 0 ? <span className="badge success dot">Fulfilled</span> :
                          c.inHand > 0 ? <span className="badge warning dot">Partial</span> :
-                         <span className="badge dot">Remaining</span>}
+                         c.inTransit > 0 ? <span className="badge info dot" title="On its way">In transit</span> :
+                         c.onOrder > 0 ? <span className="badge dot" title="On a vendor PO, not shipped yet">On order</span> :
+                         <span className="badge warning dot" title="Not ordered from any vendor yet">Not ordered</span>}
                       </td>
                       {canEditBOM && <td><button className="btn btn-ghost btn-sm" title="Remove component" onClick={() => removeComponent(c.product_id)}><Icon name="trash" size={11} color="var(--danger)"/></button></td>}
                     </tr>
@@ -1253,8 +1333,7 @@ function MasterPool() {
         </div>
         <div className="page-actions">
           {canAdd && <button className="btn btn-primary" onClick={() => setShowAdd(true)}><Icon name="plus" size={13}/>Add to pool</button>}
-          <button className="btn"><Icon name="filter" size={13}/>Filter by age</button>
-          <button className="btn"><Icon name="download" size={13}/>Export</button>
+
         </div>
       </div>
 

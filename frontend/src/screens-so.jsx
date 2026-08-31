@@ -42,8 +42,6 @@ function SalesOrdersList() {
           <div className="page-sub">{state.sales_orders.length} orders · FY {state.org.fiscal_year}</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="filter" size={13}/>Filter</button>
-          <button className="btn"><Icon name="download" size={13}/>Export</button>
           {canImportSheet(role) && (
             <button className="btn" onClick={() => setShowImport(true)}
               title="Turn the customer's working sheet (Excel / CSV) into a draft order">

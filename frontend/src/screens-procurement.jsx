@@ -194,7 +194,7 @@ function SOVendorPOsTab({ so }) {
   const [showSplit, setShowSplit] = React.useState(false);
   const [receivePo, setReceivePo] = React.useState(null);
   const role = currentUser ? getUser(currentUser)?.role : '';
-  const canProcure = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const canProcure = ['Purchase', 'Project Manager', 'Stores', 'Org Admin'].includes(role);
   const canApprove = ['Managing Director', 'Org Admin'].includes(role);
   const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
   const setPoStatus = (po, status, msg) => {
@@ -625,7 +625,7 @@ function VendorPOList() {
   const [statusF, setStatusF] = React.useState('');
   const [groupBySO, setGroupBySO] = React.useState(true);
   const role = getUser(currentUser)?.role;
-  const canCreate = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const canCreate = ['Purchase', 'Project Manager', 'Stores', 'Org Admin'].includes(role);
 
   const poStatusBadge = (st) => st === 'Material Received' ? <span className="badge success dot">Received</span>
     : st === 'In Transit' ? <span className="badge accent dot">In transit</span>
@@ -737,7 +737,7 @@ function VendorPODetail({ poId }) {
   if (!po) return <div className="page"><div className="empty">{state.loaded ? 'PO not found' : 'Loading…'}</div></div>;
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canApprovePO = ['Managing Director', 'Org Admin'].includes(role);
-  const canProcurePO = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const canProcurePO = ['Purchase', 'Project Manager', 'Stores', 'Org Admin'].includes(role);
   const blocked = ['Pending MD Approval', 'Rejected', 'On Hold'].includes(po.status);
   const setPoStatus = (status, msg) => {
     mutate(s => ({ ...s, vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, status } : p), notifications: [{ id: 'n-poapp-' + Date.now(), kind: 'po', text: `${po.po_no} ${status === 'Issued' ? 'resumed' : status === 'Rejected' ? 'rejected' : 'on hold'} by MD`, date: TODAY, read: false, role: 'Purchase' }, ...s.notifications] }), { action: 'po-status', entity: 'VendorPO', entity_id: po.id });
@@ -823,7 +823,6 @@ function VendorPODetail({ poId }) {
           {ebilled
             ? <button className="btn" onClick={() => window.print()}><Icon name="print" size={13}/>Print e-Bill</button>
             : !blocked && <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>}
-          <button className="btn"><Icon name="mail" size={13}/>Resend to vendor</button>
           {!blocked && (po.status !== 'Material Received'
             ? <button className="btn btn-primary" onClick={() => navigate('grn')}><Icon name="package" size={13}/>Create GRN</button>
             : !vInv
@@ -1227,7 +1226,6 @@ function GRNDetail({ grnId }) {
           <div className="page-sub">For VPO <span className="mono">{po.po_no}</span> · {v.name} · received {fmtDate(g.date)}</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="print" size={13}/>Print</button>
         </div>
       </div>
 
@@ -1376,9 +1374,32 @@ function ReceiveModal({ po, onClose }) {
   const { state, mutate, addToPool, getProduct, getVendor, currentUser, getUser } = useStore();
   const toast = useToast();
   const v = getVendor(po.vendor_id);
-  const [items, setItems] = React.useState(po.items.map(it => ({ ...it, recv: true, received: it.qty, rejected: 0, reason: '', to_pool: 0 })));
-  const [lr, setLr] = React.useState('DELHIVERY-D88234');
+  // Already received against this PO on an earlier partial delivery.
+  const already = {};
+  (state.grns || []).forEach(g => {
+    if (g.po_id !== po.id) return;
+    (g.items || []).forEach(it => { already[it.product_id] = (already[it.product_id] || 0) + (Number(it.accepted) || 0); });
+  });
+  const outstanding = (it) => Math.max(0, (Number(it.qty) || 0) - (already[it.product_id] || 0));
+
+  // Default to "everything still outstanding arrived", which is the common
+  // case. A line already fully received starts unticked rather than inviting a
+  // double receipt.
+  const [items, setItems] = React.useState(po.items.map(it => {
+    const left = outstanding(it);
+    return { ...it, recv: left > 0, received: left, rejected: 0, reason: '', to_pool: 0, outstanding: left };
+  }));
+  const [lr, setLr] = React.useState(po.dispatch_info && po.dispatch_info.lr_no ? po.dispatch_info.lr_no : '');
   const [grnDate, setGrnDate] = React.useState(TODAY);
+  const [showExtra, setShowExtra] = React.useState(false);   // rejections / pool
+
+  const setAll = (on) => setItems(its => its.map(it => on
+    ? { ...it, recv: it.outstanding > 0, received: it.outstanding }
+    : { ...it, recv: false, received: 0, rejected: 0, to_pool: 0 }));
+  const tickedCount = items.filter(it => it.recv).length;
+  const receivable = items.filter(it => it.outstanding > 0).length;
+  const totalUnits = items.reduce((a, it) => a + (it.recv ? (Number(it.received) || 0) : 0), 0);
+  const anyExtra = items.some(it => (Number(it.rejected) || 0) > 0 || (Number(it.to_pool) || 0) > 0);
   const submit = async () => {
     if (items.some(it => it.rejected > 0 && !it.reason)) { toast('Add a reason for each rejected line'); return; }
     await postReceiptForPO(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
@@ -1386,13 +1407,34 @@ function ReceiveModal({ po, onClose }) {
     onClose();
   };
   return (
-    <Modal title={`Receive — ${po.po_no} · ${v ? v.name : ''}`} onClose={onClose} size="lg" footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={submit}><Icon name="check" size={13}/>Post receipt</button></>}>
+    <Modal title={`Receive — ${po.po_no} · ${v ? v.name : ''}`} onClose={onClose} size="lg" footer={<>
+      <span className="tiny muted" style={{ marginRight: 'auto' }}>{tickedCount} of {receivable} line(s) · {totalUnits} unit(s)</span>
+      <button className="btn" onClick={onClose}>Cancel</button>
+      <button className="btn btn-primary" disabled={!tickedCount} onClick={submit}><Icon name="check" size={13}/>Post receipt</button></>}>
       <div className="field-row mb-2">
         <div className="field"><label className="field-label">LR / tracking</label><input className="input mono" value={lr} onChange={e => setLr(e.target.value)}/></div>
         <div className="field"><label className="field-label">Received date</label><input type="date" className="input mono" value={grnDate} onChange={e => setGrnDate(e.target.value)}/></div>
       </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+        <button className="btn btn-sm" onClick={() => setAll(true)}>Everything arrived</button>
+        <button className="btn btn-sm" onClick={() => setAll(false)}>Clear all</button>
+        <span className="tiny muted">then adjust any line that is short</span>
+        <label className="tiny muted" style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
+          title="Only needed when something arrived damaged, or is surplus to this order">
+          <input type="checkbox" checked={showExtra || anyExtra} disabled={anyExtra}
+            onChange={e => setShowExtra(e.target.checked)}/>
+          Something was rejected / is surplus
+        </label>
+      </div>
       <table className="t">
-        <thead><tr><th style={{ width: 30 }}>Recv</th><th>Item</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Accepted</th><th className="num">Rejected</th><th className="num">→ Pool</th></tr></thead>
+        <thead><tr>
+          <th style={{ width: 34 }}>
+            <input type="checkbox" title="Select every line" checked={receivable > 0 && tickedCount === receivable}
+              onChange={e => setAll(e.target.checked)}/>
+          </th>
+          <th>Item</th><th className="num">Ordered</th><th className="num">Still due</th><th className="num">Arrived</th>
+          {(showExtra || anyExtra) && <><th className="num">Accepted</th><th className="num">Rejected</th><th className="num">→ Pool</th></>}
+        </tr></thead>
         <tbody>
           {items.map((it, i) => {
             const p = getProduct(it.product_id) || { name: it.product_id, code: it.product_id };
@@ -1401,17 +1443,26 @@ function ReceiveModal({ po, onClose }) {
               <tr key={i} style={{ opacity: off ? 0.5 : 1 }}>
                 <td><input type="checkbox" checked={!!it.recv} onChange={e => { const on = e.target.checked; const n = [...items]; n[i] = on ? { ...it, recv: true, received: it.qty, rejected: 0, to_pool: 0 } : { ...it, recv: false, received: 0, rejected: 0, to_pool: 0 }; setItems(n); }}/></td>
                 <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
-                <td className="num">{it.qty}</td>
-                <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.received} onChange={e => { const n = [...items]; n[i] = { ...it, received: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 60, textAlign: 'right' }}/></td>
-                <td className="num"><input type="number" className="input mono" readOnly value={acc} style={{ width: 56, textAlign: 'right', background: 'var(--bg-subtle)' }}/></td>
-                <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.rejected} onChange={e => { const n = [...items]; n[i] = { ...it, rejected: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 56, textAlign: 'right' }}/></td>
-                <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.to_pool} onChange={e => { const n = [...items]; n[i] = { ...it, to_pool: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 56, textAlign: 'right' }}/></td>
+                <td className="num mono small muted">{it.qty}</td>
+                <td className="num mono small">
+                  {it.outstanding > 0 ? it.outstanding
+                    : <span className="badge success tiny" title="Fully received on an earlier delivery">done</span>}
+                </td>
+                <td className="num"><input type="number" min="0" max={it.outstanding} className="input mono" disabled={off} value={it.received} onChange={e => { const n = [...items]; n[i] = { ...it, received: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 66, textAlign: 'right' }}/></td>
+                {(showExtra || anyExtra) && <>
+                  <td className="num"><input type="number" className="input mono" readOnly value={acc} style={{ width: 56, textAlign: 'right', background: 'var(--bg-subtle)' }}/></td>
+                  <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.rejected} onChange={e => { const n = [...items]; n[i] = { ...it, rejected: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 56, textAlign: 'right' }}/></td>
+                  <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.to_pool} onChange={e => { const n = [...items]; n[i] = { ...it, to_pool: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 56, textAlign: 'right' }}/></td>
+                </>}
               </tr>
             );
           })}
         </tbody>
       </table>
-      <div className="tiny muted mt-2">Posting auto-creates the GRN + e-Bill, books the vendor payable invoice for the received value, and raises the client partial invoice. Rejected/▸Pool quantities auto-route as configured.</div>
+      <div className="tiny muted mt-2">
+        Posting creates the GRN and puts the stock into this order's Virtual Godown.
+        {wfOn('auto_invoice_on_grn') ? ' The vendor payable and the client invoice are raised from it automatically.' : ''}
+      </div>
     </Modal>
   );
 }
