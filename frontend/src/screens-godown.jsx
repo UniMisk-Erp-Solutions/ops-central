@@ -1140,14 +1140,10 @@ function VirtualGodownView({ soId, embedded }) {
   }));
 
   // All required components flattened
-  const allComponents = [];
-  so.lines.forEach(l => {
-    l.components.forEach(c => {
-      const existing = allComponents.find(x => x.product_id === c.product_id);
-      if (existing) existing.qty += c.qty;
-      else allComponents.push({ product_id: c.product_id, qty: c.qty });
-    });
-  });
+  // qty x bundle_qty — see soRequired(). This summed the PER-SET quantity, so a
+  // line of "6 sets of 1 switch" asked the godown for one switch, and receiving
+  // posted one against a requirement of six.
+  const allComponents = soRequiredList(so);
   // Include transferred-in products even if not part of the BOM (edge case)
   Object.keys(transferredIn).forEach(pid => {
     if (!allComponents.find(x => x.product_id === pid)) allComponents.push({ product_id: pid, qty: 0 });
@@ -1857,9 +1853,7 @@ function DeliveryChallanModal({ transfer, onClose }) {
 
 // Sum component quantities held in an SO's Virtual Godown (from its BOM lines).
 function soComponentMap(so) {
-  const m = {};
-  (so.lines || []).forEach(l => (l.components || []).forEach(c => { m[c.product_id] = (m[c.product_id] || 0) + (c.qty || 0); }));
-  return m;
+  return soRequired(so);
 }
 
 function NewTransferModal({ onClose, destSoId }) {
@@ -1994,7 +1988,9 @@ window.soPoolOut = function (so) {
 // committed pool stock). Used to gate SO closure. Mirrors billing's soReceivedQty.
 window.soFullyReceived = function (state, so) {
   if (!so) return false;
-  const req = {}; (so.lines || []).forEach(l => (l.components || []).forEach(c => { req[c.product_id] = (req[c.product_id] || 0) + (c.qty || 0); }));
+  // Under-counting here let an order be treated as fully received when only a
+  // fraction had arrived, which is the worst version of this bug.
+  const req = soRequired(so);
   const poIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
   const recv = {}; (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + (it.accepted || 0); }); });
   (so.pool_alloc || []).forEach(a => { recv[a.product_id] = (recv[a.product_id] || 0) + (Number(a.qty) || 0); });

@@ -256,6 +256,28 @@ function partyItemName(aliasMap, product, mode) {
            altCode: theirCode, altName: theirName, mapped: mapped, uom: a ? a.uom : null };
 }
 
+// ===== What an order needs =====
+// A line holds `bundle_qty` sets of its components, and each component's `qty`
+// is PER SET. The total is therefore qty x bundle_qty, and forgetting the
+// multiplication silently under-states the requirement by the bundle factor.
+// Everything that asks "how much of this item does this order need" must come
+// through here so the answer cannot differ between screens.
+function soRequired(so) {
+  const m = {};
+  ((so && so.lines) || []).forEach(l => {
+    const sets = Number(l.bundle_qty) || 1;
+    ((l.components) || []).forEach(c => {
+      m[c.product_id] = (m[c.product_id] || 0) + (Number(c.qty) || 0) * sets;
+    });
+  });
+  return m;
+}
+// The same thing as a list, for screens that render rows.
+function soRequiredList(so) {
+  const m = soRequired(so);
+  return Object.keys(m).map(product_id => ({ product_id, qty: m[product_id] }));
+}
+
 // ===== What an item costs us =====
 // In order of trust: what we actually last paid a vendor, then the catalogue's
 // standard cost. Vendor POs are already in memory, so this needs no round trip.
@@ -289,7 +311,7 @@ function itemCost(state, productId) {
 }
 
 Object.assign(window, {
-  lastBuyOf, itemCost,
+  soRequired, soRequiredList, lastBuyOf, itemCost,
   inrFmt, inr, inrK, fmtDate, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
   Icon, StatusBadge, PriorityBadge, Avatar, Delta, Toggle, Modal,
   ToastProvider, useToast,
