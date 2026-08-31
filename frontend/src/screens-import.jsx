@@ -472,20 +472,27 @@ function SheetImportModal({ onClose, onCreated }) {
         if (error) console.warn('[OPC] BOM save skipped:', error.message);
       }
 
+      // ONLY real columns of sales_orders. imported_from / po_ref / created_by
+      // are not columns — setting them made PostgREST reject the whole row, so
+      // the order existed in one browser and nowhere else. Anything extra
+      // belongs in `extra`, which IS a jsonb column.
       const so = {
         id: soId,
         so_no: `SO/FY26/${String(seq).padStart(4, '0')}`,
         customer_id: customerId,
+        customer_po: '',
         date: TODAY,
         expected: TODAY,
         status: 'Draft',
         priority: 'Standard',
         order_type: 'Supply',
-        po_ref: '',
         lines: soLines,
-        created_by: currentUser,
-        imported_from: fileName,
-        extra: { imported: { file: fileName, at: new Date().toISOString(), rows: rows.length } },
+        extra: {
+          imported: {
+            file: fileName, at: new Date().toISOString(),
+            rows: rows.length, by: currentUser,
+          },
+        },
       };
 
       const totalUnits = soLines.reduce((a, l) =>

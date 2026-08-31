@@ -108,6 +108,7 @@ function App() {
       <Topbar onOpenTweaks={openTweaks}/>
       <Sidebar/>
       <main className="main" data-screen-label={route}>
+        <SyncErrorBanner/>
         {Content}
       </main>
       <OpcTweaks t={t} setTweak={setTweak}/>
@@ -195,6 +196,48 @@ function OpcTweaks({ t, setTweak }) {
     </TweaksPanel>
   );
 }
+
+// ===========================================================================
+// Unsaved-changes banner
+// ===========================================================================
+// The worst failure this app had was a silent one: a record rejected by the
+// database still showed on screen, lived only in localStorage, and was missing
+// from every other browser. The user had no way to know. Anything that fails to
+// save now says so, in the page, until it is retried.
+function SyncErrorBanner() {
+  const { syncErrors, retrySync } = useStore();
+  const [busy, setBusy] = React.useState(false);
+  if (!syncErrors || !syncErrors.length) return null;
+  const tables = [...new Set(syncErrors.map(e => e.table))];
+  const retry = async () => { setBusy(true); try { await retrySync(); } finally { setBusy(false); } };
+  return (
+    <div style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: 'var(--radius)',
+                  background: 'var(--danger-bg)', border: '1px solid var(--danger)', fontSize: 12.5 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Icon name="alert" size={14} color="var(--danger)"/>
+        <strong>Not saved to the server.</strong>
+        <span>
+          {syncErrors.length} change{syncErrors.length > 1 ? 's' : ''} to {tables.join(', ')}
+          {' '}could not be saved, so {syncErrors.length > 1 ? 'they are' : 'it is'} only in this browser
+          and will not appear for anyone else.
+        </span>
+        <button className="btn btn-sm" disabled={busy} onClick={retry} style={{ marginLeft: 'auto' }}>
+          {busy ? 'Retrying…' : 'Retry now'}
+        </button>
+      </div>
+      <details style={{ marginTop: 6 }}>
+        <summary style={{ cursor: 'pointer', fontSize: 11.5 }}>Details</summary>
+        <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 11.5, lineHeight: 1.6 }}>
+          {syncErrors.slice(-5).map((e, i) => (
+            <li key={i}><span className="mono">{e.table}</span> {e.op}
+              {e.rowId ? <span className="mono"> · {String(e.rowId).slice(0, 28)}</span> : null} — {e.message}</li>
+          ))}
+        </ul>
+      </details>
+    </div>
+  );
+}
+window.SyncErrorBanner = SyncErrorBanner;
 
 // ===========================================================================
 // Crash boundary
