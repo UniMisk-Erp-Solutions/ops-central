@@ -186,9 +186,18 @@ function run(scenario) {
         problems.push(`${t}: ${fromSeed.length} demo row(s) on screen (e.g. ${fromSeed[0].so_no || fromSeed[0].name || fromSeed[0].id})`);
       }
     }
+    // Check EVERY field that names a company on screen, not just `name`. The
+    // topbar chip reads short + logo_letter, which is how the demo company's
+    // branding survived a fix that only cleared `name`.
     const orgName = (st.org && st.org.name) || '';
-    if (/brightline/i.test(orgName)) problems.push(`org name shows the demo company: "${orgName}"`);
     if (orgName !== ORG.name) problems.push(`org name is "${orgName}", expected "${ORG.name}"`);
+    ['name', 'short', 'gstin', 'address', 'state', 'industry'].forEach(f => {
+      const v = String((st.org && st.org[f]) || '');
+      if (/brightline|lotus tech|powai/i.test(v)) problems.push(`org.${f} shows the demo company: "${v}"`);
+    });
+    const short = String((st.org && st.org.short) || '');
+    if (short && !ORG.name.toLowerCase().startsWith(short.toLowerCase().split(' ')[0]))
+      problems.push(`topbar chip reads "${short}", not this organization`);
     if (writes.length) problems.push(`${writes.length} write(s) to the database: ` +
       writes.slice(0, 3).map(w => `${w.op} ${w.table}`).join(', '));
 
@@ -206,7 +215,8 @@ function run(scenario) {
     }
 
     console.log(`\nSCENARIO: ${scenario}`);
-    console.log(`  organization on screen : ${orgName || '(blank)'}`);
+    console.log(`  organization on screen : ${orgName || '(blank)'}` +
+      `  ·  topbar chip: ${(st.org && st.org.logo_letter) || '?'} / ${(st.org && st.org.short) || '(blank)'}`);
     console.log(`  tenant rows on screen  : ${totalRows}` +
       (scenario === 'populated' ? ' (this org owns 6)' : ' (database is empty, so this must be 0)'));
     console.log(`  writes to the database : ${writes.length} (must be 0)`);
