@@ -1891,10 +1891,7 @@ function soImplReq(so) {
 window.soImplReq = soImplReq;
 
 function soReqComponents(so) {
-  const m = {};
-  (so.lines || []).forEach(l => (l.components || []).forEach(c => {
-    m[c.product_id] = (m[c.product_id] || 0) + (c.qty || 0) * (l.bundle_qty || 1);
-  }));
+  const m = soRequired(so);
   // Implementation BOQ (catalogue items) is procured alongside supply on the same SO.
   const impl = soImplReq(so);
   Object.keys(impl).forEach(pid => { m[pid] = (m[pid] || 0) + impl[pid]; });
@@ -1970,9 +1967,7 @@ window.generateVendorPOsFromSourcing = generateVendorPOsFromSourcing;
 
 // ===== Shared: aggregate an SO's required components =====
 function procComponentList(so) {
-  const m = {};
-  (so.lines || []).forEach(l => (l.components || []).forEach(c => { m[c.product_id] = (m[c.product_id] || 0) + (c.qty || 0); }));
-  return Object.entries(m).map(([product_id, qty]) => ({ product_id, qty }));
+  return soRequiredList(so);
 }
 
 // ===== Create Vendor PO for an SO (Purchase) =====
