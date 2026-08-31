@@ -199,10 +199,18 @@ function SheetImportModal({ onClose, onCreated }) {
   const toast = useToast();
   const [rows, setRows] = React.useState(null);
   const [custId, setCustId] = React.useState('');
+  const [newCust, setNewCust] = React.useState('');     // when adding one inline
   const [fileName, setFileName] = React.useState('');
+  const [matrix, setMatrix] = React.useState(null);     // kept so we can re-match
   const [busy, setBusy] = React.useState('');
   const [err, setErr] = React.useState('');
   const [note, setNote] = React.useState('');
+  const customers = state.customers || [];
+  const addingCustomer = custId === '__new';
+  // A brand-new organization has no customers at all. Requiring one before the
+  // file could even be chosen made the screen a dead end — nothing in the list,
+  // and the file input disabled forever.
+  const custReady = addingCustomer ? !!newCust.trim() : !!custId;
 
   const ensureXLSX = () => new Promise((resolve, reject) => {
     if (window.XLSX) return resolve(window.XLSX);
@@ -244,7 +252,7 @@ function SheetImportModal({ onClose, onCreated }) {
       else if (window.OPC_SB) {
         try {
           const r = await window.OPC_SB.rpc('opc_alias_resolve', {
-            p_scope: 'customer', p_party_id: custId || null,
+            p_scope: 'customer', p_party_id: (custId && custId !== '__new') ? custId : null,
             p_code: row.code || null, p_name: row.desc || null });
           if (r.data && r.data.product_id) hit = { product_id: r.data.product_id, matched_by: r.data.matched_by };
         } catch (e) { /* leave unmatched */ }
@@ -271,6 +279,7 @@ function SheetImportModal({ onClose, onCreated }) {
         // defval keeps merged/blank cells as '' so column positions never shift.
         matrix = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: '' });
       }
+      setMatrix(matrix);
       const res = impParseMatrix(matrix);
       if (res.error) { setErr(res.error); setRows(null); setBusy(''); return; }
       if (!res.rows.length) { setErr('No item rows found below the header.'); setRows(null); setBusy(''); return; }
@@ -286,6 +295,25 @@ function SheetImportModal({ onClose, onCreated }) {
     setBusy('');
   };
 
+  // Picking (or changing) the customer after the file is loaded re-runs the
+  // match, because their own part numbers are the strongest signal we have.
+  const firstRun = React.useRef(true);
+  React.useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }
+    if (!matrix || custId === '__new') return;
+    let dead = false;
+    (async () => {
+      setBusy('match');
+      const res = impParseMatrix(matrix);
+      if (res.error || !res.rows.length) { setBusy(''); return; }
+      const resolved = await resolveRows(res.rows);
+      if (dead) return;
+      setRows(resolved);
+      setBusy('');
+    })();
+    return () => { dead = true; };
+  }, [custId]);
+
   const setRow = (key, patch) => setRows(rs => rs.map(r => r.key === key ? { ...r, ...patch } : r));
 
   const lines = React.useMemo(() => rows ? impBuildLines(rows.filter(r => r.action !== 'skip')) : [], [rows]);
@@ -297,12 +325,30 @@ function SheetImportModal({ onClose, onCreated }) {
 
   // -------------------------------------------------------------------------
   const doImport = async () => {
-    if (!custId) { setErr('Choose the customer this sheet came from.'); return; }
+    if (!custReady) { setErr('Choose the customer this sheet came from, or type a new one.'); return; }
     if (!lines.length) { setErr('Nothing to import.'); return; }
     setErr(''); setBusy('import');
     try {
       const sb = window.OPC_SB;
       const stamp = Date.now();
+
+      // 0. The customer, if this is the first order for them.
+      let customerId = custId;
+      let madeCustomer = null;
+      if (addingCustomer) {
+        const name = newCust.trim();
+        const dup = customers.find(c => c.name && c.name.toLowerCase() === name.toLowerCase());
+        if (dup) customerId = dup.id;
+        else {
+          customerId = 'cust-' + stamp;
+          madeCustomer = { id: customerId, code: '', name, gstin: '', state: '', address: '',
+                           contact: '', phone: '', terms: 'Net 30', credit_limit: 0, tier: 'Standard' };
+          if (sb) {
+            const { error } = await sb.from('customers').insert(madeCustomer);
+            if (error) throw new Error('Could not save the customer: ' + error.message);
+          }
+        }
+      }
 
       // 1. Items we do not have yet, created from the sheet itself. The Part No.
       //    becomes our code, so the catalogue is built from the first real order
@@ -396,11 +442,10 @@ function SheetImportModal({ onClose, onCreated }) {
         if (error) console.warn('[OPC] BOM save skipped:', error.message);
       }
 
-      const cust = (state.customers || []).find(c => c.id === custId);
       const so = {
         id: soId,
         so_no: `SO/FY26/${String(seq).padStart(4, '0')}`,
-        customer_id: custId,
+        customer_id: customerId,
         date: TODAY,
         expected: TODAY,
         status: 'Draft',
@@ -418,6 +463,7 @@ function SheetImportModal({ onClose, onCreated }) {
 
       mutate(s => ({
         ...s,
+        customers: madeCustomer ? [...s.customers, madeCustomer] : s.customers,
         products: madeProducts.length ? [...s.products, ...madeProducts] : s.products,
         categories: madeCategories.length ? [...s.categories, ...madeCategories] : s.categories,
         boms: Object.keys(madeBoms).length ? { ...s.boms, ...madeBoms } : s.boms,
@@ -440,11 +486,11 @@ function SheetImportModal({ onClose, onCreated }) {
           if (!r.product_id || !r.code) continue;
           try {
             await sb.rpc('opc_alias_set', {
-              p_product_id: r.product_id, p_scope: 'customer', p_party_id: custId,
+              p_product_id: r.product_id, p_scope: 'customer', p_party_id: customerId,
               p_alias_code: r.code, p_alias_name: r.desc || null, p_uom: r.unit || null });
           } catch (e) { /* mapping can be finished by hand on Item Mapping */ }
         }
-        if (window.invalidateAliasMap) window.invalidateAliasMap('customer', custId);
+        if (window.invalidateAliasMap) window.invalidateAliasMap('customer', customerId);
       }
 
       setBusy('');
@@ -476,7 +522,7 @@ function SheetImportModal({ onClose, onCreated }) {
           {rows ? `${lines.length} order line(s) · ${counts.match} matched · ${counts.create} new · ${counts.skip} skipped` : ''}
         </span>
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={!rows || !!busy || !custId || !lines.length} onClick={doImport}>
+        <button className="btn btn-primary" disabled={!rows || !!busy || !custReady || !lines.length} onClick={doImport}>
           <Icon name="check" size={13}/>{busy === 'import' ? 'Creating…' : 'Create Sales Order'}
         </button>
       </>
@@ -485,23 +531,33 @@ function SheetImportModal({ onClose, onCreated }) {
         <Icon name="alert" size={13} color="var(--danger)"/> {err}
       </div>}
 
-      <div className="grid-2">
+      <div className="field-row">
         <div className="field">
           <label className="field-label">Customer <span className="tiny muted">(whose sheet is this?)</span></label>
-          <select className="select" value={custId} onChange={e => { setCustId(e.target.value); setRows(null); }}>
+          <select className="select" value={custId} onChange={e => setCustId(e.target.value)}>
             <option value="">— choose —</option>
-            {(state.customers || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="__new">+ Add a new customer…</option>
           </select>
-          <div className="tiny muted mt-1">Their part numbers are remembered against this customer.</div>
+          {addingCustomer ? (
+            <input className="input mt-1" autoFocus placeholder="Customer name"
+              value={newCust} onChange={e => setNewCust(e.target.value)}/>
+          ) : (
+            <div className="tiny muted mt-1">
+              {customers.length === 0
+                ? 'No customers yet — choose “Add a new customer”.'
+                : 'Their part numbers are remembered against this customer.'}
+            </div>
+          )}
         </div>
         <div className="field">
           <label className="field-label">Working sheet <span className="tiny muted">(.xlsx / .xls / .csv)</span></label>
-          <input className="input" type="file" accept=".xlsx,.xls,.csv" disabled={!custId}
+          <input className="input" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
             onChange={e => onFile(e.target.files && e.target.files[0])}/>
           <div className="tiny muted mt-1">
-            {!custId ? 'Choose the customer first.'
-              : busy === 'read' ? 'Reading…' : busy === 'match' ? 'Matching against our catalogue…'
-              : fileName || 'Reads the first sheet in the file.'}
+            {busy === 'read' ? 'Reading…' : busy === 'match' ? 'Matching against our catalogue…'
+              : fileName ? fileName
+              : 'Reads the first sheet. You can pick the file before the customer.'}
           </div>
         </div>
       </div>

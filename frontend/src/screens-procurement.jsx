@@ -2123,7 +2123,7 @@ function InTransitModal({ po, onClose }) {
         Material has left <strong>{v ? v.name : 'the vendor'}</strong> but has not been received yet.
         Recording it here shows the units as <strong>In transit</strong> on SCM Tracking until a GRN is posted.
       </div>
-      <div className="grid-2">
+      <div className="field-row">
         <div className="field"><label className="field-label">Dispatched on</label>
           <input className="input" type="date" value={shippedOn} onChange={e => setShippedOn(e.target.value)}/></div>
         <div className="field"><label className="field-label">Expected arrival (ETA)</label>

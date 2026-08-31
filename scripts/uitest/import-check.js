@@ -145,5 +145,55 @@ check('every parsed row has a part number', res.rows.every(r => !!r.code), true)
 check('no row is a banner or a total',
   res.rows.some(r => /^group\b/i.test(r.code) || /total/i.test(r.code)), false);
 
+// ---------------------------------------------------------------------------
+// The dialog itself, for the case that actually failed: an organization with NO
+// customers. The file input was disabled until a customer was chosen, and the
+// customer list was empty — so the screen could never be used at all.
+// ---------------------------------------------------------------------------
+console.log('\n[7] the dialog works for an organization with no customers');
+try {
+  const React = require('react');
+  const ReactDOMServer = require('react-dom/server');
+
+  const sb2 = { console: { log() {}, warn() {}, error() {} } };
+  sb2.window = sb2; sb2.globalThis = sb2; sb2.React = React;
+  sb2.document = { createElement: () => ({ style: {}, setAttribute() {}, appendChild() {} }),
+    head: { appendChild() {} }, addEventListener() {}, removeEventListener() {} };
+  sb2.addEventListener = () => {}; sb2.removeEventListener = () => {};
+  sb2.OPC_SB = null;
+  vm.createContext(sb2);
+  for (const f of ['utils.jsx', 'screens-import.jsx']) {
+    const code = Babel.transform(fs.readFileSync(path.join(dir, 'src', f), 'utf8'),
+      { presets: ['react'], filename: f }).code;
+    vm.runInContext(code, sb2, { filename: f });
+  }
+
+  // An empty tenant: no customers, no products — exactly Microlink.
+  const st = { customers: [], products: [], categories: [], boms: {}, sales_orders: [], notifications: [] };
+  sb2.useStore = () => ({ state: st, mutate: () => {}, navigate: () => {},
+    getUser: () => ({ role: 'Purchase' }), currentUser: 'u1' });
+  sb2.useToast = () => (() => {});
+  sb2.TODAY = '2026-01-01';
+
+  const html = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(sb2.SheetImportModal, { onClose: () => {} }));
+  const fileInput = /<input[^>]*type="file"[^>]*>/.exec(html);
+
+  check('the dialog renders', html.length > 500, true);
+  check('a file input is present', !!fileInput, true);
+  check('the file input is NOT disabled', !!(fileInput && /disabled/.test(fileInput[0])), false);
+  check('an "Add a new customer" option is offered', /Add a new customer/.test(html), true);
+  check('it explains that there are no customers yet', /No customers yet/.test(html), true);
+  check('the fields use a grid class the stylesheet has', /class="field-row"/.test(html), true);
+  check('the invented grid-2 class is gone', /grid-2/.test(html), false);
+
+  check('Purchase may import', sb2.canImportSheet('Purchase'), true);
+  check('Org Admin may import', sb2.canImportSheet('Org Admin'), true);
+  check('Sales may not', sb2.canImportSheet('Sales'), false);
+  check('Stores may not', sb2.canImportSheet('Stores'), false);
+} catch (e) {
+  bad++; console.log('  X  dialog render threw: ' + e.message);
+}
+
 console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — the sheet imports with its structure intact');
 process.exit(bad ? 1 : 0);
