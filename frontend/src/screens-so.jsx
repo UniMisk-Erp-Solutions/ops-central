@@ -1047,6 +1047,10 @@ function SalesOrderDetail({ soId }) {
         const toggleCompNonBillable = (lineId, pid) => mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, lines: (x.lines || []).map(l => l.id === lineId ? { ...l, components: (l.components || []).map(c => c.product_id === pid ? { ...c, non_billable: !c.non_billable } : c) } : l) } : x) }), { action: 'non-billable-comp', entity: 'SalesOrder', entity_id: so.id });
         return (
         <div className="stack">
+          {/* Money first: what the customer pays, what the vendors charge, and
+              what is left. It sits above the bill of materials because that is
+              the question being asked while the BOM is edited. */}
+          <SOProfitPanel so={so}/>
           {canEditSO && !billingLocked && (
             <div className="card"><div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div className="grow"><strong className="small">Bill of Materials</strong><div className="tiny muted">Purchase / PM can adjust line items, quantities and components here after approval — flows into procurement & the Virtual Godown.</div></div>
@@ -1265,6 +1269,148 @@ function HoldModal({ soNo, onClose, onConfirm }) {
   );
 }
 
+// ===== Pricing =====
+// A component's selling price lives ON THE ORDER LINE (c.sell), not on the
+// product. A BOQ is negotiated per order — the same switch can go out at two
+// prices to two customers in the same week — so writing it back to the
+// catalogue would quietly rewrite history on every other order.
+//
+// A line's unit_price is the sum of its components. Editing either end updates
+// the other, which is what people expect from a bill of materials.
+
+// What one component sells for. Falls back to the catalogue price so an order
+// built the old way still totals correctly.
+function compSellOf(c, product) {
+  if (c && c.sell != null && c.sell !== '') return Number(c.sell) || 0;
+  return product ? (Number(product.sell) || 0) : 0;
+}
+// The bundle price = the sum of what is inside it.
+function lineSellOf(components, getProduct) {
+  return (components || []).reduce(
+    (s, c) => s + compSellOf(c, getProduct(c.product_id)) * (Number(c.qty) || 0), 0);
+}
+
+// Push a new BUNDLE price down onto its components.
+//
+// Two cases, and being explicit about them matters because the wrong one
+// silently misprices an order:
+//   * something is already priced -> scale everything by the same factor, which
+//     keeps the relative weights the buyer already agreed
+//   * nothing is priced yet       -> put the whole amount on the FIRST component
+//     (the chassis, the switch — the thing the rest hangs off) and leave the
+//     licences and cables at zero, which is how a quote actually reads
+function spreadLinePrice(components, target, getProduct) {
+  const comps = components || [];
+  if (!comps.length) return comps;
+  const current = lineSellOf(comps, getProduct);
+  const want = Number(target) || 0;
+  if (current > 0) {
+    const f = want / current;
+    return comps.map(c => ({ ...c, sell: Math.round(compSellOf(c, getProduct(c.product_id)) * f * 100) / 100 }));
+  }
+  const firstQty = Number(comps[0].qty) || 1;
+  return comps.map((c, i) => ({ ...c, sell: i === 0 ? Math.round((want / firstQty) * 100) / 100 : 0 }));
+}
+
+window.compSellOf = compSellOf;
+window.lineSellOf = lineSellOf;
+window.spreadLinePrice = spreadLinePrice;
+
+// ===== What this order actually earns =====
+// Revenue is what we quoted the customer. Cost has two halves and they must not
+// be blurred together: what vendors have ALREADY charged on real purchase
+// orders, and an estimate for whatever has not been bought yet. A single
+// "profit" number that silently mixes a firm cost with a guess is worse than no
+// number, because it gets quoted to a customer.
+function soProfit(state, so, getProduct) {
+  const revenue = (so.lines || []).reduce(
+    (a, l) => a + (Number(l.bundle_qty) || 0) * (Number(l.unit_price) || 0), 0);
+
+  // Committed: the vendor POs raised against this order.
+  const pos = (state.vendor_pos || []).filter(
+    p => p.so_id === so.id && ['Rejected', 'Cancelled'].indexOf(p.status) === -1);
+  const ordered = {};
+  let committed = 0;
+  pos.forEach(po => (po.items || []).forEach(it => {
+    const q = Number(it.qty) || 0;
+    ordered[it.product_id] = (ordered[it.product_id] || 0) + q;
+    committed += q * (Number(it.rate) || 0);
+  }));
+
+  // Estimated: everything still to buy, at what we last paid for it.
+  const need = {};
+  (so.lines || []).forEach(l => (l.components || []).forEach(c => {
+    need[c.product_id] = (need[c.product_id] || 0) + (Number(c.qty) || 0) * (Number(l.bundle_qty) || 1);
+  }));
+  let estimated = 0, unknownUnits = 0, unknownItems = 0;
+  Object.keys(need).forEach(pid => {
+    const left = Math.max(0, need[pid] - (ordered[pid] || 0));
+    if (left <= 0) return;
+    const { cost } = itemCost(state, pid);
+    if (cost > 0) estimated += left * cost;
+    else { unknownUnits += left; unknownItems++; }
+  });
+
+  const cost = committed + estimated;
+  const profit = revenue - cost;
+  return {
+    revenue, cost, committed, estimated, profit,
+    margin: revenue > 0 ? (profit / revenue) * 100 : null,
+    poCount: pos.length,
+    unknownUnits, unknownItems,
+    // Anything we cannot cost yet makes the number provisional, and the panel
+    // has to say so rather than quietly understating the cost.
+    complete: unknownItems === 0 && revenue > 0,
+  };
+}
+window.soProfit = soProfit;
+
+function SOProfitPanel({ so }) {
+  const { state, getProduct } = useStore();
+  const f = soProfit(state, so, getProduct);
+  if (!f.revenue && !f.cost) return null;
+  const good = f.profit >= 0;
+  const tile = (label, value, color, hint) => (
+    <div style={{ flex: '1 1 130px', minWidth: 120 }}>
+      <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '.04em' }}>{label}</div>
+      <div className="mono" style={{ fontSize: 17, fontWeight: 700, color: color || 'inherit' }}>{value}</div>
+      {hint && <div className="tiny muted">{hint}</div>}
+    </div>
+  );
+  return (
+    <div className="card mb-2" style={{ borderColor: good ? 'var(--border)' : 'var(--danger)' }}>
+      <div className="card-body" style={{ display: 'flex', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap', padding: '12px 14px' }}>
+        {tile('Customer pays', inr(f.revenue), '', 'from the order lines')}
+        {tile('Vendors charge', inr(f.cost), '',
+          f.estimated > 0
+            ? `${inr(f.committed)} on ${f.poCount} PO(s) + ${inr(f.estimated)} still to buy`
+            : `${inr(f.committed)} on ${f.poCount} PO(s)`)}
+        {tile('Profit', inr(f.profit), good ? 'var(--success)' : 'var(--danger)',
+          f.margin == null ? '' : `${f.margin > 0 ? '+' : ''}${f.margin.toFixed(1)}% margin`)}
+        <div style={{ flex: '2 1 220px' }}>
+          {f.revenue === 0 ? (
+            <div className="tiny" style={{ color: 'var(--warning)' }}>
+              Nothing is priced yet — set unit prices in <strong>Edit line items</strong> and this fills in.
+            </div>
+          ) : !f.complete ? (
+            <div className="tiny" style={{ color: 'var(--warning)' }}>
+              Provisional: {f.unknownItems} item(s) ({f.unknownUnits} unit(s)) have never been purchased,
+              so no cost is known for them. The real cost will be higher than shown.
+            </div>
+          ) : f.estimated > 0 ? (
+            <div className="tiny muted">
+              Firm on what is already ordered; the rest is valued at what we last paid.
+            </div>
+          ) : (
+            <div className="tiny muted">Every item is on a purchase order — this is the final margin.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+window.SOProfitPanel = SOProfitPanel;
+
 // ===== Edit SO line items / requirements mid-flow =====
 // Sales adjusts what the customer wants; PM/Purchase fulfil. Changes flow into
 // the Virtual Godown (required components) and billing (line subtotal) and
@@ -1291,8 +1437,50 @@ function EditSOModal({ so, role, onClose }) {
   };
   const updateLine = (id, patch) => setLines(ls => ls.map(l => l.id === id ? { ...l, ...patch } : l));
   const removeLine = (id) => setLines(ls => ls.filter(l => l.id !== id));
-  const compSell = (components) => components.reduce((s, c) => { const p = getProduct(c.product_id); return s + (p ? p.sell : 0) * (c.qty || 0); }, 0);
+  const compSell = (components) => lineSellOf(components, getProduct);
   const withComps = (l, components) => ({ ...l, components, unit_price: compSell(components) });
+
+  // --- pricing actions -----------------------------------------------------
+  const [selComp, setSelComp] = React.useState({});          // "lineId|productId" -> true
+  const [bulkPrice, setBulkPrice] = React.useState('');
+  const [bulkMargin, setBulkMargin] = React.useState('');
+  const selCompKeys = Object.keys(selComp).filter(k => selComp[k]);
+
+  const priceComp = (lid, pid, sell) => setLines(ls => ls.map(l => l.id !== lid ? l :
+    withComps(l, l.components.map(c => c.product_id !== pid ? c : { ...c, sell: Number(sell) || 0 }))));
+
+  // Typing in the bundle's UNIT box spreads that amount over its components.
+  const priceLine = (lid, target) => setLines(ls => ls.map(l => l.id !== lid ? l :
+    withComps(l, spreadLinePrice(l.components, target, getProduct))));
+
+  // One number prices the whole order: sell = what we pay x (1 + margin).
+  // Items we have never bought have no cost, so they are left alone and counted,
+  // rather than silently priced at zero.
+  const applyMargin = (pct, onlySelected) => {
+    const m = 1 + (Number(pct) || 0) / 100;
+    let done = 0, noCost = 0;
+    setLines(ls => ls.map(l => withComps(l, l.components.map(c => {
+      if (onlySelected && !selComp[l.id + '|' + c.product_id]) return c;
+      const { cost } = itemCost(state, c.product_id);
+      if (!(cost > 0)) { noCost++; return c; }
+      done++;
+      return { ...c, sell: Math.round(cost * m * 100) / 100 };
+    }))));
+    setSelComp({}); setBulkMargin('');
+    toast(done
+      ? `${done} item(s) priced at cost + ${Number(pct) || 0}%` +
+        (noCost ? ` · ${noCost} left alone (never purchased, so no cost known)` : '')
+      : 'None of those items has a known cost yet — buy them once, or type prices in', done ? 'success' : '');
+  };
+
+  const applyFlatPrice = () => {
+    const v = Number(bulkPrice) || 0;
+    const n = selCompKeys.length;
+    setLines(ls => ls.map(l => withComps(l, l.components.map(c =>
+      selComp[l.id + '|' + c.product_id] ? { ...c, sell: v } : c))));
+    setSelComp({}); setBulkPrice('');
+    toast(`${n} item(s) priced at ${inr(v)}`, 'success');
+  };
   const updateComp = (lid, pid, patch) => setLines(ls => ls.map(l => l.id !== lid ? l : withComps(l,
     l.components.map(c => c.product_id !== pid ? c : { ...c, ...patch, override: patch.qty !== undefined ? patch.qty !== c.original_qty : c.override }))));
   const addComp = (lid, pid) => setLines(ls => ls.map(l => l.id !== lid ? l : withComps(l, [...l.components, { product_id: pid, qty: 1, override: true, original_qty: 0 }])));
@@ -1340,24 +1528,64 @@ function EditSOModal({ so, role, onClose }) {
         </div>
       </div>
 
+      {/* Pricing in bulk. A BOQ is a hundred lines; typing a hundred prices is
+          not a workflow, so the common cases are one action each. */}
+      {lines.length > 0 && (
+        <div className="card mb-2"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px' }}>
+          <span className="tiny muted" style={{ fontWeight: 600 }}>Price</span>
+          <input className="input num" type="number" placeholder="margin %" value={bulkMargin}
+            onChange={e => setBulkMargin(e.target.value)} style={{ width: 92, height: 28 }}
+            title="Selling price = what we pay the vendor + this %"/>
+          <button className="btn btn-sm" disabled={bulkMargin === ''} onClick={() => applyMargin(bulkMargin, false)}
+            title="Prices every item from what we actually last paid for it">
+            Cost + % · all
+          </button>
+          <button className="btn btn-sm" disabled={bulkMargin === '' || !selCompKeys.length}
+            onClick={() => applyMargin(bulkMargin, true)}>selected only</button>
+          <span style={{ width: 1, height: 22, background: 'var(--border)' }}/>
+          <input className="input num" type="number" placeholder="flat ₹" value={bulkPrice}
+            onChange={e => setBulkPrice(e.target.value)} style={{ width: 92, height: 28 }}/>
+          <button className="btn btn-sm" disabled={bulkPrice === '' || !selCompKeys.length}
+            onClick={applyFlatPrice}>Apply to {selCompKeys.length}</button>
+          <span className="tiny muted" style={{ marginLeft: 'auto' }}>
+            {selCompKeys.length ? `${selCompKeys.length} selected` : 'tick items, or use “all”'}
+          </span>
+        </div></div>
+      )}
+
       {lines.length === 0 ? (
         <div className="empty">No line items. Add a bundle above.</div>
       ) : (
         <table className="t">
           <thead><tr>
-            <th style={{ width: 22 }}></th><th>Bundle</th><th className="num">Qty</th><th className="num">Unit ₹</th><th className="num">Line ₹</th><th style={{ width: 28 }}></th>
+            <th style={{ width: 22 }}></th><th>Bundle</th><th className="num">Qty</th>
+            <th className="num">Cost ₹</th><th className="num">Unit ₹</th><th className="num">Margin</th>
+            <th className="num">Line ₹</th><th style={{ width: 28 }}></th>
           </tr></thead>
           <tbody>
             {lines.map(l => {
               const cat = getCategory(l.category_id) || { name: l.category_id, hsn: '' };
               const open = expanded[l.id];
+              const lineCost = (l.components || []).reduce(
+                (a, c) => a + itemCost(state, c.product_id).cost * (Number(c.qty) || 0), 0);
+              const lineMargin = l.unit_price > 0 && lineCost > 0
+                ? ((l.unit_price - lineCost) / l.unit_price) * 100 : null;
               return (
                 <Fragment key={l.id}>
                   <tr>
                     <td style={{ cursor: 'pointer' }} onClick={() => setExpanded(e => ({ ...e, [l.id]: !open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={12}/></td>
                     <td><div style={{ fontWeight: 500 }}>{cat.name}</div><div className="tiny muted">{l.components.length} components</div></td>
                     <td className="num"><input type="number" className="input mono" min="1" value={l.bundle_qty} onChange={e => updateLine(l.id, { bundle_qty: parseInt(e.target.value) || 1 })} style={{ width: 64, textAlign: 'right' }}/></td>
-                    <td className="num"><input type="number" className="input mono" value={l.unit_price} onChange={e => updateLine(l.id, { unit_price: parseInt(e.target.value) || 0 })} style={{ width: 96, textAlign: 'right' }}/></td>
+                    <td className="num mono small muted" title="What this set costs us, from what we last paid">{lineCost > 0 ? inr(lineCost) : '—'}</td>
+                    <td className="num">
+                      <input type="number" className="input mono" value={l.unit_price}
+                        onChange={e => priceLine(l.id, e.target.value)}
+                        title="Type a price for the whole set — it is spread over the items inside"
+                        style={{ width: 96, textAlign: 'right' }}/>
+                    </td>
+                    <td className="num small" style={{ color: lineMargin == null ? 'var(--text-muted)' : lineMargin < 0 ? 'var(--danger)' : 'var(--success)' }}>
+                      {lineMargin == null ? '—' : `${lineMargin > 0 ? '+' : ''}${lineMargin.toFixed(1)}%`}
+                    </td>
                     <td className="num"><strong>{inr(l.bundle_qty * l.unit_price)}</strong></td>
                     <td><button className="btn btn-ghost btn-sm" onClick={() => removeLine(l.id)}><Icon name="trash" size={12} color="var(--danger)"/></button></td>
                   </tr>
@@ -1365,19 +1593,37 @@ function EditSOModal({ so, role, onClose }) {
                     <>
                       {l.components.map(c => {
                         const p = getProduct(c.product_id) || { name: c.product_id, code: c.product_id, uom: '' };
+                        const cInfo = itemCost(state, c.product_id);
+                        const cSell = compSellOf(c, p);
+                        const cMargin = cSell > 0 && cInfo.cost > 0 ? ((cSell - cInfo.cost) / cSell) * 100 : null;
                         return (
                           <tr key={c.product_id} className="subrow">
-                            <td></td>
+                            <td style={{ textAlign: 'center' }}>
+                              <input type="checkbox" checked={!!selComp[l.id + '|' + c.product_id]}
+                                onChange={() => setSelComp(sc => ({ ...sc, [l.id + '|' + c.product_id]: !sc[l.id + '|' + c.product_id] }))}/>
+                            </td>
                             <td><div style={{ fontSize: 12 }}>{p.name}</div><div className="tiny muted mono">{p.code}</div></td>
                             <td className="num"><input type="number" className="input mono" min="0" value={Math.round((c.qty || 0) * (l.bundle_qty || 1))} onChange={e => { const t = parseInt(e.target.value) || 0; const b = l.bundle_qty || 1; updateComp(l.id, c.product_id, { qty: t / b }); }} style={{ width: 72, textAlign: 'right', height: 24 }}/>{l.bundle_qty > 1 && <div className="tiny muted">{(c.qty || 0)}/bundle</div>}{c.override && <div className="tiny" style={{ color: 'var(--warning)' }}>was {Math.round((c.original_qty || 0) * (l.bundle_qty || 1))}</div>}</td>
-                            <td colSpan="2" className="num small muted">@ {inr(p.buy || 0)}</td>
+                            <td className="num mono small muted" title={cInfo.source === 'actual' ? `Last paid on ${fmtDate(cInfo.date)} (${cInfo.po_no})` : cInfo.source === 'catalogue' ? 'Standard cost from the catalogue' : 'Never purchased — no cost known yet'}>
+                              {cInfo.cost > 0 ? inr(cInfo.cost) : '—'}
+                              {cInfo.source === 'actual' && <div className="tiny" style={{ color: 'var(--success)' }}>actual</div>}
+                            </td>
+                            <td className="num">
+                              <input type="number" className="input mono" min="0" value={cSell}
+                                onChange={e => priceComp(l.id, c.product_id, e.target.value)}
+                                style={{ width: 90, textAlign: 'right', height: 24 }}/>
+                            </td>
+                            <td className="num tiny" style={{ color: cMargin == null ? 'var(--text-muted)' : cMargin < 0 ? 'var(--danger)' : 'var(--success)' }}>
+                              {cMargin == null ? '—' : `${cMargin > 0 ? '+' : ''}${cMargin.toFixed(0)}%`}
+                            </td>
+                            <td className="num tiny muted">{inr(cSell * (Number(c.qty) || 0) * (l.bundle_qty || 1))}</td>
                             <td><button className="btn btn-ghost btn-sm" onClick={() => removeComp(l.id, c.product_id)}><Icon name="x" size={11}/></button></td>
                           </tr>
                         );
                       })}
                       <tr className="subrow">
                         <td></td>
-                        <td colSpan="5" style={{ padding: '6px 0 12px' }}>
+                        <td colSpan="7" style={{ padding: '6px 0 12px' }}>
                           <select className="select" value="" onChange={e => { if (e.target.value) { addComp(l.id, e.target.value); e.target.value = ''; } }} style={{ width: 220, height: 24, fontSize: 11.5 }}>
                             <option value="">+ Add component…</option>
                             {state.products.filter(p => !l.components.find(c => c.product_id === p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}

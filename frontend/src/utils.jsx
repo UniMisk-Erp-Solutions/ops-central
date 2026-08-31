@@ -256,7 +256,40 @@ function partyItemName(aliasMap, product, mode) {
            altCode: theirCode, altName: theirName, mapped: mapped, uom: a ? a.uom : null };
 }
 
+// ===== What an item costs us =====
+// In order of trust: what we actually last paid a vendor, then the catalogue's
+// standard cost. Vendor POs are already in memory, so this needs no round trip.
+// `vendorId` narrows it to one vendor's own last price.
+function lastBuyOf(state, productId, vendorId) {
+  let best = null;
+  ((state && state.vendor_pos) || []).forEach(po => {
+    if (['Rejected', 'Cancelled'].indexOf(po.status) !== -1) return;
+    if (vendorId && po.vendor_id !== vendorId) return;
+    (po.items || []).forEach(it => {
+      if (it.product_id !== productId) return;
+      const d = po.date || '';
+      if (!best || d > best.date) {
+        best = { vendor_id: po.vendor_id, rate: Number(it.rate) || 0, date: d, po_no: po.po_no };
+      }
+    });
+  });
+  return best;
+}
+
+// A single number for cost, with where it came from — never a bare guess.
+//   actual    we have bought it; this is what we paid
+//   catalogue the standard cost on the item
+//   none      we have no idea yet, and the UI must say so
+function itemCost(state, productId) {
+  const last = lastBuyOf(state, productId, null);
+  if (last && last.rate > 0) return { cost: last.rate, source: 'actual', po_no: last.po_no, date: last.date };
+  const p = ((state && state.products) || []).find(x => x.id === productId);
+  if (p && Number(p.buy) > 0) return { cost: Number(p.buy), source: 'catalogue' };
+  return { cost: 0, source: 'none' };
+}
+
 Object.assign(window, {
+  lastBuyOf, itemCost,
   inrFmt, inr, inrK, fmtDate, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
   Icon, StatusBadge, PriorityBadge, Avatar, Delta, Toggle, Modal,
   ToastProvider, useToast,

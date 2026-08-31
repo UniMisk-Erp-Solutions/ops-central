@@ -24,12 +24,22 @@ catch (e) { console.error('Missing dev dep. Run: npm i --no-save @babel/standalo
 const dir = process.argv[2] || path.join(__dirname, '..', '..', 'frontend');
 const sandbox = { console: { log() {}, warn() {}, error() {} } };
 sandbox.window = sandbox; sandbox.globalThis = sandbox;
-sandbox.React = { createElement: () => null, Fragment: 'F', useState: () => [null, () => {}],
-  useEffect: () => {}, useMemo: (f) => f(), useRef: () => ({ current: null }) };
+// utils.jsx destructures these off React at load time, so the stub has to
+// carry every one it names — not just the hooks this test happens to call.
+sandbox.React = { createElement: () => null, Fragment: 'F',
+  useState: () => [null, () => {}], useEffect: () => {}, useMemo: (f) => f(),
+  useRef: () => ({ current: null }), useCallback: (f) => f,
+  useContext: () => null, createContext: () => ({ Provider: 'P' }) };
 vm.createContext(sandbox);
-vm.runInContext(Babel.transform(
-  fs.readFileSync(path.join(dir, 'src', 'screens-alloc.jsx'), 'utf8'),
-  { presets: ['react'], filename: 'screens-alloc.jsx' }).code, sandbox);
+// utils.jsx first: the cost lookup lives there now, and screens-alloc.jsx
+// delegates to it rather than keeping a second copy.
+sandbox.document = { createElement: () => ({ style: {}, setAttribute() {}, appendChild() {} }),
+  head: { appendChild() {} }, addEventListener() {}, removeEventListener() {} };
+sandbox.addEventListener = () => {}; sandbox.removeEventListener = () => {};
+for (const f of ['utils.jsx', 'screens-alloc.jsx']) {
+  vm.runInContext(Babel.transform(fs.readFileSync(path.join(dir, 'src', f), 'utf8'),
+    { presets: ['react'], filename: f }).code, sandbox, { filename: f });
+}
 
 const { allocBuildRows, allocLastBuy } = sandbox;
 

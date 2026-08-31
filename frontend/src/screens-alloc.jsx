@@ -24,19 +24,7 @@
 // What we last bought this item as, most recent first. Vendor POs are already
 // in memory, so this costs nothing and needs no new table.
 function allocLastBuy(state, productId, vendorId) {
-  let best = null;
-  (state.vendor_pos || []).forEach(po => {
-    if (['Rejected', 'Cancelled'].includes(po.status)) return;
-    if (vendorId && po.vendor_id !== vendorId) return;
-    (po.items || []).forEach(it => {
-      if (it.product_id !== productId) return;
-      const d = po.date || '';
-      if (!best || d > best.date) {
-        best = { vendor_id: po.vendor_id, rate: Number(it.rate) || 0, date: d, po_no: po.po_no };
-      }
-    });
-  });
-  return best;
+  return lastBuyOf(state, productId, vendorId);
 }
 
 // One row per (order line, component), so an item appearing in two different
@@ -207,12 +195,23 @@ function VendorAllocator({ soId, onClose }) {
               {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
             <button className="btn btn-sm" disabled={!bulkVendor || !selKeys.length}
-              onClick={() => patch(selKeys, { vendor_id: bulkVendor })}>Apply</button>
+              onClick={() => {
+                patch(selKeys, { vendor_id: bulkVendor });
+                // Clear the ticks: the action is done, and leaving them set
+                // meant the NEXT Apply silently hit the same rows again.
+                setSel({}); setBulkVendor('');
+                toast(`${selKeys.length} item(s) → ${(getVendor(bulkVendor) || {}).name || 'vendor'}`, 'success');
+              }}>Apply</button>
             <span style={{ width: 1, height: 22, background: 'var(--border)' }}/>
             <input className="input num" type="number" min="0" placeholder="Rate ₹" value={bulkRate}
               onChange={e => setBulkRate(e.target.value)} style={{ width: 110, height: 28 }}/>
             <button className="btn btn-sm" disabled={bulkRate === '' || !selKeys.length}
-              onClick={() => patch(selKeys, { rate: Number(bulkRate) || 0 })}>Apply to {selKeys.length}</button>
+              onClick={() => {
+                const n = selKeys.length;
+                patch(selKeys, { rate: Number(bulkRate) || 0 });
+                setSel({}); setBulkRate('');
+                toast(`${n} item(s) priced at ${inr(Number(bulkRate) || 0)}`, 'success');
+              }}>Apply to {selKeys.length}</button>
           </div></div>
 
           <div className="card">
