@@ -300,6 +300,11 @@ function SOVendorPOsTab({ so }) {
 
   return (
     <div className="stack">
+      {/* Anything Stores has confirmed as arrived, waiting on Purchase. Same
+          records and actions as the GRN screen and the Virtual Godown — this is
+          simply the third place the person who must act on it might be. */}
+      <PendingReceiptsPanel soId={so.id}/>
+
       {/* Grand totals */}
       <div className="mb-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Vendors</div><div style={{ fontSize: 18, fontWeight: 700 }}>{pos.length}</div></div></div>
@@ -1091,35 +1096,9 @@ function GRNList() {
         </div>
       </div>
 
-      {pending.length > 0 && (
-        <div className="card" style={{ marginBottom: 14, borderColor: 'var(--warning)' }}>
-          <div className="card-header"><div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="clock" size={14} color="var(--warning)"/>Awaiting {flow.approverLabel} acceptance <span className="badge warn dot">{pending.length}</span></div><div className="tiny muted">{flow.requesterLabel} confirmed these received — accept to post the GRN{wfOn('auto_invoice_on_grn') ? ' & raise the client invoice' : ''}</div></div>
-          <div className="card-body flush">
-            <table className="t">
-              <thead><tr><th>Sales Order</th><th>Confirmed by</th><th>Date</th><th>Items received</th><th className="num">Units</th><th></th></tr></thead>
-              <tbody>
-                {pending.map(({ so, pr }) => (
-                  <tr key={pr.id}>
-                    <td><a className="mono" onClick={() => navigate(`godown/${so.id}`)} style={{ cursor: 'pointer' }}>{so.so_no}</a></td>
-                    <td className="small">{(getUser(pr.by) || {}).name || pr.by}</td>
-                    <td className="mono small">{fmtDate(pr.date)}</td>
-                    <td className="small">{pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}</td>
-                    <td className="num">{pr.picks.reduce((a, p) => a + (Number(p.qty) || 0), 0)}</td>
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      {canAccept ? (
-                        <>
-                          <button className="btn sm primary" disabled={busy === pr.id} onClick={() => acceptReceipt({ so, pr })}>{busy === pr.id ? 'Posting…' : 'Accept & post GRN'}</button>
-                          <button className="btn sm ghost" disabled={busy === pr.id} onClick={() => rejectReceipt({ so, pr })} style={{ marginLeft: 6 }}>Reject</button>
-                        </>
-                      ) : <span className="tiny muted">awaiting {flow.approverLabel}</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {/* Same records and the same actions as the order's Virtual Godown and its
+          Vendor POs tab — one implementation, shown wherever the work is. */}
+      <div style={{ marginBottom: 14 }}><PendingReceiptsPanel/></div>
 
       {poolPending.length > 0 && (
         <div className="card" style={{ marginBottom: 14, borderColor: 'var(--accent)' }}>

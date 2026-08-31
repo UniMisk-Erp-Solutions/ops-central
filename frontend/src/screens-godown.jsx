@@ -497,6 +497,102 @@ function PoolReceiptModal({ receipt: r, so, onClose }) {
 // each row a POOL/… receipt. Click a row → printable receipt. Mirrors the GRN screen.
 // Goods receipts raised against this order, where the people who raise them
 // work. Same records as the GRN screen — one source, shown twice.
+// Receipts confirmed by one side and waiting on the other.
+//
+// This used to live only on the GRN screen, so Purchase had to already know to
+// go and look — and a queue nobody finds is a queue nobody clears. Same records,
+// same actions, now rendered wherever the work actually is: the GRN screen, the
+// order's Virtual Godown, and the order's Vendor POs tab.
+//
+// `soId` limits it to one order; leaving it out shows every order's queue.
+function PendingReceiptsPanel({ soId, title }) {
+  const { state, mutate, navigate, getUser, getProduct, getVendor, addToPool, currentUser } = useStore();
+  const toast = useToast();
+  const [busy, setBusy] = React.useState('');
+  const role = (getUser(currentUser) || {}).role;
+  const flow = wfReceiving();
+  const canAccept = flow.approverRoles.includes(role);
+
+  const pending = [];
+  (state.sales_orders || []).forEach(so => {
+    if (soId && so.id !== soId) return;
+    ((so.extra && so.extra.pending_receipts) || []).forEach(pr => {
+      if (pr.status === 'Pending') pending.push({ so, pr });
+    });
+  });
+  if (!pending.length) return null;
+
+  const accept = async ({ so, pr }) => {
+    setBusy(pr.id);
+    let r = { units: 0 };
+    if (window.vgReceiveComponents) {
+      r = await window.vgReceiveComponents(so, pr.picks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
+    }
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Accepted', accepted_by: currentUser, accepted_date: TODAY } : p) } } : x),
+      notifications: [{ id: 'n-reca-' + Date.now(), kind: 'grn', text: `${so.so_no}: receipt accepted by ${flow.approverLabel} · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice auto-raised' : ''}`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
+    }), { action: 'receipt-accept', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} accepted receipt · GRN posted · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+    setBusy('');
+    toast(`Accepted · ${r.units} unit(s) received · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice raised' : ''}`, 'success');
+  };
+
+  const reject = ({ so, pr }) => {
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Rejected', rejected_by: currentUser, rejected_date: TODAY } : p) } } : x),
+      notifications: [{ id: 'n-recr-' + Date.now(), kind: 'grn', text: `${so.so_no}: ${flow.approverLabel} could not accept the confirmed receipt — please re-check`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
+    }), { action: 'receipt-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} rejected confirmed receipt · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+    toast(`Receipt returned to ${flow.requesterLabel}`, '');
+  };
+
+  return (
+    <div className="card" style={{ borderColor: 'var(--warning)' }}>
+      <div className="card-header">
+        <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon name="clock" size={14} color="var(--warning)"/>
+          {title || `Awaiting ${flow.approverLabel} acceptance`}
+          <span className="badge warn dot">{pending.length}</span>
+        </div>
+        <div className="tiny muted">
+          {flow.requesterLabel} confirmed these received — accept to post the GRN
+          {wfOn('auto_invoice_on_grn') ? ' & raise the client invoice' : ''}
+        </div>
+      </div>
+      <div className="card-body flush">
+        <table className="t">
+          <thead><tr>
+            {!soId && <th>Sales order</th>}
+            <th>Confirmed by</th><th>Date</th><th>Items received</th><th className="num">Units</th><th></th>
+          </tr></thead>
+          <tbody>
+            {pending.map(({ so, pr }) => (
+              <tr key={pr.id}>
+                {!soId && <td><a className="mono small" style={{ cursor: 'pointer' }} onClick={() => navigate(`godown/${so.id}`)}>{so.so_no}</a></td>}
+                <td className="small">{(getUser(pr.by) || {}).name || pr.by}</td>
+                <td className="mono small">{fmtDate(pr.date)}</td>
+                <td className="small" style={{ maxWidth: 380 }}>{pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}</td>
+                <td className="num mono">{pr.picks.reduce((a, p) => a + (Number(p.qty) || 0), 0)}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {canAccept ? (
+                    <>
+                      <button className="btn btn-sm btn-primary" disabled={busy === pr.id} onClick={() => accept({ so, pr })}>
+                        {busy === pr.id ? 'Posting…' : 'Accept & post GRN'}
+                      </button>
+                      <button className="btn btn-sm" disabled={busy === pr.id} onClick={() => reject({ so, pr })} style={{ marginLeft: 6 }}>Reject</button>
+                    </>
+                  ) : <span className="tiny muted">awaiting {flow.approverLabel}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+window.PendingReceiptsPanel = PendingReceiptsPanel;
+
 function VGGrnCard({ so }) {
   const { state, navigate, getProduct, getVendor } = useStore();
   const poById = {};
@@ -1175,6 +1271,7 @@ function VirtualGodownView({ soId, embedded }) {
       )}
       <div className="split-2to1">
         <div className="stack">
+        <PendingReceiptsPanel soId={so.id}/>
         <VGAddFromPoolPanel so={so}/>
         <VGPoolSendPanel so={so}/>
         <VGGrnCard so={so}/>
