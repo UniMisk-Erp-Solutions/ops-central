@@ -9,11 +9,45 @@ const SYNCED_TABLES = {
   outward_dispatches: 'id',
 };
 const LOADED_TABLES = [
+  // Master data. Per-organization in the database (RLS + composite keys), so it
+  // MUST be read from there. While these were missing from this list they were
+  // only ever populated from seed.js, which meant every tenant — including a
+  // brand-new one with an empty catalogue — ran on the demo company's products.
+  'products', 'categories', 'boms',
   'customers', 'vendors',
+  // Transactional
   'sales_orders', 'vendor_pos', 'grns', 'vendor_invoices', 'payments',
   'pool', 'rfqs', 'sourcings', 'transfer_requests', 'notifications', 'audit',
   'outward_dispatches',
 ];
+
+// Is this a real deployment? Deliberately keyed on CONFIGURATION, not on
+// window.OPC_SB existing: config.js sets that to null whenever the Supabase
+// library fails to load (a blocked CDN, a flaky network). Keying on the client
+// would mean a transient failure silently downgraded a live tenant into demo
+// mode and filled their screen with another company's orders. A configured
+// deployment shows real data or nothing — never fiction.
+function hasBackend() {
+  if (typeof window === 'undefined') return false;
+  if (window.OPC_SB) return true;
+  const env = window.OPC_ENV || {};
+  return !!(env.SUPABASE_URL && String(env.SUPABASE_URL).trim());
+}
+
+// Every id that ships inside seed.js. Demo rows must never be mistaken for work
+// the user did offline and pushed into a real organization's database.
+let __seedIdCache = null;
+function seedIds() {
+  if (__seedIdCache) return __seedIdCache;
+  const ids = new Set();
+  const seed = (typeof window !== 'undefined' && window.OPC_SEED) || {};
+  Object.keys(seed).forEach(k => {
+    if (!Array.isArray(seed[k])) return;
+    seed[k].forEach(r => { if (r && r.id != null) ids.add(k + ':' + r.id); });
+  });
+  __seedIdCache = ids;
+  return ids;
+}
 
 // Map an arbitrary audit entry onto the audit table's columns (extras → detail).
 function __auditRow(a) {
@@ -55,31 +89,78 @@ function __syncTables(prev, next) {
 }
 
 function loadInitialState() {
+  const defaults = buildDefaultState();
+  let parsed = null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed.__version === window.OPC_SEED.version) return { ...parsed, loaded: false };
+      const p = JSON.parse(raw);
+      if (p && p.__version === window.OPC_SEED.version) parsed = p;
     }
-  } catch (e) {}
+  } catch (e) { /* unreadable cache -> defaults */ }
+  if (!parsed) return defaults;
+
+  // ---------------------------------------------------------------------
+  // With a backend, the cache is a RECOVERY BUFFER — never a render source.
+  //
+  // It used to be rendered directly at boot, which is why signing in as a
+  // different company still showed the previous one's orders: the rows were on
+  // screen from the first paint, before auth had even resolved and long before
+  // the load could replace them. Whose cache it is cannot be known here —
+  // loadInitialState runs before the session is read — so the only safe answer
+  // is to render none of it and let the database fill the screen.
+  //
+  // The rows are kept aside in __cached so the offline-recovery path can still
+  // rescue genuine work created during an outage, once the identity IS known.
+  // ---------------------------------------------------------------------
+  if (hasBackend()) {
+    return { ...defaults, __cached: parsed };
+  }
+
+  // Offline / demo: the cache IS the data. Layer it over the defaults rather
+  // than replacing them, so a key the cache happens not to carry — an older
+  // build, a partially-written save — never arrives as undefined.
   return {
-    __version: window.OPC_SEED.version,
+    ...defaults, ...parsed,
+    org: { ...defaults.org, ...(parsed.org || {}) },
+    config: { ...defaults.config, ...(parsed.config || {}) },
+    loaded: false,
+  };
+}
+
+function buildDefaultState() {
+  // With a backend, EVERY tenant table starts empty and is filled from the
+  // database for the organization the user actually belongs to. Seeding them
+  // meant a tenant opened onto another company's orders, customers and
+  // catalogue — and, because those rows exist in no database, the offline
+  // recovery path was ready to push them into that tenant's organization.
+  const live = hasBackend();
+  const seed = window.OPC_SEED;
+  const demo = (key) => (live ? [] : (seed[key] || []));
+  return {
+    __version: seed.version,
     loaded: false,   // becomes true once the DB load (or offline/seed fallback) resolves
-    org: { ...window.OPC_SEED.org },
-    users: window.OPC_SEED.users,
-    categories: window.OPC_SEED.categories,
-    products: window.OPC_SEED.products,
-    boms: window.OPC_SEED.boms,
-    customers: window.OPC_SEED.customers,
-    vendors: window.OPC_SEED.vendors,
-    sales_orders: window.OPC_SEED.sales_orders,
-    vendor_pos: window.OPC_SEED.vendor_pos,
-    grns: window.OPC_SEED.grns,
-    vendor_invoices: window.OPC_SEED.vendor_invoices,
-    payments: window.OPC_SEED.payments,
-    pool: window.OPC_SEED.pool,
-    rfqs: window.OPC_SEED.rfqs,
-    sourcings: window.OPC_SEED.sourcings || [],
+    // Branding defaults (fiscal year, currency, colours) are safe to keep; the
+    // IDENTITY fields are not — they named the demo company in every tenant's
+    // topbar. The real organization supplies those, and the tenant's own config
+    // overrides them if they have customised their branding.
+    org: live
+      ? { ...seed.org, name: '', gstin: '', address: '' }
+      : { ...seed.org },
+    users: demo('users'),
+    categories: demo('categories'),
+    products: demo('products'),
+    boms: demo('boms'),
+    customers: demo('customers'),
+    vendors: demo('vendors'),
+    sales_orders: demo('sales_orders'),
+    vendor_pos: demo('vendor_pos'),
+    grns: demo('grns'),
+    vendor_invoices: demo('vendor_invoices'),
+    payments: demo('payments'),
+    pool: demo('pool'),
+    rfqs: demo('rfqs'),
+    sourcings: demo('sourcings'),
     audit: [],
     notifications: [],
     transfer_requests: [],
@@ -162,6 +243,10 @@ function StoreProvider({ children }) {
         window.__opcFeatures = undefined;
         window.__opcWorkflow = undefined;
         window.__opcWorkflowProfile = undefined;
+        // Nav/capability customisations belong to ONE organization. Leaving the
+        // previous tenant's blob in place applied their menu to the next user
+        // and, if it was partial, crashed the shell outright.
+        window.__opcPerms = null;
         window.__opcOrg = null;
         window.__opcIsMaster = false;
       }
@@ -193,13 +278,20 @@ function StoreProvider({ children }) {
           // A PLATFORM-ONLY account is a master admin belonging to no organization:
           // it gets the standalone console, never a tenant's app.
           const orgId = ctx.data.active_org_id || null;
+          const tenantOrg = ctx.data.organization || null;
           setState(prev => {
             const next = { ...prev, platform: {
               ready: true,
               isMaster: !!ctx.data.is_master_admin,
               orgId,
-              org: ctx.data.organization || null,
+              org: tenantOrg,
             } };
+            // Name the tenant's real organization. The tenant's own config blob
+            // wins if they have customised their branding (it sets
+            // __orgFromConfig), so this only fills what is otherwise blank.
+            if (tenantOrg && tenantOrg.name && !prev.__orgFromConfig) {
+              next.org = { ...prev.org, name: tenantOrg.name };
+            }
             // Switched into a different organization -> the cached rows belong to
             // the previous tenant. Drop them and re-load.
             if (prev.__orgId && orgId && prev.__orgId !== orgId) {
@@ -252,7 +344,10 @@ function StoreProvider({ children }) {
 
   // Persist app state locally (offline cache; source of truth is Supabase).
   React.useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+    try {
+      const { __cached, ...persist } = state;   // never re-persist the boot buffer
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(persist));
+    } catch (e) {}
   }, [state]);
 
   // Load customization config from Supabase (singleton row). Falls back to the
@@ -268,6 +363,10 @@ function StoreProvider({ children }) {
         // Config is per-organization. opc_get_config() resolves the caller's org
         // server-side from auth.uid() — the org is never supplied by the client.
         // Falls back to the legacy singleton row if the RPC isn't deployed yet.
+        // Reset first: this effect returns early for a tenant that has no config
+        // row yet (every brand-new organization), and anything left on window
+        // from the previous tenant would silently stay in force.
+        window.__opcPerms = null;
         let blob = null;
         try {
           const rpc = await window.OPC_SB.rpc('opc_get_config');
@@ -281,10 +380,13 @@ function StoreProvider({ children }) {
         }
         if (cancelled) return;
         const { org, ...rest } = blob;
-        if (rest.permissions) window.__opcPerms = rest.permissions;
+        window.__opcPerms = (rest.permissions && typeof rest.permissions === 'object')
+          ? rest.permissions : null;
         const customProds = Array.isArray(rest.custom_products) ? rest.custom_products : [];
+        const orgFromConfig = !!(org && typeof org === 'object' && org.name);
         setState(prev => ({
           ...prev,
+          __orgFromConfig: orgFromConfig || prev.__orgFromConfig,
           org: { ...prev.org, ...(org || {}) },
           config: { ...prev.config, ...rest },
           // Merge admin-added custom components (Master Pool → Add) into the catalogue.
@@ -335,27 +437,58 @@ function StoreProvider({ children }) {
         // different tenant was signed in must never be pushed back — they belong
         // to another organization (RLS would reject them anyway, but we must not
         // even show them).
+        // Rows to consider rescuing: the current state for a session that has
+        // been running, plus the boot cache if — and only if — it was written by
+        // this same user. Anything cached by another tenant is ignored outright.
+        const cached = (cur.__cached && cur.__cached.__uid === realUserId) ? cur.__cached : null;
         const sameIdentity = cur.__uid === realUserId;
+        const recoverFrom = (t) => {
+          const live = sameIdentity ? (cur[t] || []) : [];
+          const buffered = cached ? (cached[t] || []) : [];
+          return live.length ? live : buffered;
+        };
         const RECOVER_SKIP = new Set(['notifications']);
         const merged = {};
         const toPush = [];
         LOADED_TABLES.forEach((t, i) => {
           const { data, error } = results[i];
           if (error || !Array.isArray(data)) return;
+          // boms is stored as ROWS (category_id, components) but the app has
+          // always used it as a MAP { category_id: [components] }. Convert on the
+          // way in — handing screens an array here silently empties every BOM.
+          if (t === 'boms') {
+            const map = {};
+            data.forEach(r => { if (r && r.category_id) map[r.category_id] = r.components || []; });
+            merged[t] = map;
+            return;
+          }
           const pk = SYNCED_TABLES[t];
           if (!pk || RECOVER_SKIP.has(t)) { merged[t] = data; return; }
           const dbIds = new Set(data.map(r => r[pk]));
-          const localOnly = sameIdentity
-            ? (cur[t] || []).filter(r => r && r[pk] != null && !dbIds.has(r[pk]))
-            : [];
+          const seeded = seedIds();
+          const localOnly = recoverFrom(t).filter(r => r && r[pk] != null && !dbIds.has(r[pk])
+            // Demo rows are not "work done offline". Recovering them would
+            // display another company's orders AND write them into this
+            // organization's database.
+            && !seeded.has(t + ':' + r[pk]));
           merged[t] = localOnly.length ? [...localOnly, ...data] : data;
           localOnly.forEach(r => toPush.push({ t, pk, r }));
         });
         setState(prev => {
           const next = { ...prev };
           Object.keys(merged).forEach(t => { next[t] = merged[t]; });
+          // products now come from the database, so re-apply the admin-added
+          // components that live in this org's config blob (Master Pool → Add).
+          const customProds = Array.isArray(prev.config && prev.config.custom_products)
+            ? prev.config.custom_products : [];
+          if (customProds.length && Array.isArray(next.products)) {
+            const have = new Set(next.products.map(p => p.id));
+            const extra = customProds.filter(cp => cp && !have.has(cp.id));
+            if (extra.length) next.products = [...next.products, ...extra];
+          }
           next.loaded = true;   // DB data is in — detail screens may now decide "not found"
           next.__uid = realUserId;
+          delete next.__cached;   // buffer consumed
           return next;
         });
         // Persist the recovered local-only rows back to the DB.
@@ -395,12 +528,39 @@ function StoreProvider({ children }) {
   }, []);
 
   // Helpers
-  const getCustomer = (id) => state.customers.find(c => c.id === id);
-  const getVendor = (id) => state.vendors.find(v => v.id === id);
-  const getProduct = (id) => state.products.find(p => p.id === id);
-  const getCategory = (id) => state.categories.find(c => c.id === id);
-  const getUser = (id) => state.users.find(u => u.id === id);
-  const getSO = (id) => state.sales_orders.find(s => s.id === id);
+  // A record can legitimately reference something this user cannot see: master
+  // data still loading, an item retired from the catalogue, a row belonging to
+  // another organization. Dozens of call sites do getProduct(id).name directly,
+  // so returning undefined turns any of those into a thrown TypeError — and
+  // because it happens during render, React unmounts the whole tree and the
+  // page goes white.
+  //
+  // Return a clearly-marked placeholder of the right SHAPE instead. The screen
+  // then shows "Unknown item (<id>)" — a visible, reportable data problem
+  // rather than an invisible blank page. Callers that care can test __missing.
+  const missing = (kind, id, extra) => ({
+    id: id == null ? '' : String(id),
+    __missing: true,
+    name: `Unknown ${kind}`,
+    code: id == null ? '' : String(id),
+    ...extra,
+  });
+  const getCustomer = (id) => (id == null ? undefined :
+    state.customers.find(c => c.id === id) ||
+    missing('customer', id, { gstin: '', city: '', address: '', terms: '', contact: '', phone: '' }));
+  const getVendor = (id) => (id == null ? undefined :
+    state.vendors.find(v => v.id === id) ||
+    missing('vendor', id, { gstin: '', city: '', address: '', terms: '', contact: '', phone: '', rating: 0 }));
+  const getProduct = (id) => (id == null ? undefined :
+    state.products.find(p => p.id === id) ||
+    missing('item', id, { hsn: '', uom: '', gst: 0, sell: 0, buy: 0 }));
+  const getCategory = (id) => (id == null ? undefined :
+    state.categories.find(c => c.id === id) ||
+    missing('category', id, { hsn: '', gst: 0, bundle_desc: '' }));
+  const getUser = (id) => (id == null ? undefined :
+    state.users.find(u => u.id === id));
+  const getSO = (id) => (id == null ? undefined :
+    state.sales_orders.find(s => s.id === id));
 
   // Computed: SO line subtotal
   const soSubtotal = (so) => so.lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0);

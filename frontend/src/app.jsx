@@ -196,14 +196,86 @@ function OpcTweaks({ t, setTweak }) {
   );
 }
 
+// ===========================================================================
+// Crash boundary
+// ===========================================================================
+// React unmounts the entire tree when a render throws, so ONE bad field in a
+// component that sits on every page produces a white screen with nothing to go
+// on — no message, no route, no way back. This turns that into something a
+// non-technical user can act on and a developer can diagnose, and it keeps the
+// rest of the session recoverable.
+//
+// Deliberately a class component: getDerivedStateFromError / componentDidCatch
+// have no hook equivalent.
+class CrashBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null, info: null };
+  }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    this.setState({ info });
+    try {
+      console.error('[OPC] render crash', error, info && info.componentStack);
+    } catch (e) { /* never throw from the handler */ }
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    const e = this.state.error;
+    const stack = (this.state.info && this.state.info.componentStack) || '';
+    const detail = `${e && e.message ? e.message : String(e)}\n${stack}`.trim();
+    // A stale cache is the most common cause and the most common cure, so it is
+    // the primary action — but it is the user's choice, not automatic, because
+    // clearing it discards anything not yet synced.
+    const reset = () => {
+      try { localStorage.removeItem('opc.state.v3'); } catch (err) {}
+      window.location.reload();
+    };
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: 24, background: 'var(--bg, #f6f7f9)', fontFamily: 'system-ui, sans-serif' }}>
+        <div style={{ maxWidth: 620, width: '100%', background: 'var(--surface, #fff)',
+                      border: '1px solid var(--border, #e3e3e6)', borderRadius: 12, padding: 24 }}>
+          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>This page could not be displayed</div>
+          <div style={{ fontSize: 13, color: 'var(--text-2, #666)', lineHeight: 1.6 }}>
+            Something in the app failed while drawing this screen. Your data is safe —
+            nothing was saved or changed. Reloading usually clears it.
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={() => window.location.reload()}>Reload</button>
+            <button className="btn" onClick={reset} title="Clears this browser's cached copy and reloads from the server">
+              Clear cached data &amp; reload
+            </button>
+            <button className="btn" onClick={() => { window.location.hash = ''; window.location.reload(); }}>
+              Back to dashboard
+            </button>
+          </div>
+          <details open style={{ marginTop: 18 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--text-2, #666)' }}>
+              Technical details (please send this if it keeps happening)
+            </summary>
+            <pre style={{ marginTop: 8, padding: 10, background: 'var(--bg-subtle, #f2f2f4)', borderRadius: 6,
+                          fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                          maxHeight: 260, overflow: 'auto' }}>{detail}</pre>
+          </details>
+        </div>
+      </div>
+    );
+  }
+}
+
 function Root() {
   return (
-    <StoreProvider>
-      <ToastProvider>
-        <App/>
-      </ToastProvider>
-    </StoreProvider>
+    <CrashBoundary>
+      <StoreProvider>
+        <ToastProvider>
+          <App/>
+        </ToastProvider>
+      </StoreProvider>
+    </CrashBoundary>
   );
 }
+
+window.CrashBoundary = CrashBoundary;
 
 ReactDOM.createRoot(document.getElementById('root')).render(<Root/>);
