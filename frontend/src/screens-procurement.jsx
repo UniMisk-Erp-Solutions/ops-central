@@ -618,6 +618,8 @@ window.SplitAllocatorModal = SplitAllocatorModal;
 function VendorPOList() {
   const { state, navigate, getVendor, getSO, getCustomer, currentUser, getUser } = useStore();
   const [showPO, setShowPO] = React.useState(false);
+  const [allocSO, setAllocSO] = React.useState('');     // bulk assign for one SO
+  const [pickAlloc, setPickAlloc] = React.useState(false);
   const [search, setSearch] = React.useState('');
   const [vendorF, setVendorF] = React.useState('');
   const [statusF, setStatusF] = React.useState('');
@@ -674,10 +676,16 @@ function VendorPOList() {
         </div>
         <div className="page-actions">
           <button className={`btn ${groupBySO ? 'btn-primary' : ''}`} onClick={() => setGroupBySO(g => !g)}><Icon name="layers" size={13}/>{groupBySO ? 'Grouped by project' : 'Flat list'}</button>
-          {canCreate && <button className="btn btn-primary" onClick={() => setShowPO(true)}><Icon name="plus" size={13}/>Create Vendor PO</button>}
+          {canCreate && <button className="btn btn-primary" onClick={() => setPickAlloc(true)}
+            title="Pick vendors and prices for a whole order at once, then raise every PO together">
+            <Icon name="layers" size={13}/>Assign vendors &amp; prices</button>}
+          {canCreate && <button className="btn" onClick={() => setShowPO(true)}><Icon name="plus" size={13}/>Single PO</button>}
         </div>
       </div>
       {showPO && <CreateVendorPOModal onClose={() => setShowPO(false)}/>}
+      {pickAlloc && <AllocSOPicker onClose={() => setPickAlloc(false)}
+        onPick={id => { setPickAlloc(false); setAllocSO(id); }}/>}
+      {allocSO && <VendorAllocator soId={allocSO} onClose={() => setAllocSO('')}/>}
 
       <div className="card">
         <div className="filter-bar">
