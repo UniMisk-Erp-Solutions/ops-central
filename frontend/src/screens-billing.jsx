@@ -883,6 +883,14 @@ function SOGrnTab({ so }) {
 // (0.8, then 0.2…), then — if the order is now fully received & billed — raise
 // the consolidated qty-1 final. Both are separate, real, shareable invoices.
 function autoInvoiceSO(soId, ctx) {
+  // Some companies invoice outside this system — Microlink among them — and say
+  // so with auto_invoice_on_grn = false. Receiving goods was raising a customer
+  // tax invoice for them anyway, which is money out of the door on a workflow
+  // that explicitly asked for none.
+  //
+  // Only the AUTOMATIC path is gated. Billing raising an invoice by hand still
+  // works exactly as before; this is about what happens without being asked.
+  if (typeof wfOn === 'function' && !wfOn('auto_invoice_on_grn')) return null;
   const made = raiseSOInvoice(soId, { mode: 'itemfraction' }, ctx, { silent: true });
   // Always attempt the main/final invoice. Report it when the partial had nothing
   // new to bill (e.g. everything was already invoiced) so callers don't say

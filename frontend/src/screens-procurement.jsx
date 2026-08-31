@@ -783,10 +783,13 @@ function VendorPODetail({ poId }) {
   const vInv = (state.vendor_invoices || []).find(x => x.po_id === po.id);
   const grn = state.grns.find(g => g.po_id === po.id);
   // Simple, mostly-automatic lifecycle for non-tech users.
+  // Only show the stages this organization actually has. An e-Bill step on a
+  // company with e-invoicing switched off is a step that never completes, and a
+  // permanently grey stage reads as something being wrong.
   const stages = [
     { label: 'Issued', done: true },
     { label: 'Received', done: po.status === 'Material Received' || !!grn },
-    { label: 'e-Bill', done: !!ebilled },
+    ...(featureOn('e_invoice') ? [{ label: 'e-Bill', done: !!ebilled }] : []),
     { label: 'Vendor Invoice', done: !!vInv },
     { label: 'Booked', done: !!(vInv && vInv.status === 'Booked') },
   ];
@@ -825,9 +828,9 @@ function VendorPODetail({ poId }) {
           </>}
           {po.status === 'On Hold' && canApprovePO && <button className="btn btn-primary" onClick={() => setPoStatus('Issued', `${po.po_no} resumed`)}><Icon name="repeat" size={13}/>Resume</button>}
           {canProcurePO && ['Issued', 'In Transit'].includes(po.status) && !po.pending_change && !grn && <button className="btn" onClick={() => setShowChange(true)}><Icon name="arrowLeftRight" size={13}/>Change vendor</button>}
-          {ebilled
-            ? <button className="btn" onClick={() => window.print()}><Icon name="print" size={13}/>Print e-Bill</button>
-            : !blocked && <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>}
+          {featureOn('e_invoice') && (ebilled
+            ? <button className="btn" onClick={() => printPOEbill(po, v, so, state.org, getProduct)}><Icon name="print" size={13}/>Print e-Bill</button>
+            : !blocked && <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>)}
           {!blocked && (po.status !== 'Material Received'
             ? <button className="btn btn-primary" onClick={() => navigate('grn')}><Icon name="package" size={13}/>Create GRN</button>
             : !vInv
@@ -858,7 +861,7 @@ function VendorPODetail({ poId }) {
         <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}><div className="card-body">
           <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Vendor side · we pay (payable)</div>
           <div className="mono" style={{ fontSize: 17, fontWeight: 700, marginTop: 2 }}>{inr(grand)}</div>
-          <div className="tiny muted">{ebilled ? <>e-Bill <span className="mono">{po.ebill.no}</span> · {fmtDate(po.ebill.date)}</> : 'PO e-Bill not generated yet'} · {vInv ? `vendor invoice ${vInv.vendor_invoice_no} (3-way)` : 'no vendor invoice yet'}</div>
+          <div className="tiny muted">{featureOn('e_invoice') ? (ebilled ? <>e-Bill <span className="mono">{po.ebill.no}</span> · {fmtDate(po.ebill.date)} · </> : <>PO e-Bill not generated yet · </>) : null}{vInv ? `vendor invoice ${vInv.vendor_invoice_no} (3-way)` : 'no vendor invoice yet'}</div>
         </div></div>
         <div className="card"><div className="card-body">
           <div className="tiny muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Client side · customer pays (receivable)</div>
@@ -968,7 +971,7 @@ function VendorPODetail({ poId }) {
             </div>
           </div>
 
-          <div className="card">
+          {featureOn('e_invoice') && <div className="card">
             <div className="card-header"><h3 className="card-title">PO e-Bill</h3></div>
             <div className="card-body">
               {ebilled ? (
@@ -981,8 +984,9 @@ function VendorPODetail({ poId }) {
               ) : (
                 <div className="small muted">No e-Bill yet. Generate it to issue an official PO document, stored on this Vendor PO. <div className="mt-2"><button className="btn btn-sm btn-primary" onClick={genEbill}><Icon name="receipt" size={12}/>Generate PO e-Bill</button></div></div>
               )}
+              {ebilled && <div className="mt-2"><button className="btn btn-sm" onClick={() => printPOEbill(po, v, so, state.org, getProduct)}><Icon name="print" size={12}/>Print / Download PDF</button></div>}
             </div>
-          </div>
+          </div>}
 
           <div className="card">
             <div className="card-header"><h3 className="card-title">Project vendor history</h3></div>
@@ -1349,6 +1353,68 @@ async function postReceiptForPO(po, items, meta, ctx) {
 window.postReceiptForPO = postReceiptForPO;
 
 // Per-vendor receive modal (used from the SO Vendor POs tab — scalable to many vendors).
+// The PO e-Bill as a document.
+//
+// "Print e-Bill" used to call window.print(), which prints the BROWSER PAGE —
+// sidebar, buttons and all. That is not a document anybody can send, so the
+// e-Bill was in practice a record with no output. This renders the real thing
+// in its own window.
+function printPOEbill(po, vendor, so, org, getProduct) {
+  const e = po.ebill || {};
+  const esc = (x) => String(x == null ? '' : x).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const sub = (po.items || []).reduce((a, it) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+  const gst = Math.round(sub * 0.18);
+  const rows = (po.items || []).map((it, n) => {
+    const p = getProduct(it.product_id) || {};
+    const amt = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+    return `<tr><td>${n + 1}</td><td>${esc(p.name || it.product_id)}${p.code ? `<div class="mut mono">${esc(p.code)}</div>` : ''}</td>` +
+           `<td class="mono">${esc(p.hsn || '')}</td><td class="r mono">${esc(it.qty)}</td>` +
+           `<td class="r mono">${esc(inr(it.rate || 0))}</td><td class="r mono">${esc(inr(amt))}</td></tr>`;
+  }).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(e.no || po.po_no)}</title><style>
+    *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;margin:0;padding:26px;font-size:12.5px}
+    .paper{max-width:760px;margin:0 auto;border:1px solid #e2e2e2;border-radius:10px;padding:24px}
+    .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #222;padding-bottom:10px}
+    h1{font-size:16px;margin:0}.mut{color:#777}.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+    .title{font-size:14px;font-weight:800;letter-spacing:.07em;text-align:right}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0}
+    .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#888}
+    table{width:100%;border-collapse:collapse;margin-top:10px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #eee;font-size:12px}
+    th{background:#fafafa;font-size:10px;text-transform:uppercase;color:#666}.r{text-align:right}
+    tfoot td{border:none;padding-top:6px}
+    .sign{display:flex;justify-content:space-between;margin-top:36px}.sign div{width:45%;border-top:1px solid #bbb;padding-top:6px;font-size:11px;color:#555}
+    .foot{margin-top:16px;font-size:10.5px;color:#999;text-align:center}
+    @media print{body{padding:0}.paper{border:none}}
+  </style></head><body><div class="paper">
+    <div class="top"><div><h1>${esc((org && org.name) || 'Organisation')}</h1>
+      <div class="mut">${esc((org && org.address) || '')}</div>
+      <div class="mono mut">GSTIN: ${esc((org && org.gstin) || '—')}</div></div>
+      <div><div class="title">PURCHASE ORDER e-BILL</div>
+        <div class="mono">${esc(e.no || '—')}</div>
+        <div class="mut">${esc(fmtDate(e.date || po.date))}</div></div></div>
+    <div class="grid">
+      <div><div class="lbl">Vendor</div><div><strong>${esc(vendor ? vendor.name : '—')}</strong></div>
+        <div class="mut mono">GSTIN: ${esc((vendor && vendor.gstin) || '—')}</div>
+        <div class="mut">${esc((vendor && (vendor.address || vendor.city)) || '')}</div></div>
+      <div><div class="lbl">Purchase order</div><div class="mono">${esc(po.po_no)}</div>
+        <div class="lbl" style="margin-top:8px">Against order</div><div class="mono">${esc(so ? so.so_no : '—')}</div>
+        <div class="lbl" style="margin-top:8px">IRN</div><div class="mono" style="font-size:10.5px;word-break:break-all">${esc(e.irn || '—')}</div></div>
+    </div>
+    <table><thead><tr><th>#</th><th>Item</th><th>HSN</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot>
+        <tr><td colspan="5" class="r">Subtotal</td><td class="r mono">${esc(inr(sub))}</td></tr>
+        <tr><td colspan="5" class="r">IGST 18%</td><td class="r mono">${esc(inr(gst))}</td></tr>
+        <tr><td colspan="5" class="r"><strong>Total</strong></td><td class="r mono"><strong>${esc(inr(sub + gst))}</strong></td></tr>
+      </tfoot></table>
+    <div class="sign"><div>For ${esc((org && org.name) || '')}</div><div>Vendor acknowledgement</div></div>
+    <div class="foot">Electronically generated purchase order bill — valid without signature.</div>
+  </div><script>window.onload=function(){setTimeout(function(){window.print()},200)}</script></body></html>`;
+  const w = window.open('', '_blank', 'width=860,height=940');
+  if (w) { w.document.open(); w.document.write(html); w.document.close(); }
+}
+window.printPOEbill = printPOEbill;
+
 function ReceiveModal({ po, onClose }) {
   const { state, mutate, addToPool, getProduct, getVendor, currentUser, getUser } = useStore();
   const toast = useToast();
