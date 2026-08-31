@@ -250,7 +250,7 @@ class CrashBoundary extends React.Component {
               Back to dashboard
             </button>
           </div>
-          <details style={{ marginTop: 18 }}>
+          <details open style={{ marginTop: 18 }}>
             <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--text-2, #666)' }}>
               Technical details (please send this if it keeps happening)
             </summary>

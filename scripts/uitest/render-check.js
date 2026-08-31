@@ -117,13 +117,22 @@ const LISTS = ['customers', 'vendors', 'products', 'categories', 'boms', 'sales_
   'transfer_requests', 'notifications', 'audit', 'outward_dispatches', 'pool', 'invoices',
   'site_updates', 'item_aliases', 'collections'];
 
-function makeStore(s, { role = 'Org Admin', seeded = false, route = 'dashboard' } = {}) {
+function makeStore(s, { role = 'Org Admin', seeded = false, mixed = false, route = 'dashboard' } = {}) {
   const seed = s.OPC_SEED || {};
   const user = { id: 'u1', name: 'Test User', email: 't@e.com', role, active: true };
   const st = { loaded: true, org: { ...(seed.org || {}) }, config: { ...(seed.config || {}) },
     platform: { ready: true, isMaster: false, orgId: 'org-1', org: { id: 'org-1', name: 'Microlink' } } };
   LISTS.forEach(n => { st[n] = []; });
   if (seeded) Object.keys(seed).forEach(k => { if (Array.isArray(seed[k])) st[k] = seed[k]; });
+  if (mixed) {
+    // Transactional rows whose every product / customer / category reference is
+    // DANGLING. A tenant hit this whenever orders were present but the catalogue
+    // belonged to a different organization (or had not loaded yet).
+    ['sales_orders', 'vendor_pos', 'grns', 'invoices', 'rfqs', 'sourcings',
+     'vendor_invoices', 'payments', 'pool', 'transfer_requests', 'outward_dispatches']
+      .forEach(k => { if (Array.isArray(seed[k])) st[k] = seed[k]; });
+    st.products = []; st.categories = []; st.boms = []; st.customers = []; st.vendors = [];
+  }
   st.users = [user];
   return {
     state: st, route, currentUser: 'u1', authReady: true, loaded: true,
@@ -153,12 +162,13 @@ const SCREENS = ['Dashboard', 'ApprovalInbox', 'SCMTracking', 'ItemMapping', 'Sa
   'VirtualGodownList', 'MasterPool', 'CrossSOTransfers', 'RFQList', 'VendorPOList',
   'GRNList', 'GRNNew', 'ThreeWayMatchList', 'AuditLog', 'Settings', 'PlatformConsole'];
 
-for (const seeded of [false, true]) {
-  console.log(`\n[2/3] every screen renders · ${seeded ? 'seeded' : 'BRAND-NEW EMPTY'} tenant`);
+for (const mode of ['empty', 'seeded', 'mixed']) {
+  const label = { empty: 'BRAND-NEW EMPTY', seeded: 'seeded', mixed: 'MIXED (orders present, catalogue missing)' }[mode];
+  console.log(`\n[2/3] every screen renders · ${label} tenant`);
   const s = freshSandbox(); loadAll(s);
   s.__opcFeatures = ML_FEATURES; s.__opcWorkflow = ML_WORKFLOW;
   s.__opcIsMaster = false; s.OPC_SB = null;
-  const store = makeStore(s, { seeded });
+  const store = makeStore(s, { seeded: mode === 'seeded', mixed: mode === 'mixed' });
   let n = 0;
   for (const name of SCREENS) {
     const C = s[name];
@@ -174,10 +184,30 @@ for (const seeded of [false, true]) {
 }
 
 // ----------------------------------------------------------------- 3. app ---
-const ROUTES = ['dashboard', 'inbox', 'scm', 'mapping', 'sales-orders', 'sales-orders/new',
+const LIST_ROUTES = ['dashboard', 'inbox', 'scm', 'mapping', 'sales-orders', 'sales-orders/new',
   'godown', 'pool', 'transfers', 'vendor-pos', 'grn', 'grn/new', 'three-way',
   'invoices', 'customers', 'vendors', 'products', 'settings', 'audit', 'collections',
   'sourcing', 'rfq', 'platform', 'unknown-route'];
+
+// DETAIL routes matter more than lists here: a list renders an empty state when
+// data is missing, but a detail screen dereferences one specific record and
+// everything hanging off it. Opening a card is exactly how a user hits this.
+function detailRoutes(st) {
+  const first = (arr) => (Array.isArray(arr) && arr[0] ? arr[0].id : null);
+  const r = [];
+  const so = first(st.sales_orders);
+  if (so) { r.push('sales-orders/' + so, 'godown/' + so, 'invoices/' + so); }
+  const po = first(st.vendor_pos);   if (po) r.push('vendor-pos/' + po);
+  const grn = first(st.grns);        if (grn) r.push('grn/' + grn);
+  const src = first(st.sourcings);   if (src) r.push('sourcing/' + src);
+  const vi = first(st.vendor_invoices); if (vi) r.push('three-way/' + vi);
+  const cust = first(st.customers);  if (cust) r.push('customers/' + cust + '/ledger');
+  // Ids that do not exist at all — a stale bookmark, or a link to a record that
+  // belongs to another organization. Must say "not found", never crash.
+  r.push('sales-orders/does-not-exist', 'godown/does-not-exist',
+         'vendor-pos/does-not-exist', 'grn/does-not-exist', 'invoices/does-not-exist');
+  return r;
+}
 const ROLES = ['Purchase', 'Stores', 'Org Admin', 'Managing Director', 'Sales', 'Billing'];
 
 function renderApp(s, role, route, store) {
@@ -190,18 +220,26 @@ function renderApp(s, role, route, store) {
   return out;
 }
 
-for (const partialPerms of [false, true]) {
-  console.log(`\n[3/3] whole app · every route x every role` +
-    (partialPerms ? ' · with a PREVIOUS tenant\'s partial permissions blob' : ''));
+const APP_CASES = [
+  { label: ' · empty tenant', partialPerms: false, mixed: false, seeded: false },
+  { label: ' · seeded tenant', partialPerms: false, mixed: false, seeded: true },
+  { label: " · with a PREVIOUS tenant's partial permissions blob", partialPerms: true, mixed: false, seeded: false },
+  { label: ' · MIXED state (orders present, catalogue missing)', partialPerms: false, mixed: true, seeded: false },
+];
+for (const c of APP_CASES) {
+  console.log(`\n[3/3] whole app · every route x every role${c.label}`);
   const s = freshSandbox(); loadAll(s);
   s.__opcFeatures = ML_FEATURES; s.__opcWorkflow = ML_WORKFLOW;
   s.__opcIsMaster = false; s.OPC_SB = null;
   let n = 0;
   for (const role of ROLES) {
     // A customisation carrying `can` but no `nav`: perm() must degrade, not throw.
-    s.__opcPerms = partialPerms ? { [role]: { can: { all: true } } } : null;
-    for (const route of ROUTES) {
-      const store = makeStore(s, { role, route });
+    s.__opcPerms = c.partialPerms ? { [role]: { can: { all: true } } } : null;
+    // Build one store to discover which detail ids exist in this scenario.
+    const probe = makeStore(s, { role, mixed: c.mixed, seeded: c.seeded });
+    const routes = [...LIST_ROUTES, ...detailRoutes(probe.state)];
+    for (const route of routes) {
+      const store = makeStore(s, { role, route, mixed: c.mixed, seeded: c.seeded });
       try { renderApp(s, role, route, store); n++; }
       catch (e) { fail(`${role} @ ${route} — ${e.name}: ${e.message}`); }
     }
