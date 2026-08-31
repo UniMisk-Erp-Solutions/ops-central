@@ -229,6 +229,62 @@ async function run(poItems, picks, live) {
   check('the order now counts as fully received',
     sandbox.soFullyReceived(bBox.state, BUNDLED_SO), true);
 
-  console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — bundle quantities are consistent and receiving posts them in full');
+  // -------------------------------------------------------------------------
+  // Receiving goods was raising a CUSTOMER TAX INVOICE for an organization whose
+  // workflow says auto_invoice_on_grn = false — Microlink, who invoice outside
+  // this system entirely. Money leaving the door on a setting that asked for
+  // none is the worst kind of default.
+  // -------------------------------------------------------------------------
+  console.log('\n[7] auto-invoicing obeys the organization workflow');
+
+  async function receiveAndCountInvoices(autoInvoice) {
+    sandbox.__opcWorkflow = { receiving_flow: 'stores_to_purchase', auto_invoice_on_grn: autoInvoice };
+    const poItems = PRODUCTS.map(p => ({ product_id: p.id, qty: p.id === 'p2' ? 4 : 1, rate: 1000 }));
+    const st = freshState(poItems);
+    // Price the order so there is something to invoice.
+    st.sales_orders[0].lines[0].unit_price = 50000;
+    st.sales_orders[0].status = 'Approved';
+    const { box, ctx } = makeCtx(st, true);
+    await sandbox.vgReceiveComponents(box.state.sales_orders[0],
+      PRODUCTS.map(p => ({ product_id: p.id, qty: p.id === 'p2' ? 4 : 1, name: p.name })), ctx);
+    const so = box.state.sales_orders[0];
+    return ((so.invoices || []).length) + (so.invoice_no ? 1 : 0);
+  }
+
+  check('with auto_invoice_on_grn OFF, receiving raises no customer invoice',
+    await receiveAndCountInvoices(false), 0);
+  check('with it ON, the invoice is still raised as before',
+    (await receiveAndCountInvoices(true)) > 0, true);
+  sandbox.__opcWorkflow = { receiving_flow: 'stores_to_purchase', auto_invoice_on_grn: false };
+
+  console.log('\n[8] the PO e-Bill is a real document, not a screenshot of the page');
+  check('a printable e-Bill exists', typeof sandbox.printPOEbill, 'function');
+  const opened = [];
+  const realOpen = sandbox.open;
+  sandbox.open = () => {
+    const doc = { html: '', open() {}, close() {}, write(h) { this.html = h; } };
+    opened.push(doc);
+    return { document: doc };
+  };
+  sandbox.printPOEbill(
+    { po_no: 'VPO/FY26/0044', date: '2026-05-21',
+      ebill: { no: 'VPO-EB/FY26/5005', irn: 'ABC123', date: '2026-05-21', generated: true },
+      items: [{ product_id: 'p1', qty: 2, rate: 5000 }] },
+    { name: 'Cisco', gstin: '27AAA', city: 'Mumbai' },
+    { so_no: 'SO/FY26/0002' },
+    { name: 'Microlink', address: 'Mumbai', gstin: '27BBB' },
+    getProduct);
+  sandbox.open = realOpen;
+  const doc = opened[0] ? opened[0].html : '';
+  check('it opens its own window', opened.length, 1);
+  check('...titled as a PO e-Bill', /PURCHASE ORDER e-BILL/.test(doc), true);
+  check('...carrying the e-Bill number', /VPO-EB\/FY26\/5005/.test(doc), true);
+  check('...the IRN', /ABC123/.test(doc), true);
+  check('...the vendor', /Cisco/.test(doc), true);
+  check('...our own organisation, not the demo company', /Microlink/.test(doc) && !/Brightline/.test(doc), true);
+  check('...the order it belongs to', /SO\/FY26\/0002/.test(doc), true);
+  check('...and the line items with a total', /Item 1/.test(doc) && /Total/.test(doc), true);
+
+  console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - quantities, invoicing and the e-Bill follow each org flow');
   process.exit(bad ? 1 : 0);
 })();
