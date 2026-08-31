@@ -191,8 +191,13 @@ function buildDefaultState() {
     // IDENTITY fields are not — they named the demo company in every tenant's
     // topbar. The real organization supplies those, and the tenant's own config
     // overrides them if they have customised their branding.
+    // Presentation defaults (fiscal year, currency, brand colour) are harmless
+    // to inherit. Anything that NAMES a company is not: the topbar chip reads
+    // org.short and org.logo_letter, so leaving those seeded put "B ·
+    // Brightline" on every tenant's screen regardless of who they are.
     org: live
-      ? { ...seed.org, name: '', gstin: '', address: '' }
+      ? { ...seed.org, name: '', short: '', logo_letter: '',
+          gstin: '', address: '', state: '', industry: '' }
       : { ...seed.org },
     users: demo('users'),
     categories: demo('categories'),
@@ -337,7 +342,16 @@ function StoreProvider({ children }) {
             // wins if they have customised their branding (it sets
             // __orgFromConfig), so this only fills what is otherwise blank.
             if (tenantOrg && tenantOrg.name && !prev.__orgFromConfig) {
-              next.org = { ...prev.org, name: tenantOrg.name };
+              const full = String(tenantOrg.name).trim();
+              // `short` is what the topbar chip shows; keep it to the first two
+              // words so a long legal name does not push the chip across the bar.
+              const short = full.split(/\s+/).slice(0, 2).join(' ');
+              next.org = {
+                ...prev.org,
+                name: full,
+                short: prev.org.short || short,
+                logo_letter: prev.org.logo_letter || full.charAt(0).toUpperCase(),
+              };
             }
             // Switched into a different organization -> the cached rows belong to
             // the previous tenant. Drop them and re-load.
@@ -564,9 +578,15 @@ function StoreProvider({ children }) {
           return next;
         });
         // Persist the recovered local-only rows back to the DB.
+        // Recovery writes go through the SAME filtering and the SAME error
+        // reporting as every other write. They did not, which is why a row
+        // rejected for carrying a non-column was rejected again on every
+        // subsequent load — silently, for ever.
+        await __loadSyncColumns();
         for (const { t, pk, r } of toPush) {
-          const payload = t === 'audit' ? __auditRow(r) : r;
-          window.OPC_SB.from(t).upsert(payload, { onConflict: pk }).then(({ error }) => { if (error) console.error('[OPC] recover push ' + t, error.message); });
+          const payload = __forTable(t, t === 'audit' ? __auditRow(r) : r);
+          const { error } = await window.OPC_SB.from(t).upsert(payload, { onConflict: pk });
+          if (error) __syncFailed(t, 'recover', error.message, r[pk]);
         }
         if (toPush.length) console.info('[OPC] recovered ' + toPush.length + ' local-only row(s) → DB');
       } catch (e) {
