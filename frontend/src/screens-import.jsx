@@ -238,29 +238,59 @@ function SheetImportModal({ onClose, onCreated }) {
     return out;
   };
 
+  // Matching a 500-line BOQ used to be 500 sequential round trips — one per row,
+  // each awaited — which over a tunnel is minutes of staring at a spinner for
+  // work the database does in milliseconds.
+  //
+  // Two changes, no loss of accuracy: identical rows are collapsed to one lookup
+  // (a real sheet repeats C9600-SSD-NONE and the like), what is already in the
+  // local catalogue is settled without any call, and everything left over goes
+  // in ONE batch call that applies exactly the same ranking server-side.
   const resolveRows = async (parsed) => {
-    const cache = {};
-    for (const row of parsed) {
-      const key = (row.code || '') + '|' + (row.desc || '');
-      if (key in cache) { Object.assign(row, cache[key]); continue; }
-      let hit = { product_id: null, matched_by: null };
-      // Local catalogue first — no round trip for what we already have.
-      const local = (state.products || []).find(p =>
-        (row.code && p.code && p.code.toLowerCase() === row.code.toLowerCase()) ||
-        (row.desc && p.name && p.name.toLowerCase() === row.desc.toLowerCase()));
-      if (local) hit = { product_id: local.id, matched_by: 'our_code' };
-      else if (window.OPC_SB) {
-        try {
-          const r = await window.OPC_SB.rpc('opc_alias_resolve', {
-            p_scope: 'customer', p_party_id: (custId && custId !== '__new') ? custId : null,
-            p_code: row.code || null, p_name: row.desc || null });
-          if (r.data && r.data.product_id) hit = { product_id: r.data.product_id, matched_by: r.data.matched_by };
-        } catch (e) { /* leave unmatched */ }
-      }
-      cache[key] = hit;
-      Object.assign(row, hit);
+    const byKey = new Map();
+    parsed.forEach(row => {
+      const key = (row.code || '').toLowerCase() + '|' + (row.desc || '').toLowerCase();
+      row.__key = key;
+      if (!byKey.has(key)) byKey.set(key, { code: row.code, desc: row.desc, hit: null });
+    });
+
+    // Free matches first — an index over our own catalogue, built once.
+    const byCode = new Map(), byName = new Map();
+    (state.products || []).forEach(p => {
+      if (p.code) byCode.set(String(p.code).toLowerCase(), p.id);
+      if (p.name) byName.set(String(p.name).toLowerCase(), p.id);
+    });
+    const unresolved = [];
+    byKey.forEach((v, key) => {
+      const c = (v.code || '').toLowerCase(), n = (v.desc || '').toLowerCase();
+      if (c && byCode.has(c)) v.hit = { product_id: byCode.get(c), matched_by: 'our_code' };
+      else if (n && byName.has(n)) v.hit = { product_id: byName.get(n), matched_by: 'our_name' };
+      else unresolved.push({ k: key, code: v.code || null, name: v.desc || null });
+    });
+
+    if (unresolved.length && window.OPC_SB) {
+      try {
+        const r = await window.OPC_SB.rpc('opc_alias_resolve_bulk', {
+          p_scope: 'customer',
+          p_party_id: (custId && custId !== '__new') ? custId : null,
+          p_rows: unresolved,
+        });
+        const map = (!r.error && r.data && typeof r.data === 'object') ? r.data : {};
+        Object.keys(map).forEach(k => {
+          const v = byKey.get(k);
+          if (v && map[k] && map[k].product_id) {
+            v.hit = { product_id: map[k].product_id, matched_by: map[k].matched_by };
+          }
+        });
+      } catch (e) { /* unmatched rows simply show as new items */ }
     }
-    parsed.forEach(r => { r.action = r.product_id ? 'match' : (r.code || r.desc ? 'create' : 'skip'); });
+
+    parsed.forEach(row => {
+      const v = byKey.get(row.__key);
+      row.product_id = v && v.hit ? v.hit.product_id : null;
+      row.matched_by = v && v.hit ? v.hit.matched_by : null;
+      row.action = row.product_id ? 'match' : (row.code || row.desc ? 'create' : 'skip');
+    });
     return parsed;
   };
 
@@ -482,13 +512,14 @@ function SheetImportModal({ onClose, onCreated }) {
       // 4. Remember this customer's wording so the next sheet matches itself.
       //    Best-effort: a failure here must not undo an order that already exists.
       if (sb) {
-        for (const r of rows) {
-          if (!r.product_id || !r.code) continue;
+        const learn = rows
+          .filter(r => r.product_id && r.code && r.action !== 'skip')
+          .map(r => ({ product_id: r.product_id, code: r.code, name: r.desc || null, uom: r.unit || null }));
+        if (learn.length) {
           try {
-            await sb.rpc('opc_alias_set', {
-              p_product_id: r.product_id, p_scope: 'customer', p_party_id: customerId,
-              p_alias_code: r.code, p_alias_name: r.desc || null, p_uom: r.unit || null });
-          } catch (e) { /* mapping can be finished by hand on Item Mapping */ }
+            await sb.rpc('opc_alias_set_bulk', {
+              p_scope: 'customer', p_party_id: customerId, p_rows: learn });
+          } catch (e) { /* the order exists; mapping can be finished on Item Mapping */ }
         }
         if (window.invalidateAliasMap) window.invalidateAliasMap('customer', customerId);
       }
