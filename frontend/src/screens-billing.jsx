@@ -680,6 +680,109 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
   return { so: nextSO, invoice, fully };
 }
 
+// ===========================================================================
+// Invoice a delivery challan
+// ===========================================================================
+// Billing on receipt charges the customer for goods still in our own godown.
+// A trading company bills what it actually shipped — and a dispatch is the only
+// point where the quantity is final, because it can be partial.
+//
+// Two things this must get right:
+//
+//   THE NAME. The customer ordered against their own part numbers and will
+//   match the invoice against their own PO. Billing them in OUR wording makes
+//   the document unreconcilable at their end, so the line label is the
+//   customer's name for the item — captured onto the challan at dispatch, not
+//   looked up now, so a later mapping edit cannot rewrite an issued invoice.
+//
+//   THE MONEY. Priced from the ORDER's own per-item prices, capped at what is
+//   still uninvoiced, and refusing to issue the same challan twice.
+function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
+  if (!dc || !Array.isArray(dc.items) || !dc.items.length) return null;
+  // One challan, one invoice. Re-opening a dispatch must never re-bill it.
+  if ((so.invoices || []).some(i => i.dc_id === dc.id)) return null;
+  if ((so.invoices || []).length === 0 && so.invoice_no) return null;   // legacy direct invoice
+
+  const invoicedSub = (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0);
+  const remainingBilled = Math.max(0, _soBilled(so, state) - invoicedSub);
+  if (remainingBilled <= 0.5) return null;
+
+  // What the customer agreed to pay for each item, from this order's own lines.
+  const priceOf = {};
+  (so.lines || []).forEach(l => (l.components || []).forEach(c => {
+    if (priceOf[c.product_id] != null) return;
+    const p = getProduct(c.product_id);
+    priceOf[c.product_id] = (typeof window.compSellOf === 'function')
+      ? window.compSellOf(c, p) : (p ? (Number(p.sell) || 0) : 0);
+  }));
+
+  const lines = []; const comp = {}; let subtotal = 0;
+  dc.items.forEach(it => {
+    const qty = Number(it.qty) || 0;
+    if (qty <= 0) return;
+    const p = getProduct(it.product_id);
+    const rate = Number(priceOf[it.product_id]) || 0;
+    lines.push({
+      kind: 'component', ref_id: it.product_id,
+      // their wording first; ours only if we never learned theirs
+      label: it.cust_name || it.cust_code || (p ? p.name : it.product_id),
+      cust_code: it.cust_code || '',
+      our_name: p ? p.name : '', our_code: p ? p.code : '',
+      qty, unit_price: rate, amount: qty * rate,
+    });
+    comp[it.product_id] = (comp[it.product_id] || 0) + qty;
+    subtotal += qty * rate;
+  });
+  if (subtotal <= 0.5) return null;   // nothing priced yet — caller explains why
+
+  subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
+  const total = Math.round(subtotal * 1.18);
+  const fully = (remainingBilled - subtotal) <= 0.5;
+  const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
+  const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
+  const invoice = {
+    id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5),
+    no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY,
+    type: fully ? 'Final' : 'Partial', mode: 'dispatch',
+    dc_id: dc.id, dc_no: dc.dc_no || '',
+    lines, comp_consumed: comp,
+    subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
+  };
+  const invoices = [...(so.invoices || []), invoice];
+  const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY,
+                   invoice_amount: _nonConsolidatedTotal(invoices),
+                   status: fully ? 'Invoiced' : so.status };
+  return { so: nextSO, invoice, fully };
+}
+
+// Raise it, against the latest state inside the updater.
+function raiseDispatchInvoice(soId, dc, ctx) {
+  const { mutate, currentUser, getUser, getProduct } = ctx;
+  if (typeof wfOn === 'function' && !wfOn('invoice_on_dispatch')) return null;
+  let made = null;
+  mutate(s => {
+    const so = (s.sales_orders || []).find(x => x.id === soId);
+    if (!so) return s;
+    const built = buildDispatchInvoice(so, s, dc, currentUser, getUser, getProduct);
+    if (!built) return s;
+    made = built;
+    return {
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === soId ? built.so : x),
+      notifications: [{
+        id: 'n-dinv-' + Date.now(), kind: 'invoice',
+        text: `${built.invoice.no} (${built.invoice.type}) raised for ${dc.dc_no || 'dispatch'} · ${so.so_no} · ${inrK(built.invoice.total)}${built.fully ? ' · fully invoiced' : ''}`,
+        date: TODAY, read: false, role: 'Collections',
+      }, ...s.notifications],
+    };
+  }, { action: 'invoice-dispatch', entity: 'SalesOrder', entity_id: soId,
+       detail: `Invoice raised for ${dc.dc_no || dc.id}` });
+  return made;
+}
+
+window.buildDispatchInvoice = buildDispatchInvoice;
+window.raiseDispatchInvoice = raiseDispatchInvoice;
+
 // Commit an invoice (computed against the latest state inside the updater).
 function raiseSOInvoice(soId, opts, ctx, uiOpts) {
   const { mutate, toast, currentUser, getUser, getProduct } = ctx; uiOpts = uiOpts || {};

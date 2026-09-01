@@ -262,7 +262,7 @@ function SCMTracking() {
 // Out for delivery — tick lines + quantity, straight out of the VG
 // ===========================================================================
 function OutwardDispatchModal({ so, onClose }) {
-  const { state, mutate, getProduct, getCustomer, currentUser } = useStore();
+  const { state, mutate, getProduct, getCustomer, getUser, currentUser } = useStore();
   const toast = useToast();
   // The customer's own wording for these items, so the challan they receive
   // reads in THEIR language. Captured onto the challan at dispatch time rather
@@ -304,8 +304,32 @@ function OutwardDispatchModal({ so, onClose }) {
       notifications: [{ id: 'n-out-' + Date.now(), kind: 'so', text: `${so.so_no}: ${units} unit(s) dispatched to customer · ${dc.dc_no}`, date: TODAY, read: false, role: 'Stores' }, ...s.notifications],
     }), { action: 'dispatch-out', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser,
           detail: `${units} unit(s) out for delivery · ${dc.dc_no} · ${dc.items.map(i => `${i.qty}× ${i.name}`).join(', ')}` });
+    // Bill what actually went out. Only where the workflow asks for it — the
+    // standard profile still invoices on receipt and is untouched.
+    //
+    // Deliberately AFTER the challan is committed: if invoicing fails or there
+    // is nothing to bill, the dispatch still stands. Goods left the building
+    // either way, and that fact must not depend on the paperwork.
+    let inv = null;
+    if (wfOn('invoice_on_dispatch') && window.raiseDispatchInvoice) {
+      inv = window.raiseDispatchInvoice(so.id, dc, { mutate, currentUser, getUser, getProduct });
+    }
     setBusy(false);
-    toast(`${dc.dc_no} created · ${units} unit(s) out for delivery`, 'success');
+    if (inv) {
+      toast(`${dc.dc_no} created · ${units} unit(s) out · invoice ${inv.invoice.no} raised for ${inr(inv.invoice.total)}`, 'success');
+    } else if (wfOn('invoice_on_dispatch')) {
+      // Say WHY there is no invoice rather than leaving them to wonder.
+      const priced = (so.lines || []).some(l => (l.components || []).some(c => {
+        const p = getProduct(c.product_id);
+        return (window.compSellOf ? window.compSellOf(c, p) : 0) > 0;
+      }));
+      toast(priced
+        ? `${dc.dc_no} created · ${units} unit(s) out · nothing left to invoice on this order`
+        : `${dc.dc_no} created · ${units} unit(s) out · no invoice: these items have no price yet (Edit line items)`,
+        priced ? 'success' : '');
+    } else {
+      toast(`${dc.dc_no} created · ${units} unit(s) out for delivery`, 'success');
+    }
     onClose();
   };
 

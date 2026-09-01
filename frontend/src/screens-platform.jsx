@@ -55,7 +55,9 @@ const WORKFLOW_KEYS = [
   { key: 'supervisor_signoff', label: 'Supervisor sign-off before final invoice', type: 'bool',
     hint: 'Site-implementation orders wait for the supervisor to mark the work done.' },
   { key: 'auto_invoice_on_grn', label: 'Auto-raise the client invoice on GRN', type: 'bool',
-    hint: 'Off for companies that invoice outside this system.' },
+    hint: 'Bills the customer when goods ARRIVE. Off for companies that invoice outside this system.' },
+  { key: 'invoice_on_dispatch', label: 'Raise the client invoice on dispatch', type: 'bool',
+    hint: 'Bills what actually shipped, per delivery challan, in the customer own item names. Partial dispatch = partial invoice.' },
 ];
 
 const PLANS = ['free-trial', 'starter', 'pro'];
