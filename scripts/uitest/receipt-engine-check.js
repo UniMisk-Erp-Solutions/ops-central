@@ -319,6 +319,30 @@ async function run(poItems, picks, live) {
     .forEach(t => check(`the preview carries ${t}`, preview.indexOf(t) !== -1, true));
   check('...and does not name the demo company', /Brightline/.test(preview), false);
 
+  console.log('\n[11] the e-Bill carries the columns they work in');
+  const colPO = {
+    po_no: 'VPO/FY26/0040', date: '2026-08-31', expected: '2026-09-15',
+    ebill: { no: 'VPO-EB/FY26/5001', irn: 'PO178', date: '2026-08-31', generated: true },
+    items: [{ product_id: 'p1', qty: 2, rate: 7000 }],
+  };
+  const colDoc = sandbox.poEbillHtml(colPO, { name: 'Cisco' }, { so_no: 'SO/FY26/0001' },
+    { name: 'Microlink' }, getProduct, { autoPrint: false });
+
+  ['Sr No.', 'Part No.', 'Description', 'Due on', 'Unit', 'Qty', 'Rate', 'Tax', 'Amount with tax', 'Grand Total']
+    .forEach(h => check(`the "${h}" column is present`, colDoc.indexOf(h) !== -1, true));
+  check('the old HSN column is gone', /<th[^>]*>HSN<\/th>/.test(colDoc), false);
+
+  check('Due on shows the PO delivery date', /15-Sep-2026/.test(colDoc), true);
+  check('Unit comes from the item', colDoc.indexOf('Nos.') !== -1, true);
+  check('Part No. is the item code', colDoc.indexOf('CODE-1') !== -1, true);
+  check('Tax is shown as the rate', colDoc.indexOf('18%') !== -1, true);
+  // 2 x 7000 = 14,000 + 18% = 16,520
+  check('Amount is inclusive of tax', /16,520/.test(colDoc), true);
+  check('Grand Total matches', /16,520/.test(colDoc), true);
+  check('preview and paper still agree',
+    sandbox.poEbillHtml(colPO, { name: 'Cisco' }, { so_no: 'SO/FY26/0001' }, { name: 'Microlink' },
+      getProduct, { autoPrint: true }).replace(/<script>[\s\S]*?<\/script>/, ''), colDoc);
+
   console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - quantities, invoicing and the e-Bill follow each org flow');
   process.exit(bad ? 1 : 0);
 })();
