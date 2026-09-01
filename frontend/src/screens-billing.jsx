@@ -178,12 +178,26 @@ function InvoiceDetail({ soId, invId }) {
                 const prod = !cat && l.ref_id ? getProduct(l.ref_id) : null;
                 const soLine = l.ref_id ? (so.lines || []).find(x => x.id === l.ref_id) : null;
                 const clientName = soLine && soLine.client_name;
-                const name = clientName || (cat ? cat.name : (l.label || (prod && prod.name) || 'Item'));
+                // The customer's own wording wins. Stamped on the line when the
+                // invoice was raised; for invoices issued before that existed,
+                // resolved live from the order's customer_ref so an already-sent
+                // document still reads in their language rather than ours.
+                const cust = invoiceCustName(so, l, getProduct);
+                const name = (cust && cust.label) || clientName || (cat ? cat.name : (l.label || (prod && prod.name) || 'Item'));
+                const ourName = (cat ? cat.name : (prod && prod.name)) || l.label || '';
+                const custCode = (l.cust_code || (cust && cust.code) || '').trim();
                 const hsn = cat ? cat.hsn : (prod && prod.hsn) || '—';
                 return (
                   <tr key={i}>
                     <td>{i + 1}</td>
-                    <td><strong>{name}</strong>{cat && <div className="tiny muted">{cat.bundle_desc}</div>}</td>
+                    <td>
+                      <strong>{name}</strong>
+                      {custCode && <div className="tiny muted mono">{custCode}</div>}
+                      {/* Our own name underneath, for the warehouse and for us —
+                          only when it actually differs from what we billed. */}
+                      {ourName && ourName !== name && <div className="tiny muted">{ourName}</div>}
+                      {!custCode && !ourName && cat && <div className="tiny muted">{cat.bundle_desc}</div>}
+                    </td>
                     <td className="mono">{hsn}</td>
                     <td className="num mono">{l.qty}</td>
                     <td className="num mono">{inr(l.unit_price)}</td>
@@ -568,7 +582,9 @@ function buildFractionInvoice(so, state, currentUser, getUser) {
     if (qty <= 0) return;
     const amount = Math.round(qty * eff);
     if (amount <= 0) return;
-    lines.push({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty, unit_price: eff, amount });
+    const cn = custRefName(l.customer_ref) || (String(l.client_name || '').trim() ? { label: l.client_name.trim(), code: '' } : null);
+    lines.push({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty, unit_price: eff, amount,
+                 cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '' });
     subtotal += amount;
     (l.components || []).forEach(c => { comp[c.product_id] = (comp[c.product_id] || 0) + (c.qty || 0) * qty; });
   });
@@ -646,7 +662,13 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
     soComponentState(so, state, getProduct).forEach(r => {
       const want = sel ? (Number(sel[r.product_id]) || 0) : r.invoiceable;
       const qty = Math.max(0, Math.min(want, r.invoiceable));
-      if (qty > 0) { lines.push({ kind: 'component', ref_id: r.product_id, label: r.product ? r.product.name : r.product_id, qty, unit_price: r.sell, amount: qty * r.sell }); comp[r.product_id] = (comp[r.product_id] || 0) + qty; subtotal += qty * r.sell; }
+      if (qty > 0) {
+        const cn = invoiceCustName(so, { ref_id: r.product_id }, getProduct);
+        lines.push({ kind: 'component', ref_id: r.product_id, label: r.product ? r.product.name : r.product_id,
+                     cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '',
+                     qty, unit_price: r.sell, amount: qty * r.sell });
+        comp[r.product_id] = (comp[r.product_id] || 0) + qty; subtotal += qty * r.sell;
+      }
     });
   } else if (mode === 'final') {
     soComponentState(so, state, getProduct).forEach(r => { if (r.invoiceable > 0) comp[r.product_id] = (comp[r.product_id] || 0) + r.invoiceable; });
@@ -657,7 +679,10 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
       const want = sel ? (Number(sel[x.line_id]) || 0) : x.invoiceableNow;
       const qty = Math.max(0, Math.min(want, x.invoiceableNow));
       if (qty > 0) {
-        lines.push({ kind: 'bundle', ref_id: x.line_id, category_id: x.category_id, qty, unit_price: x.unit_price, amount: qty * x.unit_price });
+        const bl = (so.lines || []).find(y => y.id === x.line_id);
+        const cn = bl ? (custRefName(bl.customer_ref) || (String(bl.client_name || '').trim() ? { label: bl.client_name.trim(), code: '' } : null)) : null;
+        lines.push({ kind: 'bundle', ref_id: x.line_id, category_id: x.category_id, qty, unit_price: x.unit_price, amount: qty * x.unit_price,
+                     cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '' });
         (x.components || []).forEach(c => { comp[c.product_id] = (comp[c.product_id] || 0) + (c.qty || 0) * qty; });
         subtotal += qty * x.unit_price;
       }
@@ -697,6 +722,72 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
 //
 //   THE MONEY. Priced from the ORDER's own per-item prices, capped at what is
 //   still uninvoiced, and refusing to issue the same challan twice.
+// ===========================================================================
+// What the CUSTOMER calls this line
+// ===========================================================================
+// A customer reconciles our invoice against their own purchase order. Billing
+// them in our wording makes that impossible, so every invoice line has to carry
+// their name for the item.
+//
+// The importer already keeps it: each order line and each component holds a
+// customer_ref taken verbatim from the sheet they sent — their Sr. No., their
+// part number, their description. That is the most faithful source there is, and
+// it needs no lookup.
+//
+// Order of preference: their description, their part number, the client name
+// Sales typed on the line, then ours. Returns null when we genuinely never had
+// their wording, so callers fall back rather than printing a blank.
+function custRefName(ref) {
+  if (!ref || typeof ref !== 'object') return null;
+  const desc = String(ref.desc || '').trim();
+  const code = String(ref.code || '').trim();
+  if (desc) return { label: desc, code: code };
+  if (code) return { label: code, code: code };
+  const equip = String(ref.equip || '').trim();
+  return equip ? { label: equip, code: '' } : null;
+}
+
+// For an invoice line, whichever kind it is.
+function invoiceCustName(so, line, getProduct) {
+  if (!so || !line) return null;
+  if (line.cust_label) return { label: line.cust_label, code: line.cust_code || '' };
+
+  // A bundle line points at an order line.
+  if (line.ref_id) {
+    const soLine = (so.lines || []).find(x => x.id === line.ref_id);
+    if (soLine) {
+      const hit = custRefName(soLine.customer_ref);
+      if (hit) return hit;
+      const cn = String(soLine.client_name || '').trim();
+      if (cn) return { label: cn, code: '' };
+    }
+  }
+  // A component line points at a product — find it inside the order's lines.
+  if (line.ref_id) {
+    for (const l of (so.lines || [])) {
+      const c = (l.components || []).find(x => x.product_id === line.ref_id);
+      if (!c) continue;
+      const hit = custRefName(c.customer_ref);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+// Stamp the customer wording onto lines as they are built, so an invoice that
+// has been ISSUED never changes because a mapping was edited afterwards.
+function stampCustNames(so, lines, getProduct) {
+  return (lines || []).map(l => {
+    if (l.cust_label) return l;
+    const hit = invoiceCustName(so, l, getProduct);
+    return hit ? { ...l, cust_label: hit.label, cust_code: hit.code || l.cust_code || '' } : l;
+  });
+}
+
+window.custRefName = custRefName;
+window.invoiceCustName = invoiceCustName;
+window.stampCustNames = stampCustNames;
+
 function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
   if (!dc || !Array.isArray(dc.items) || !dc.items.length) return null;
   // One challan, one invoice. Re-opening a dispatch must never re-bill it.
@@ -722,11 +813,14 @@ function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
     if (qty <= 0) return;
     const p = getProduct(it.product_id);
     const rate = Number(priceOf[it.product_id]) || 0;
+    const fromOrder = invoiceCustName(so, { ref_id: it.product_id }, getProduct);
+    const custLabel = it.cust_name || (fromOrder && fromOrder.label) || it.cust_code || '';
     lines.push({
       kind: 'component', ref_id: it.product_id,
       // their wording first; ours only if we never learned theirs
-      label: it.cust_name || it.cust_code || (p ? p.name : it.product_id),
-      cust_code: it.cust_code || '',
+      label: custLabel || (p ? p.name : it.product_id),
+      cust_label: custLabel || '',
+      cust_code: it.cust_code || (fromOrder && fromOrder.code) || '',
       our_name: p ? p.name : '', our_code: p ? p.code : '',
       qty, unit_price: rate, amount: qty * rate,
     });
