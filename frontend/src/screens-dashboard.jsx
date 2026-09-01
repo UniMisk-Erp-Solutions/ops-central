@@ -13,6 +13,12 @@ function soMetrics(state, so, soSubtotal) {
   const cfgStages = (state.config && Array.isArray(state.config.workflow_stages) && state.config.workflow_stages.length) ? state.config.workflow_stages : SO_LIFECYCLE;
   let stages = cfgStages, idx = stages.indexOf(so.status);
   if (idx < 0) { stages = SO_LIFECYCLE; idx = stages.indexOf(so.status); }
+  // Fall forward to what the facts justify, so a card is never further behind
+  // than the order really is.
+  if (typeof soEffectiveStatus === 'function' && state) {
+    const eff = stages.indexOf(soEffectiveStatus(state, so));
+    if (eff > idx) idx = eff;
+  }
   const progress = idx >= 0 ? Math.round((idx / (stages.length - 1)) * 100) : 0;
 
   // Materials: required (BOM components + implementation BOQ) vs in-hand
