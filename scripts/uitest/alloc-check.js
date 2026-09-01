@@ -36,7 +36,9 @@ vm.createContext(sandbox);
 sandbox.document = { createElement: () => ({ style: {}, setAttribute() {}, appendChild() {} }),
   head: { appendChild() {} }, addEventListener() {}, removeEventListener() {} };
 sandbox.addEventListener = () => {}; sandbox.removeEventListener = () => {};
-for (const f of ['utils.jsx', 'screens-alloc.jsx']) {
+// screens-so.jsx defines compSellOf / lineSellOf, which the allocator uses to
+// read and roll up client prices.
+for (const f of ['utils.jsx', 'screens-so.jsx', 'screens-alloc.jsx']) {
   vm.runInContext(Babel.transform(fs.readFileSync(path.join(dir, 'src', f), 'utf8'),
     { presets: ['react'], filename: f }).code, sandbox, { filename: f });
 }
@@ -144,5 +146,50 @@ rows = allocBuildRows(STATE_EMPTY, SO_POOLED);
 check('3 of the 4 power supplies came from the pool, so buy 1',
   rows.filter(r => r.product_id === 'p-psu').reduce((a, r) => a + r.qty, 0), 1);
 
-console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — grouping, history and remainders all hold');
+console.log('\n[6] the client price rides along with the vendor price');
+// Purchase now sets BOTH on this screen: what the vendor charges and what the
+// customer pays. The second must land on the exact BOM component the sales
+// order's own editor and profit panel read, or the margin silently disagrees.
+const PRICED_SO = {
+  id: 'so-p', so_no: 'SO/FY26/0003', customer_id: 'c1', lines: [
+    { id: 'lA', bundle_qty: 1, unit_price: 0,
+      customer_ref: { po_sr: '1', equip: 'Core Switch' },
+      components: [
+        { product_id: 'p-chassis', qty: 1, sell: 111 },
+        { product_id: 'p-shared', qty: 1 },
+      ] },
+    { id: 'lB', bundle_qty: 6, unit_price: 0,
+      customer_ref: { po_sr: '2', equip: '24 Port' },
+      components: [
+        { product_id: 'p-switch', qty: 1 },
+        { product_id: 'p-shared', qty: 1 },   // the SAME item, in another bundle
+      ] },
+  ],
+};
+const PRODS = [
+  { id: 'p-chassis', code: 'C9606R', name: 'Chassis', buy: 0, sell: 0 },
+  { id: 'p-switch', code: 'C9300', name: 'Switch', buy: 0, sell: 0 },
+  { id: 'p-shared', code: 'SSD-NONE', name: 'No SSD', buy: 0, sell: 0 },
+];
+const priceState = { vendor_pos: [], products: PRODS };
+const pr = allocBuildRows(priceState, PRICED_SO);
+
+check('a row exists per (order line, component)', pr.length, 4);
+check('each row names the line it belongs to',
+  pr.every(r => r.line_id === 'lA' || r.line_id === 'lB'), true);
+check('an existing client price is carried in, not reset',
+  pr.find(r => r.product_id === 'p-chassis').sell, 111);
+check('an unpriced component starts at 0', pr.find(r => r.product_id === 'p-switch').sell, 0);
+check('nothing is marked as edited on open',
+  pr.some(r => r.sellTouched), false);
+
+// The shared item appears in BOTH bundles and must stay two separate rows, so a
+// price set on one cannot leak into the other.
+const shared = pr.filter(r => r.product_id === 'p-shared');
+check('an item in two bundles stays two rows', shared.length, 2);
+check('...one per line', shared.map(r => r.line_id).sort(), ['lA', 'lB']);
+check('...and their quantities differ (1 set vs 6)',
+  shared.map(r => r.qty).sort((a, b) => a - b), [1, 6]);
+
+console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — grouping, history, remainders and client pricing all hold');
 process.exit(bad ? 1 : 0);
