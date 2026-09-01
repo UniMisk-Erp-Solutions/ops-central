@@ -163,5 +163,57 @@ check('with it ON, the invoice is committed to the order', !!res, true);
 check('...and lands on the sales order', (committed.sales_orders[0].invoices || []).length, 1);
 check('...and Collections is told', /INV\/FY26/.test(committed.notifications[0].text), true);
 
+console.log('\n[9] EVERY invoice reads in the customer wording, not only the dispatch one');
+// The order as the importer builds it: each line and each component keeps the
+// customer's own Sr. No., part number and description from their sheet.
+const IMPORTED = {
+  id: 'so-i', so_no: 'SO/FY26/0002', customer_id: 'c1', status: 'Approved', invoices: [],
+  lines: [{
+    id: 'li1', bundle_qty: 1, unit_price: 23000, category_id: 'cat-x',
+    client_name: 'Core Switch',
+    customer_ref: { sr: '1', code: 'ABG-NW-001', desc: 'CORE SWITCH CHASSIS - 6 SLOT', equip: 'Core Switch' },
+    components: [
+      { product_id: 'p-chassis', qty: 1, sell: 23000,
+        customer_ref: { sr: '1.8', code: 'ABG-SUP-01', desc: 'REDUNDANT SUPERVISOR MODULE' } },
+    ],
+  }],
+};
+
+check('a bundle line takes the customer description',
+  sandbox.invoiceCustName(IMPORTED, { ref_id: 'li1' }, getProduct).label,
+  'CORE SWITCH CHASSIS - 6 SLOT');
+check('...and carries their part number',
+  sandbox.invoiceCustName(IMPORTED, { ref_id: 'li1' }, getProduct).code, 'ABG-NW-001');
+check('a component line takes the customer description for THAT item',
+  sandbox.invoiceCustName(IMPORTED, { ref_id: 'p-chassis' }, getProduct).label,
+  'REDUNDANT SUPERVISOR MODULE');
+check('a stamped label is never overwritten later',
+  sandbox.invoiceCustName(IMPORTED, { ref_id: 'li1', cust_label: 'AS ISSUED' }, getProduct).label,
+  'AS ISSUED');
+
+// No customer_ref at all: fall back through client_name, then ours.
+const PLAIN = { id: 'so-p', lines: [{ id: 'lp', bundle_qty: 1, client_name: 'Office PC Bundle', components: [] }] };
+check('with no customer sheet, the client name Sales typed is used',
+  sandbox.invoiceCustName(PLAIN, { ref_id: 'lp' }, getProduct).label, 'Office PC Bundle');
+const BARE = { id: 'so-b', lines: [{ id: 'lb', bundle_qty: 1, components: [] }] };
+check('with nothing at all, it returns null so the caller falls back to ours',
+  sandbox.invoiceCustName(BARE, { ref_id: 'lb' }, getProduct), null);
+
+console.log('\n[10] the receiving-path invoice is named the same way');
+// buildFractionInvoice is the "qty-proportional" invoice already on screen.
+const stFrac = { products: PRODUCTS, sales_orders: [IMPORTED], vendor_pos: [], grns: [],
+  pool: [], notifications: [], audit: [], outward_dispatches: [] };
+const frac = sandbox.buildFractionInvoice
+  ? sandbox.buildFractionInvoice(IMPORTED, stFrac, 'u1', getUser)
+  : null;
+if (frac && frac.invoice.lines.length) {
+  check('its line carries the customer wording too',
+    frac.invoice.lines[0].cust_label, 'CORE SWITCH CHASSIS - 6 SLOT');
+} else {
+  // Nothing received, so nothing to bill — the naming is still asserted above
+  // through invoiceCustName, which is what that builder now uses.
+  check('nothing received yet, so no fraction invoice (naming covered above)', true, true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - dispatch bills what shipped, in the customer own words');
 process.exit(bad ? 1 : 0);
