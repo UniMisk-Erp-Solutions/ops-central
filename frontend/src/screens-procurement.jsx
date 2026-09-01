@@ -795,9 +795,8 @@ function VendorPODetail({ poId }) {
   ];
 
   const genEbill = () => {
-    const seq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length).padStart(4, '0');
     const ebill = {
-      no: `VPO-EB/FY26/${seq}`,
+      no: poEbillNo(po),
       irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(),
       date: TODAY, amount: grand, generated: true,
     };
@@ -1301,6 +1300,14 @@ function GRNDetail({ grnId }) {
 // vendor (payable) invoice for the received value, routes surplus to the Master
 // Pool, auto-reduces the client bill for removed items, and auto-raises the
 // client partial invoice. items: [{product_id, qty(ordered), received, rejected, reason, to_pool}].
+// One e-Bill number per PO, derived from the PO's own number so it cannot
+// collide with another issued in the same breath.
+function poEbillNo(po) {
+  const tail = String((po && po.po_no) || '').match(/(\d+)\s*$/);
+  return `VPO-EB/FY26/${tail ? tail[1] : String((po && po.id) || '').slice(-4)}`;
+}
+window.poEbillNo = poEbillNo;
+
 async function postReceiptForPO(po, items, meta, ctx) {
   const { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser } = ctx;
   const grnDate = (meta && meta.grnDate) || TODAY; const lr = (meta && meta.lr) || '';
@@ -1316,8 +1323,7 @@ async function postReceiptForPO(po, items, meta, ctx) {
   };
   const adjustments = norm.filter(it => (it.to_pool || 0) > 0).map(it => { const p = getProduct(it.product_id); return { product_id: it.product_id, qty: it.to_pool, amount: Math.round((p ? (p.sell || 0) : 0) * it.to_pool), reason: 'Removed at GRN — not supplied to customer', grn_id: grn.id, date: grnDate }; });
   const billCut = adjustments.reduce((s, a) => s + a.amount, 0);
-  const ebillSeq = String(5001 + state.vendor_pos.filter(p => p.ebill && p.ebill.generated).length + seqOff).padStart(4, '0');
-  const ebill = po.ebill && po.ebill.generated ? po.ebill : { no: `VPO-EB/FY26/${ebillSeq}`, irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(), date: grnDate, amount: Math.round((po.amount || 0) * 1.18), generated: true, auto: true };
+  const ebill = po.ebill && po.ebill.generated ? po.ebill : { no: poEbillNo(po), irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(), date: grnDate, amount: Math.round((po.amount || 0) * 1.18), generated: true, auto: true };
   const rateOf = {}; (po.items || []).forEach(it => { rateOf[it.product_id] = it.rate; });
   const recvValue = norm.reduce((s, it) => s + (it.accepted || 0) * (rateOf[it.product_id] || 0), 0);
   const autoVI = recvValue > 0 ? { id: 'vi-' + Date.now() + rnd, vendor_invoice_no: `VINV/FY26/${String(1 + (state.vendor_invoices || []).length + seqOff).padStart(4, '0')}`, po_id: po.id, grn_id: grn.id, vendor_id: po.vendor_id, date: grnDate, amount: Math.round(recvValue), status: 'Booked', tolerance: 'within' } : null;
