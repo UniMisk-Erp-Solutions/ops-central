@@ -536,7 +536,7 @@ function generateSplitVendorPOs(so, alloc, ctx) {
   mutate(s => ({
     ...s,
     vendor_pos: [...pos, ...s.vendor_pos],
-    sales_orders: s.sales_orders.map(x => x.id === so.id && x.status === 'Approved' ? { ...x, status: 'Procurement Started' } : x),
+    sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x),
     notifications: [{ id: 'n-split-' + Date.now(), kind: 'po', text: `${pos.length} split Vendor PO(s) raised for ${so.so_no}${anyMD ? ' · some need MD approval' : ''}`, date: TODAY, read: false, role: anyMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
   }), { action: 'split-po', entity: 'SalesOrder', entity_id: so.id });
   toast(`${pos.length} Vendor PO(s) created — quantity split across vendors`, 'success');
@@ -2084,7 +2084,7 @@ function generateVendorPOsFromSourcing(so, sourcing, ctx) {
   mutate(s => ({
     ...s,
     vendor_pos: [...pos, ...s.vendor_pos],
-    sales_orders: s.sales_orders.map(x => x.id === so.id && x.status === 'Approved' ? { ...x, status: 'Procurement Started' } : x),
+    sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x),
     notifications: [
       { id: 'n-genpo-' + Date.now(), kind: 'po', text: `${pos.length} Vendor PO(s) raised for ${so.so_no} from selected vendors${anyMD ? ' · some need MD approval' : ''}`, date: TODAY, read: false, role: anyMD ? 'Managing Director' : 'Stores' },
       ...s.notifications,
@@ -2150,7 +2150,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
     mutate(s => ({
       ...s,
       vendor_pos: [po, ...s.vendor_pos],
-      sales_orders: s.sales_orders.map(x => x.id === so && x.status === 'Approved' ? { ...x, status: 'Procurement Started' } : x),
+      sales_orders: s.sales_orders.map(x => x.id === so ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x),
       notifications: [{ id: 'n-po-' + Date.now(), kind: 'po', text: `${poNo} ${needsMD ? 'awaiting MD approval' : 'issued'} → ${getVendor(vendor)?.name} for ${getSO(so)?.so_no} · ${inrK(amount)}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
     }), { action: 'create', entity: 'VendorPO', entity_id: po.id });
     toast(`${poNo} created${needsMD ? ' · sent to MD' : ''}`, 'success');

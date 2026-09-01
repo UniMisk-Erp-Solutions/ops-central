@@ -66,6 +66,87 @@ const SO_LIFECYCLE = [
   'Payment Pending','Fully Paid','Closed'
 ];
 
+// How far along the lifecycle a status sits. -1 for anything not in it
+// (Cancelled, Rejected, On Hold), which must never be auto-advanced past.
+function soStageIndex(status) { return SO_LIFECYCLE.indexOf(status); }
+
+// States the machine must not touch: they are decisions a person made, and an
+// automatic rule has no business overriding them.
+const SO_MANUAL_STATES = ['Cancelled', 'Rejected', 'Closed'];
+
+// Move to `target` only if that is genuinely further along. Never backwards, and
+// never out of a state somebody chose deliberately.
+function soAdvanceStatus(current, target) {
+  if (SO_MANUAL_STATES.indexOf(current) !== -1) return current;
+  const a = soStageIndex(current), b = soStageIndex(target);
+  if (b < 0) return current;
+  return b > a ? target : current;
+}
+
+// What the ORDER ITSELF says, from what has actually happened to it.
+//
+// Read bottom-up: the furthest fact wins. Everything here is something the user
+// can point at — a purchase order exists, goods were received, a challan went
+// out, an invoice was raised, money arrived — so the strip can always be
+// explained rather than just believed.
+function soDerivedStatus(state, so) {
+  if (!so) return 'Draft';
+  if (SO_MANUAL_STATES.indexOf(so.status) !== -1) return so.status;
+
+  const required = (typeof soRequired === 'function') ? soRequired(so) : {};
+  const needed = Object.keys(required).reduce((a, k) => a + required[k], 0);
+
+  const pos = (state.vendor_pos || []).filter(p => p.so_id === so.id
+    && ['Rejected', 'Cancelled'].indexOf(p.status) === -1);
+  const poIds = new Set(pos.map(p => p.id));
+
+  const received = {};
+  (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => {
+    received[it.product_id] = (received[it.product_id] || 0) + (Number(it.accepted) || 0);
+  }); });
+  (so.pool_alloc || []).forEach(a => {
+    received[a.product_id] = (received[a.product_id] || 0) + (Number(a.qty) || 0);
+  });
+  const anyReceived = Object.keys(received).some(k => received[k] > 0);
+  const allReceived = needed > 0 && Object.keys(required).every(k => (received[k] || 0) >= required[k]);
+
+  const dcs = (state.outward_dispatches || []).filter(d => d.so_id === so.id && d.status !== 'Cancelled');
+  const dispatched = {};
+  dcs.forEach(d => (d.items || []).forEach(it => {
+    dispatched[it.product_id] = (dispatched[it.product_id] || 0) + (Number(it.qty) || 0);
+  }));
+  const anyDispatched = dcs.length > 0;
+  const allDispatched = needed > 0 && Object.keys(required).every(k => (dispatched[k] || 0) >= required[k]);
+
+  const invoices = so.invoices || [];
+  const invoiced = invoices.length > 0 || !!so.invoice_no;
+  const invoicedTotal = invoices.reduce((a, i) => a + (Number(i.total) || 0), 0) || (Number(so.invoice_amount) || 0);
+  const paid = (state.payments || [])
+    .filter(p => p.so_id === so.id || (so.invoices || []).some(i => i.no === p.invoice_no))
+    .reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  const fullyPaid = invoicedTotal > 0 && paid >= invoicedTotal - 1;
+
+  if (fullyPaid) return 'Fully Paid';
+  if (invoiced && paid > 0) return 'Payment Pending';
+  if (invoiced) return 'Invoiced';
+  if (allDispatched) return 'Fully Delivered';
+  if (anyDispatched) return 'Partially Delivered';
+  if (allReceived) return 'Ready to Dispatch';
+  if (anyReceived) return 'Material Received';
+  if (pos.length) return 'Procurement Started';
+  return null;   // nothing has happened yet — leave the stored status alone
+}
+
+// What to SHOW. The stored status and the facts, whichever is further along, so
+// an order that was never formally approved still reports honestly once goods
+// have moved — and a manual state is never overridden.
+function soEffectiveStatus(state, so) {
+  if (!so) return '';
+  if (SO_MANUAL_STATES.indexOf(so.status) !== -1) return so.status;
+  const derived = soDerivedStatus(state, so);
+  return derived ? soAdvanceStatus(so.status, derived) : so.status;
+}
+
 /* ===== Icons (lucide-style — inline SVG) ===== */
 function Icon({ name, size = 14, color = "currentColor", strokeWidth = 1.75 }) {
   const paths = {
@@ -312,6 +393,7 @@ function itemCost(state, productId) {
 
 Object.assign(window, {
   soRequired, soRequiredList, lastBuyOf, itemCost,
+  soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
   inrFmt, inr, inrK, fmtDate, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
   Icon, StatusBadge, PriorityBadge, Avatar, Delta, Toggle, Modal,
   ToastProvider, useToast,

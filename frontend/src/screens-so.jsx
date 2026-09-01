@@ -837,7 +837,10 @@ function SalesOrderDetail({ soId }) {
         <div className="card-body" style={{ padding: '10px 14px' }}>
           <div className="h-timeline">
             {['Draft','Approved','Procurement Started','Material Received','Ready to Dispatch','Invoiced','Fully Paid','Closed'].map((stage, i) => {
-              const reached = SO_LIFECYCLE.indexOf(so.status) >= SO_LIFECYCLE.indexOf(stage);
+              // The furthest of "what is stored" and "what has actually
+              // happened", so an order that was never formally approved still
+              // reports honestly once POs, goods and invoices exist against it.
+              const reached = SO_LIFECYCLE.indexOf(soEffectiveStatus(state, so)) >= SO_LIFECYCLE.indexOf(stage);
               const current = so.status === stage;
               return (
                 <div key={stage} className={`h-step ${reached ? 'done' : ''} ${current ? 'current' : ''}`}>
