@@ -52,11 +52,18 @@ function allocBuildRows(state, so) {
       if (need <= 0) return;
       rows.push({
         key: `${l.id || li}:${c.product_id}:${ci}`,
-        line_id: l.id, product_id: c.product_id,
+        line_id: l.id, product_id: c.product_id, comp_index: ci,
         groupKey, groupLabel,
         equip: ref.equip || l.client_name || '',
         need,
         vendor_id: '', rate: 0, rateSource: '', vendorSource: '',
+        // What the CUSTOMER pays for this component, as the order currently has
+        // it. Untouched unless the user edits it, so opening this screen can
+        // never quietly rewrite prices somebody already agreed.
+        sell: (typeof compSellOf === 'function')
+          ? compSellOf(c, (state.products || []).find(p => p.id === c.product_id))
+          : (Number(c.sell) || 0),
+        sellTouched: false,
       });
     });
   });
@@ -103,6 +110,8 @@ function VendorAllocator({ soId, onClose }) {
   const [q, setQ] = React.useState('');
   const [bulkVendor, setBulkVendor] = React.useState('');
   const [bulkRate, setBulkRate] = React.useState('');
+  const [bulkSell, setBulkSell] = React.useState('');
+  const [bulkMargin, setBulkMargin] = React.useState('');
 
   if (!so) return null;
 
@@ -131,8 +140,30 @@ function VendorAllocator({ soId, onClose }) {
         next.vendorSource = 'manual';
       }
       if (p.rate !== undefined) next.rateSource = 'manual';
+      if (p.sell !== undefined) next.sellTouched = true;
       return next;
     }));
+  };
+
+  // Price the customer at what we pay plus a margin. Rows with no vendor rate
+  // yet have nothing to mark up, so they are left alone and counted rather than
+  // silently priced at zero.
+  const applyMargin = (pct, keys) => {
+    const m = 1 + (Number(pct) || 0) / 100;
+    let done = 0, noCost = 0;
+    const set = new Set(keys);
+    setRows(rs => rs.map(r => {
+      if (!set.has(r.key)) return r;
+      const cost = Number(r.rate) || 0;
+      if (!(cost > 0)) { noCost++; return r; }
+      done++;
+      return { ...r, sell: Math.round(cost * m * 100) / 100, sellTouched: true };
+    }));
+    setSel({}); setBulkMargin('');
+    toast(done
+      ? `${done} item(s) priced at cost + ${Number(pct) || 0}%` +
+        (noCost ? ` · ${noCost} skipped (no vendor rate yet)` : '')
+      : 'Those items have no vendor rate yet — set the rate first', done ? 'success' : '');
   };
 
   const selKeys = Object.keys(sel).filter(k => sel[k]);
@@ -142,6 +173,11 @@ function VendorAllocator({ soId, onClose }) {
     visible.forEach(r => { if (all) delete next[r.key]; else next[r.key] = true; });
     setSel(next);
   };
+
+  const clientValue = rows.reduce((a, r) => a + (Number(r.qty) || 0) * (Number(r.sell) || 0), 0);
+  const vendorCost = rows.reduce((a, r) => a + (Number(r.qty) || 0) * (Number(r.rate) || 0), 0);
+  const profit = clientValue - vendorCost;
+  const marginPct = clientValue > 0 ? (profit / clientValue) * 100 : null;
 
   const assigned = rows.filter(r => r.vendor_id).length;
   const priced = rows.filter(r => r.rate > 0).length;
@@ -160,6 +196,35 @@ function VendorAllocator({ soId, onClose }) {
       if (hit) hit.qty += r.qty;
       else list.push({ vendor_id: r.vendor_id, qty: r.qty, rate: Number(r.rate) || 0 });
     });
+    // Client prices first, as their own change: they belong to the ORDER, not to
+    // the purchase orders, and must stand even if PO generation is abandoned.
+    // Only rows actually edited are written, matched on (line, component) so the
+    // value lands exactly where the BOM editor and the profit panel read it.
+    const touched = rows.filter(r => r.sellTouched && r.line_id);
+    if (touched.length) {
+      const byLine = {};
+      touched.forEach(r => { (byLine[r.line_id] = byLine[r.line_id] || {})[r.product_id] = Number(r.sell) || 0; });
+      mutate(st => ({
+        ...st,
+        sales_orders: st.sales_orders.map(x => x.id !== so.id ? x : {
+          ...x,
+          lines: (x.lines || []).map(l => {
+            const want = byLine[l.id];
+            if (!want) return l;
+            const comps = (l.components || []).map(c =>
+              (want[c.product_id] != null) ? { ...c, sell: want[c.product_id] } : c);
+            // The bundle price is the sum of what is inside it — same rule the
+            // BOM editor uses, so the two screens cannot disagree.
+            const unit = (typeof lineSellOf === 'function')
+              ? lineSellOf(comps, getProduct)
+              : comps.reduce((a, c) => a + (Number(c.sell) || 0) * (Number(c.qty) || 0), 0);
+            return { ...l, components: comps, unit_price: Math.round(unit) };
+          }),
+        }),
+      }), { action: 'price-lines', entity: 'SalesOrder', entity_id: so.id,
+            detail: `${touched.length} client price(s) set while raising vendor POs` });
+    }
+
     window.generateSplitVendorPOs(so, alloc, { state, mutate, toast, navigate, getVendor });
     onClose();
   };
@@ -170,7 +235,13 @@ function VendorAllocator({ soId, onClose }) {
     <Modal title={`Assign vendors & prices — ${so.so_no}`} size="xl" onClose={onClose} footer={
       <>
         <span className="tiny muted" style={{ marginRight: 'auto' }}>
-          {rows.length} item(s) · {assigned} with a vendor{unassigned ? ` · ${unassigned} still to assign` : ''} · {priced} priced
+          {rows.length} item(s) · {assigned} with a vendor{unassigned ? ` · ${unassigned} still to assign` : ''}
+          {clientValue > 0 && <>
+            {' · '}client {inr(clientValue)} − cost {inr(vendorCost)} ={' '}
+            <strong style={{ color: profit >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+              {inr(profit)}{marginPct == null ? '' : ` (${marginPct > 0 ? '+' : ''}${marginPct.toFixed(1)}%)`}
+            </strong>
+          </>}
         </span>
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn btn-primary" disabled={!assigned} onClick={generate}>
@@ -203,15 +274,35 @@ function VendorAllocator({ soId, onClose }) {
                 toast(`${selKeys.length} item(s) → ${(getVendor(bulkVendor) || {}).name || 'vendor'}`, 'success');
               }}>Apply</button>
             <span style={{ width: 1, height: 22, background: 'var(--border)' }}/>
-            <input className="input num" type="number" min="0" placeholder="Rate ₹" value={bulkRate}
-              onChange={e => setBulkRate(e.target.value)} style={{ width: 110, height: 28 }}/>
+            <input className="input num" type="number" min="0" placeholder="We pay ₹" value={bulkRate}
+              onChange={e => setBulkRate(e.target.value)} style={{ width: 100, height: 28 }}
+              title="What the vendor charges us"/>
             <button className="btn btn-sm" disabled={bulkRate === '' || !selKeys.length}
               onClick={() => {
                 const n = selKeys.length;
                 patch(selKeys, { rate: Number(bulkRate) || 0 });
                 setSel({}); setBulkRate('');
-                toast(`${n} item(s) priced at ${inr(Number(bulkRate) || 0)}`, 'success');
-              }}>Apply to {selKeys.length}</button>
+                toast(`${n} item(s) at cost ${inr(Number(bulkRate) || 0)}`, 'success');
+              }}>Apply</button>
+            <span style={{ width: 1, height: 22, background: 'var(--border)' }}/>
+            <input className="input num" type="number" min="0" placeholder="Client ₹" value={bulkSell}
+              onChange={e => setBulkSell(e.target.value)} style={{ width: 100, height: 28 }}
+              title="What the customer pays — writes straight onto the order's bill of materials"/>
+            <button className="btn btn-sm" disabled={bulkSell === '' || !selKeys.length}
+              onClick={() => {
+                const n = selKeys.length;
+                patch(selKeys, { sell: Number(bulkSell) || 0 });
+                setSel({}); setBulkSell('');
+                toast(`${n} item(s) sold at ${inr(Number(bulkSell) || 0)}`, 'success');
+              }}>Apply</button>
+            <input className="input num" type="number" placeholder="margin %" value={bulkMargin}
+              onChange={e => setBulkMargin(e.target.value)} style={{ width: 92, height: 28 }}
+              title="Client price = what we pay + this %"/>
+            <button className="btn btn-sm" disabled={bulkMargin === ''}
+              onClick={() => applyMargin(bulkMargin, selKeys.length ? selKeys : rows.map(r => r.key))}
+              title={selKeys.length ? 'Applies to the ticked rows' : 'Applies to every row'}>
+              Cost + % {selKeys.length ? `· ${selKeys.length}` : '· all'}
+            </button>
           </div></div>
 
           <div className="card">
@@ -220,10 +311,12 @@ function VendorAllocator({ soId, onClose }) {
                 <thead><tr>
                   <th style={{ width: 28 }}></th>
                   <th>Item</th>
-                  <th className="num" style={{ width: 64 }}>Qty</th>
-                  <th style={{ width: 190 }}>Vendor</th>
-                  <th className="num" style={{ width: 130 }}>Unit rate</th>
-                  <th className="num" style={{ width: 110 }}>Amount</th>
+                  <th className="num" style={{ width: 58 }}>Qty</th>
+                  <th style={{ width: 170 }}>Vendor</th>
+                  <th className="num" style={{ width: 118 }} title="What the vendor charges us">We pay</th>
+                  <th className="num" style={{ width: 118 }} title="What the customer pays — saved onto the order">Client pays</th>
+                  <th className="num" style={{ width: 62 }}>Margin</th>
+                  <th className="num" style={{ width: 100 }}>PO amount</th>
                 </tr></thead>
                 <tbody>
                   {groups.map(g => {
@@ -255,12 +348,26 @@ function VendorAllocator({ soId, onClose }) {
                               {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
                             </select>
                           </td>
-                          <td></td>
+                          <td>
+                            <input className="input num" type="number" min="0" placeholder="client ₹"
+                              style={{ height: 26, width: '100%', textAlign: 'right', fontSize: 11.5 }}
+                              title="Set the client price for every item in this group"
+                              onChange={e => patch(gk, { sell: Number(e.target.value) || 0 })}/>
+                          </td>
+                          <td className="num tiny muted">
+                            {(() => {
+                              const gs = g.rows.reduce((a, r) => a + r.qty * (Number(r.sell) || 0), 0);
+                              const gc = g.rows.reduce((a, r) => a + r.qty * (Number(r.rate) || 0), 0);
+                              return gs > 0 ? `${(((gs - gc) / gs) * 100).toFixed(0)}%` : '—';
+                            })()}
+                          </td>
                           <td className="num small" style={{ fontWeight: 600 }}>{inr(gTotal)}</td>
                         </tr>
                         {g.rows.map(r => {
                           const p = getProduct(r.product_id) || {};
                           const lastAny = allocLastBuy(state, r.product_id, r.vendor_id || null);
+                          const rSell = Number(r.sell) || 0, rRate = Number(r.rate) || 0;
+                          const rMargin = rSell > 0 && rRate > 0 ? ((rSell - rRate) / rSell) * 100 : null;
                           return (
                             <tr key={r.key}>
                               <td><input type="checkbox" checked={!!sel[r.key]}
@@ -289,6 +396,15 @@ function VendorAllocator({ soId, onClose }) {
                                       ? <div className="tiny" style={{ color: 'var(--warning)' }}>no price yet</div>
                                       : null)}
                               </td>
+                              <td className="num">
+                                <input className="input num" type="number" min="0" value={r.sell}
+                                  onChange={e => patch([r.key], { sell: Number(e.target.value) || 0 })}
+                                  style={{ height: 26, width: '100%', textAlign: 'right' }}/>
+                                {r.sellTouched && <div className="tiny" style={{ color: 'var(--accent)' }}>will save to the order</div>}
+                              </td>
+                              <td className="num tiny" style={{ color: rMargin == null ? 'var(--text-muted)' : rMargin < 0 ? 'var(--danger)' : 'var(--success)' }}>
+                                {rMargin == null ? '—' : `${rMargin > 0 ? '+' : ''}${rMargin.toFixed(0)}%`}
+                              </td>
                               <td className="num mono small">{inr(r.qty * (Number(r.rate) || 0))}</td>
                             </tr>
                           );
@@ -304,6 +420,8 @@ function VendorAllocator({ soId, onClose }) {
           <div className="tiny muted mt-2">
             One PO is created per vendor. The same item in two groups going to the same vendor
             at the same rate is merged onto a single PO line.
+            Any <strong>Client pays</strong> figure you change is saved onto the order's bill of
+            materials, so the margin on the sales order updates with it.
           </div>
         </>
       )}
