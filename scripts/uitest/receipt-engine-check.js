@@ -285,6 +285,15 @@ async function run(poItems, picks, live) {
   check('...the order it belongs to', /SO\/FY26\/0002/.test(doc), true);
   check('...and the line items with a total', /Item 1/.test(doc) && /Total/.test(doc), true);
 
+  console.log('\n[9] e-Bill numbers cannot collide');
+  const nA = sandbox.poEbillNo({ po_no: 'VPO/FY26/0043' });
+  const nB = sandbox.poEbillNo({ po_no: 'VPO/FY26/0044' });
+  check('two POs get two different numbers', nA !== nB, true);
+  check('...derived from the PO so the two documents read together',
+    [nA, nB], ['VPO-EB/FY26/0043', 'VPO-EB/FY26/0044']);
+  check('the same PO always gets the same number',
+    sandbox.poEbillNo({ po_no: 'VPO/FY26/0044' }), nB);
+
   console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - quantities, invoicing and the e-Bill follow each org flow');
   process.exit(bad ? 1 : 0);
 })();
