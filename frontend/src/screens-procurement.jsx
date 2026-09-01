@@ -1376,24 +1376,37 @@ function poEbillHtml(po, vendor, so, org, getProduct, opts) {
   const esc = (x) => String(x == null ? '' : x).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const sub = (po.items || []).reduce((a, it) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
   const gst = Math.round(sub * 0.18);
+  const TAX = 18;                       // IGST, as the PO is priced
+  const due = po.expected ? fmtDate(po.expected) : '—';
   const rows = (po.items || []).map((it, n) => {
     const p = getProduct(it.product_id) || {};
-    const amt = (Number(it.qty) || 0) * (Number(it.rate) || 0);
-    return `<tr><td>${n + 1}</td><td>${esc(p.name || it.product_id)}${p.code ? `<div class="mut mono">${esc(p.code)}</div>` : ''}</td>` +
-           `<td class="mono">${esc(p.hsn || '')}</td><td class="r mono">${esc(it.qty)}</td>` +
-           `<td class="r mono">${esc(inr(it.rate || 0))}</td><td class="r mono">${esc(inr(amt))}</td></tr>`;
+    const qty = Number(it.qty) || 0;
+    const rate = Number(it.rate) || 0;
+    const withTax = Math.round(qty * rate * (1 + TAX / 100));
+    return '<tr>' +
+      `<td class="mono">${n + 1}</td>` +
+      `<td class="mono">${esc(p.code || it.product_id)}</td>` +
+      `<td>${esc(p.name || it.product_id)}</td>` +
+      `<td class="mono">${esc(due)}</td>` +
+      `<td>${esc(p.uom || 'Nos.')}</td>` +
+      `<td class="r mono">${esc(qty)}</td>` +
+      `<td class="r mono">${esc(inr(rate))}</td>` +
+      `<td class="r mono">${TAX}%</td>` +
+      `<td class="r mono">${esc(inr(withTax))}</td>` +
+      '</tr>';
   }).join('');
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(e.no || po.po_no)}</title><style>
     *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;margin:0;padding:26px;font-size:12.5px}
-    .paper{max-width:760px;margin:0 auto;border:1px solid #e2e2e2;border-radius:10px;padding:24px}
+    .paper{max-width:900px;margin:0 auto;border:1px solid #e2e2e2;border-radius:10px;padding:24px}
     .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #222;padding-bottom:10px}
     h1{font-size:16px;margin:0}.mut{color:#777}.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
     .title{font-size:14px;font-weight:800;letter-spacing:.07em;text-align:right}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0}
     .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#888}
-    table{width:100%;border-collapse:collapse;margin-top:10px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #eee;font-size:12px}
+    table{width:100%;border-collapse:collapse;margin-top:10px;table-layout:fixed}
+    th,td{text-align:left;padding:6px 5px;border-bottom:1px solid #eee;font-size:11px;word-break:break-word}
     th{background:#fafafa;font-size:10px;text-transform:uppercase;color:#666}.r{text-align:right}
-    tfoot td{border:none;padding-top:6px}
+    tfoot td{border:none;border-top:1px solid #ddd;padding-top:8px;font-size:12px}
     .sign{display:flex;justify-content:space-between;margin-top:36px}.sign div{width:45%;border-top:1px solid #bbb;padding-top:6px;font-size:11px;color:#555}
     .foot{margin-top:16px;font-size:10.5px;color:#999;text-align:center}
     @media print{body{padding:0}.paper{border:none}}
@@ -1412,12 +1425,13 @@ function poEbillHtml(po, vendor, so, org, getProduct, opts) {
         <div class="lbl" style="margin-top:8px">Against order</div><div class="mono">${esc(so ? so.so_no : '—')}</div>
         <div class="lbl" style="margin-top:8px">IRN</div><div class="mono" style="font-size:10.5px;word-break:break-all">${esc(e.irn || '—')}</div></div>
     </div>
-    <table><thead><tr><th>#</th><th>Item</th><th>HSN</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
+    <table><thead><tr>
+        <th>Sr No.</th><th>Part No.</th><th>Description</th><th>Due on</th><th>Unit</th>
+        <th class="r">Qty</th><th class="r">Rate</th><th class="r">Tax</th><th class="r">Amount with tax</th>
+      </tr></thead>
       <tbody>${rows}</tbody>
       <tfoot>
-        <tr><td colspan="5" class="r">Subtotal</td><td class="r mono">${esc(inr(sub))}</td></tr>
-        <tr><td colspan="5" class="r">IGST 18%</td><td class="r mono">${esc(inr(gst))}</td></tr>
-        <tr><td colspan="5" class="r"><strong>Total</strong></td><td class="r mono"><strong>${esc(inr(sub + gst))}</strong></td></tr>
+        <tr><td colspan="8" class="r"><strong>Grand Total</strong></td><td class="r mono"><strong>${esc(inr(sub + gst))}</strong></td></tr>
       </tfoot></table>
     <div class="sign"><div>For ${esc((org && org.name) || '')}</div><div>Vendor acknowledgement</div></div>
     <div class="foot">Electronically generated purchase order bill — valid without signature.</div>
