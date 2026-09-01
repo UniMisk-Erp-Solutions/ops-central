@@ -294,6 +294,31 @@ async function run(poItems, picks, live) {
   check('the same PO always gets the same number',
     sandbox.poEbillNo({ po_no: 'VPO/FY26/0044' }), nB);
 
+  console.log('\n[10] the e-Bill preview IS the printed document');
+  const ebPO = {
+    id: 'po-x', po_no: 'VPO/FY26/0044', so_id: 'so-1', vendor_id: 'v1', date: '2026-05-21',
+    ebill: { no: 'VPO-EB/FY26/0044', irn: 'IRN9988', date: '2026-05-21', generated: true },
+    items: [{ product_id: 'p1', qty: 2, rate: 5000 }],
+  };
+  const vend = { name: 'Cisco', gstin: '27AAA', city: 'Mumbai' };
+  const ord = { so_no: 'SO/FY26/0002' };
+  const orgn = { name: 'Microlink', address: 'Mumbai', gstin: '27BBB' };
+
+  const preview = sandbox.poEbillHtml(ebPO, vend, ord, orgn, getProduct, { autoPrint: false });
+  const paper = sandbox.poEbillHtml(ebPO, vend, ord, orgn, getProduct, { autoPrint: true });
+
+  check('a preview document is produced', preview.length > 500, true);
+  check('the preview does NOT print itself', /window\.print\(\)/.test(preview), false);
+  check('the printed copy does', /window\.print\(\)/.test(paper), true);
+  // The only difference between what is on screen and what comes out of the
+  // printer must be the auto-print script — otherwise the preview is a lie.
+  check('screen and paper are otherwise byte-identical',
+    paper.replace(/<script>[\s\S]*?<\/script>/, ''), preview);
+
+  ['VPO-EB/FY26/0044', 'IRN9988', 'Cisco', 'Microlink', 'SO/FY26/0002', 'Item 1']
+    .forEach(t => check(`the preview carries ${t}`, preview.indexOf(t) !== -1, true));
+  check('...and does not name the demo company', /Brightline/.test(preview), false);
+
   console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - quantities, invoicing and the e-Bill follow each org flow');
   process.exit(bad ? 1 : 0);
 })();

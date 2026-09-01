@@ -764,6 +764,7 @@ function VendorPODetail({ poId }) {
   const [showVI, setShowVI] = React.useState(false);
   const [showChange, setShowChange] = React.useState(false);
   const [showTransit, setShowTransit] = React.useState(false);
+  const [showEbill, setShowEbill] = React.useState(false);
   // The vendor's OWN part numbers for the items on this PO. An org running the
   // procurement profile prints the PO in the vendor's catalogue; everyone else
   // keeps printing ours. Unmapped lines always fall back to our names, so the
@@ -828,7 +829,7 @@ function VendorPODetail({ poId }) {
           {po.status === 'On Hold' && canApprovePO && <button className="btn btn-primary" onClick={() => setPoStatus('Issued', `${po.po_no} resumed`)}><Icon name="repeat" size={13}/>Resume</button>}
           {canProcurePO && ['Issued', 'In Transit'].includes(po.status) && !po.pending_change && !grn && <button className="btn" onClick={() => setShowChange(true)}><Icon name="arrowLeftRight" size={13}/>Change vendor</button>}
           {featureOn('e_invoice') && (ebilled
-            ? <button className="btn" onClick={() => printPOEbill(po, v, so, state.org, getProduct)}><Icon name="print" size={13}/>Print e-Bill</button>
+            ? <button className="btn" onClick={() => setShowEbill(true)}><Icon name="receipt" size={13}/>View e-Bill</button>
             : !blocked && <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>)}
           {!blocked && (po.status !== 'Material Received'
             ? <button className="btn btn-primary" onClick={() => navigate('grn')}><Icon name="package" size={13}/>Create GRN</button>
@@ -844,6 +845,7 @@ function VendorPODetail({ poId }) {
       {showVI && <RecordVendorInvoiceModal poId={po.id} onClose={() => setShowVI(false)}/>}
       {showChange && <ChangeVendorModal po={po} onClose={() => setShowChange(false)}/>}
       {showTransit && <InTransitModal po={po} onClose={() => setShowTransit(false)}/>}
+      {showEbill && <POEbillModal po={po} onClose={() => setShowEbill(false)}/>}
 
       <div className="card mb-2"><div className="card-body" style={{ padding: '10px 14px' }}>
         <div className="h-timeline">
@@ -983,7 +985,10 @@ function VendorPODetail({ poId }) {
               ) : (
                 <div className="small muted">No e-Bill yet. Generate it to issue an official PO document, stored on this Vendor PO. <div className="mt-2"><button className="btn btn-sm btn-primary" onClick={genEbill}><Icon name="receipt" size={12}/>Generate PO e-Bill</button></div></div>
               )}
-              {ebilled && <div className="mt-2"><button className="btn btn-sm" onClick={() => printPOEbill(po, v, so, state.org, getProduct)}><Icon name="print" size={12}/>Print / Download PDF</button></div>}
+              {ebilled && <div className="mt-2" style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-sm btn-primary" onClick={() => setShowEbill(true)}><Icon name="receipt" size={12}/>View</button>
+                <button className="btn btn-sm" onClick={() => printPOEbill(po, v, so, state.org, getProduct)}><Icon name="print" size={12}/>Print</button>
+              </div>}
             </div>
           </div>}
 
@@ -1365,7 +1370,8 @@ window.postReceiptForPO = postReceiptForPO;
 // sidebar, buttons and all. That is not a document anybody can send, so the
 // e-Bill was in practice a record with no output. This renders the real thing
 // in its own window.
-function printPOEbill(po, vendor, so, org, getProduct) {
+function poEbillHtml(po, vendor, so, org, getProduct, opts) {
+  const autoPrint = !!(opts && opts.autoPrint);
   const e = po.ebill || {};
   const esc = (x) => String(x == null ? '' : x).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const sub = (po.items || []).reduce((a, it) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
@@ -1415,11 +1421,66 @@ function printPOEbill(po, vendor, so, org, getProduct) {
       </tfoot></table>
     <div class="sign"><div>For ${esc((org && org.name) || '')}</div><div>Vendor acknowledgement</div></div>
     <div class="foot">Electronically generated purchase order bill — valid without signature.</div>
-  </div><script>window.onload=function(){setTimeout(function(){window.print()},200)}</script></body></html>`;
-  const w = window.open('', '_blank', 'width=860,height=940');
-  if (w) { w.document.open(); w.document.write(html); w.document.close(); }
+  </div>${autoPrint ? '<script>window.onload=function(){setTimeout(function(){window.print()},200)}<\/script>' : ''}</body></html>`;
+  return html;
 }
+
+// Opens the e-Bill in its own window and prints it. Kept for the direct
+// "print without looking" path.
+function printPOEbill(po, vendor, so, org, getProduct) {
+  const w = window.open('', '_blank', 'width=860,height=940');
+  if (!w) return false;
+  w.document.open();
+  w.document.write(poEbillHtml(po, vendor, so, org, getProduct, { autoPrint: true }));
+  w.document.close();
+  return true;
+}
+
+// On-screen preview. The iframe holds the SAME markup that prints, so what is
+// on screen is the document — not a second drawing of it that can drift.
+function POEbillModal({ po, onClose }) {
+  const { state, getVendor, getSO, getProduct } = useStore();
+  const frame = React.useRef(null);
+  const v = getVendor(po.vendor_id);
+  const so = getSO(po.so_id);
+  const html = poEbillHtml(po, v, so, state.org, getProduct, { autoPrint: false });
+  const e = po.ebill || {};
+
+  const doPrint = () => {
+    // Print the frame itself, so the paper is exactly what was previewed.
+    // If the browser refuses (some block printing a frame), fall back to the
+    // separate window rather than silently doing nothing.
+    try {
+      const w = frame.current && frame.current.contentWindow;
+      if (w) { w.focus(); w.print(); return; }
+    } catch (err) { /* fall through */ }
+    printPOEbill(po, v, so, state.org, getProduct);
+  };
+
+  return (
+    <Modal title={`PO e-Bill — ${e.no || po.po_no}`} size="lg" onClose={onClose} footer={
+      <>
+        <span className="tiny muted" style={{ marginRight: 'auto' }}>
+          {po.po_no} · {v ? v.name : ''}{so ? ` · ${so.so_no}` : ''}
+        </span>
+        <button className="btn" onClick={onClose}>Close</button>
+        <button className="btn btn-primary" onClick={doPrint}><Icon name="print" size={13}/>Print / Download PDF</button>
+      </>
+    }>
+      <iframe
+        ref={frame}
+        title="PO e-Bill preview"
+        srcDoc={html}
+        style={{ width: '100%', height: '62vh', minHeight: 380, border: '1px solid var(--border)',
+                 borderRadius: 'var(--radius)', background: '#fff' }}
+      />
+    </Modal>
+  );
+}
+
+window.poEbillHtml = poEbillHtml;
 window.printPOEbill = printPOEbill;
+window.POEbillModal = POEbillModal;
 
 function ReceiveModal({ po, onClose }) {
   const { state, mutate, addToPool, getProduct, getVendor, currentUser, getUser } = useStore();
