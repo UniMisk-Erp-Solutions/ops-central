@@ -384,9 +384,7 @@ function taxLabel(key, rate) {
   return `${k.short} ${r}%`;
 }
 
-// The tax on one line, and the amount after it.
-//   amount   qty x rate, before tax
-//   returns  { tax, total, label }  — tax negative for a withholding
+// One tax, on one amount. `tax` is negative for a withholding.
 function taxOn(amount, key, rate) {
   const k = taxKind(key);
   const r = rate == null ? k.rate : (Number(rate) || 0);
@@ -394,15 +392,68 @@ function taxOn(amount, key, rate) {
   return { tax, total: Math.round((amount + tax) * 100) / 100, label: taxLabel(key, r), sign: k.sign, rate: r };
 }
 
-// What tax applies to one line of a PO, from its tax_config.
-// Falls back to the PO default, then to IGST 18 — which is what every existing
-// e-Bill was printed with, so nothing already issued changes meaning.
-function poLineTax(po, productId) {
+// A LIST of taxes on one amount.
+//
+// A line routinely carries more than one: IGST and TDS together, or GST and TCS.
+// They are not alternatives, so they stack.
+//
+// Every tax is computed on the TAXABLE VALUE — the amount before any tax — not
+// on a running total. Compounding one tax onto another would make the result
+// depend on the order they were added in, which is both wrong and impossible to
+// explain to whoever checks the invoice.
+function taxesOn(amount, taxes) {
+  const list = normaliseTaxes(taxes);
+  const parts = list.map(t => {
+    const k = taxKind(t.key);
+    const r = t.rate == null ? k.rate : (Number(t.rate) || 0);
+    return { key: t.key, rate: r, sign: k.sign, label: taxLabel(t.key, r),
+             amount: Math.round(amount * (r / 100) * k.sign * 100) / 100 };
+  });
+  const tax = Math.round(parts.reduce((a, p) => a + p.amount, 0) * 100) / 100;
+  return {
+    parts, tax,
+    total: Math.round((amount + tax) * 100) / 100,
+    label: parts.length ? parts.map(p => p.label).join(' · ') : '—',
+  };
+}
+
+// Accepts a list, a single {key,rate}, or nothing — so a PO saved before taxes
+// could stack still reads correctly.
+function normaliseTaxes(v) {
+  if (Array.isArray(v)) return v.filter(t => t && t.key && t.key !== 'none');
+  if (v && v.key) return v.key === 'none' ? [] : [v];
+  return [];
+}
+
+// The taxes on one line of a PO. Falls back to the PO default, then to IGST 18
+// — what every existing e-Bill was printed with, so nothing already issued
+// changes meaning.
+function poLineTaxes(po, productId) {
   const cfg = (po && po.tax_config) || {};
-  const line = (cfg.lines || {})[productId];
-  const dflt = cfg.default;
-  const pick = line || dflt || { key: 'igst', rate: 18 };
-  return { key: pick.key || 'igst', rate: pick.rate == null ? taxKind(pick.key).rate : pick.rate };
+  const lines = cfg.lines || {};
+  if (Object.prototype.hasOwnProperty.call(lines, productId)) return normaliseTaxes(lines[productId]);
+  if (cfg.default !== undefined) return normaliseTaxes(cfg.default);
+  return [{ key: 'igst', rate: 18 }];
+}
+
+// Kept for the single-tax callers; the plural is the one to use.
+function poLineTax(po, productId) {
+  const list = poLineTaxes(po, productId);
+  return list.length ? list[0] : { key: 'none', rate: 0 };
+}
+
+// A total per tax kind, for the summary at the foot of a document. An invoice
+// has to show how much GST and how much TDS, not one blended figure.
+function taxSummary(rows) {
+  const by = {};
+  (rows || []).forEach(r => {
+    taxesOn(r.amount, r.taxes).parts.forEach(p => {
+      const id = p.key + '@' + p.rate;
+      if (!by[id]) by[id] = { key: p.key, rate: p.rate, label: p.label, amount: 0 };
+      by[id].amount = Math.round((by[id].amount + p.amount) * 100) / 100;
+    });
+  });
+  return Object.keys(by).map(k => by[k]);
 }
 
 // ===========================================================================
@@ -547,7 +598,8 @@ function itemCost(state, productId) {
 }
 
 Object.assign(window, {
-  qty, TAX_KINDS, GST_RATES, taxKind, taxLabel, taxOn, poLineTax,
+  qty, TAX_KINDS, GST_RATES, taxKind, taxLabel, taxOn, taxesOn, normaliseTaxes,
+  poLineTax, poLineTaxes, taxSummary,
   docStem, docNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
   nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
