@@ -200,8 +200,8 @@ function SCMTracking() {
                     return (
                       <tr key={r.product_id} style={r.done ? { background: 'var(--success-bg)' } : null}>
                         <td><div className="small">{p.name}</div><div className="tiny muted mono">{p.code || r.product_id}</div></td>
-                        <td className="num mono">{r.required}</td>
-                        <td className="num mono">{r.onPO}</td>
+                        <td className="num mono">{qty(r.required)}</td>
+                        <td className="num mono">{qty(r.onPO)}</td>
                         <td className="num mono">{r.inTransit || '—'}</td>
                         <td className="num mono" style={{ color: r.received ? 'var(--success)' : '' }}>{r.received || '—'}</td>
                         <td className="num mono"><strong>{r.inVG || '—'}</strong></td>
@@ -239,7 +239,7 @@ function SCMTracking() {
                       <tr key={d.id} style={{ cursor: 'pointer' }} onClick={() => setViewDC(d)}>
                         <td className="mono small"><a>{d.dc_no}</a></td>
                         <td className="mono small">{fmtDate(d.date)}</td>
-                        <td className="small trunc">{(d.items || []).map(i => `${i.qty}× ${(wfOn('customer_language') && (i.cust_name || i.cust_code)) || i.name}`).join(', ')}</td>
+                        <td className="small trunc">{(d.items || []).map(i => `${qty(i.qty)}× ${(wfOn('customer_language') && (i.cust_name || i.cust_code)) || i.name}`).join(', ')}</td>
                         <td className="num">{(d.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0)}</td>
                         <td className="tiny muted">{(d.transport || {}).mode || '—'}{(d.transport || {}).lr ? ' · LR ' + d.transport.lr : ''}</td>
                       </tr>
@@ -302,7 +302,7 @@ function OutwardDispatchModal({ so, onClose }) {
       outward_dispatches: [...(s.outward_dispatches || []), dc],
       notifications: [{ id: 'n-out-' + Date.now(), kind: 'so', text: `${so.so_no}: ${units} unit(s) dispatched to customer · ${dc.dc_no}`, date: TODAY, read: false, role: 'Stores' }, ...s.notifications],
     }), { action: 'dispatch-out', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser,
-          detail: `${units} unit(s) out for delivery · ${dc.dc_no} · ${dc.items.map(i => `${i.qty}× ${i.name}`).join(', ')}` });
+          detail: `${units} unit(s) out for delivery · ${dc.dc_no} · ${dc.items.map(i => `${qty(i.qty)}× ${i.name}`).join(', ')}` });
     // Bill what actually went out. Only where the workflow asks for it — the
     // standard profile still invoices on receipt and is untouched.
     //
@@ -350,7 +350,7 @@ function OutwardDispatchModal({ so, onClose }) {
                   <tr key={r.product_id}>
                     <td><input type="checkbox" checked={on} onChange={() => toggle(r)}/></td>
                     <td><div className="small">{p.name}</div><div className="tiny muted mono">{p.code}</div></td>
-                    <td className="num"><strong>{r.inVG}</strong></td>
+                    <td className="num"><strong>{qty(r.inVG)}</strong></td>
                     <td className="num mono muted">{r.dispatched || '—'}</td>
                     <td className="num"><input type="number" min="0" max={r.inVG} className="input mono" disabled={!on}
                       value={on ? sel[r.product_id] : ''} onChange={e => setQty(r, e.target.value)}

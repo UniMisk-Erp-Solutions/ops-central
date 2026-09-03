@@ -292,10 +292,12 @@ async function run(poItems, picks, live) {
   // A PO now numbers PO202609001, so its e-Bill is EB202609001 — the same
   // number wearing a different prefix. An OLD-format PO still yields something
   // unique and traceable rather than failing.
-  check('...derived from the PO so the two documents read together',
+  // The e-Bill and the vendor's invoice are ONE number for the same purchase
+  // order, so there is a single reference to quote about that PO.
+  check('...it is the vendor invoice number for that PO',
     [sandbox.poEbillNo({ po_no: 'PO202609043' }), sandbox.poEbillNo({ po_no: 'PO202609044' })],
-    ['EB202609043', 'EB202609044']);
-  check('an old-format PO still gets a unique e-Bill', [nA, nB], ['EBVPOFY260043', 'EBVPOFY260044']);
+    ['INV202609043', 'INV202609044']);
+  check('an old-format PO still gets a unique number', [nA, nB], ['INVVPOFY260043', 'INVVPOFY260044']);
   check('the same PO always gets the same number',
     sandbox.poEbillNo({ po_no: 'VPO/FY26/0044' }), nB);
 

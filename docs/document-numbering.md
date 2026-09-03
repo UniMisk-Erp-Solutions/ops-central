@@ -12,7 +12,7 @@
 | Vendor PO | `PO` + YYYY + MM + NNN | `PO202609001` |
 | Delivery challan | `DC` + YYYY + MM + NNN | `DC202609001` |
 | Vendor invoice | the PO's number, re-prefixed | `INV202609001` |
-| PO e-Bill | likewise | `EB202609001` |
+| PO e-Bill | **the same number as the vendor invoice** | `INV202609001` |
 | Client invoice | `INV` + the customer's own order number | `INVABG20260117` |
 | Sales order | **typed in** — the customer's reference | `ABG/2026/0117` |
 
@@ -51,15 +51,14 @@ Both belong to **one** purchase order, so they are that PO's number wearing a
 different prefix:
 
 ```
-PO202609001  →  INV202609001   (the vendor's invoice)
-             →  EB202609001    (our e-Bill for it)
+PO202609001  →  INV202609001   (the vendor's invoice AND our e-Bill for it)
 ```
 
 No counter, so no collision however many are issued at once, stable if
 regenerated, and the three documents read against each other at a glance.
 
 An old-format PO still yields something unique
-(`VPO/FY26/0044` → `EBVPOFY260044`) rather than failing.
+(`VPO/FY26/0044` → `INVVPOFY260044`) rather than failing.
 
 ### Client invoice — their order number
 

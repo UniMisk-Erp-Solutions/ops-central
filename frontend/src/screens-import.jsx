@@ -169,9 +169,12 @@ function impBuildLines(rows) {
     const parent = g.parent || g.children[0];
     const rest = g.parent ? g.children : g.children.slice(1);
     const bundleQty = Math.max(1, Math.round(parent.qty || 1));
+    // Full precision. Rounding to 4 decimals made a child of 1 inside a bundle
+    // of 6 become 0.1667, which multiplies back to 1.0002 — the order then asks
+    // for a fraction of an item more than the sheet said.
     const per = (q) => {
       const v = (Number(q) || 0) / bundleQty;
-      return Math.abs(v - Math.round(v)) < 1e-9 ? Math.round(v) : Number(v.toFixed(4));
+      return Math.abs(v - Math.round(v)) < 1e-9 ? Math.round(v) : v;
     };
     const members = [{ row: parent, qty: g.parent ? 1 : per(parent.qty) },
                      ...rest.map(r => ({ row: r, qty: per(r.qty) }))];

@@ -164,7 +164,7 @@ function ChangeVendorModal({ po, onClose }) {
             <tbody>
               {(po.items || []).map(it => { const p = getProduct(it.product_id) || { name: it.product_id }; return (
                 <tr key={it.product_id}>
-                  <td>{p.name}</td><td className="num">{it.qty}</td><td className="num small muted">{inr(it.rate)}</td>
+                  <td>{p.name}</td><td className="num">{qty(it.qty)}</td><td className="num small muted">{inr(it.rate)}</td>
                   <td className="num"><input type="number" min="0" className="input mono" value={rates[it.product_id] != null ? rates[it.product_id] : ''} onChange={e => setRates(r => ({ ...r, [it.product_id]: e.target.value }))} style={{ width: 90, textAlign: 'right', height: 26 }}/></td>
                   <td className="num mono">{inr((it.qty || 0) * (Number(rates[it.product_id]) || 0))}</td>
                 </tr>
@@ -904,7 +904,7 @@ function VendorPODetail({ poId }) {
                             ? <span title="Our catalogue">{n.altCode || p.code}<div className="tiny muted" style={{ fontFamily: 'inherit' }}>{n.altName || p.name}</div></span>
                             : p.hsn}
                         </td>
-                        <td className="num">{it.qty} {(inVendorLang && n.uom) || p.uom}</td>
+                        <td className="num">{qty(it.qty)} {(inVendorLang && n.uom) || p.uom}</td>
                         <td className="num">{inr(it.rate)}</td>
                         <td className="num">{inr(it.qty * it.rate)}</td>
                       </tr>
@@ -1311,9 +1311,10 @@ function GRNDetail({ grnId }) {
 // One e-Bill number per PO, derived from the PO's own number so it cannot
 // collide with another issued in the same breath.
 function poEbillNo(po) {
-  // The e-Bill belongs to ONE purchase order, so it is that PO's number wearing
-  // a different prefix: PO202609001 -> EB202609001. No counter, no collision.
-  return poEbillNoFor((po && po.po_no) || (po && po.id) || '');
+  // The e-Bill and the vendor's invoice are the same document number for the
+  // same purchase order: PO202609001 -> INV202609001. One number to quote when
+  // anybody asks about that PO.
+  return vendorInvoiceNo((po && po.po_no) || (po && po.id) || '');
 }
 window.poEbillNo = poEbillNo;
 
@@ -1378,25 +1379,30 @@ function poEbillHtml(po, vendor, so, org, getProduct, opts) {
   const autoPrint = !!(opts && opts.autoPrint);
   const e = po.ebill || {};
   const esc = (x) => String(x == null ? '' : x).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  const sub = (po.items || []).reduce((a, it) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
-  const gst = Math.round(sub * 0.18);
-  const TAX = 18;                       // IGST, as the PO is priced
+
   const due = po.expected ? fmtDate(po.expected) : '—';
+  // Tax per line, from the PO's own configuration. Lines can differ: one may be
+  // CGST+SGST, another IGST, a labour charge TDS. The totals below are summed
+  // from these, never recomputed at a flat rate.
+  let sumBase = 0, sumTax = 0;
   const rows = (po.items || []).map((it, n) => {
     const p = getProduct(it.product_id) || {};
-    const qty = Number(it.qty) || 0;
+    const q = Number(it.qty) || 0;
     const rate = Number(it.rate) || 0;
-    const withTax = Math.round(qty * rate * (1 + TAX / 100));
+    const base = q * rate;
+    const t = poLineTax(po, it.product_id);
+    const calc = taxOn(base, t.key, t.rate);
+    sumBase += base; sumTax += calc.tax;
     return '<tr>' +
       `<td class="mono">${n + 1}</td>` +
       `<td class="mono">${esc(p.code || it.product_id)}</td>` +
       `<td>${esc(p.name || it.product_id)}</td>` +
       `<td class="mono">${esc(due)}</td>` +
       `<td>${esc(p.uom || 'Nos.')}</td>` +
-      `<td class="r mono">${esc(qty)}</td>` +
+      `<td class="r mono">${esc(qty(q))}</td>` +
       `<td class="r mono">${esc(inr(rate))}</td>` +
-      `<td class="r mono">${TAX}%</td>` +
-      `<td class="r mono">${esc(inr(withTax))}</td>` +
+      `<td class="r mono">${esc(calc.label)}</td>` +
+      `<td class="r mono">${esc(inr(calc.total))}</td>` +
       '</tr>';
   }).join('');
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(e.no || po.po_no)}</title><style>
@@ -1435,7 +1441,9 @@ function poEbillHtml(po, vendor, so, org, getProduct, opts) {
       </tr></thead>
       <tbody>${rows}</tbody>
       <tfoot>
-        <tr><td colspan="8" class="r"><strong>Grand Total</strong></td><td class="r mono"><strong>${esc(inr(sub + gst))}</strong></td></tr>
+        <tr><td colspan="8" class="r">Taxable value</td><td class="r mono">${esc(inr(sumBase))}</td></tr>
+        <tr><td colspan="8" class="r">${sumTax < 0 ? 'Tax withheld' : 'Tax'}</td><td class="r mono">${esc(inr(sumTax))}</td></tr>
+        <tr><td colspan="8" class="r"><strong>Grand Total</strong></td><td class="r mono"><strong>${esc(inr(sumBase + sumTax))}</strong></td></tr>
       </tfoot></table>
     <div class="sign"><div>For ${esc((org && org.name) || '')}</div><div>Vendor acknowledgement</div></div>
     <div class="foot">Electronically generated purchase order bill — valid without signature.</div>
@@ -1457,41 +1465,204 @@ function printPOEbill(po, vendor, so, org, getProduct) {
 // On-screen preview. The iframe holds the SAME markup that prints, so what is
 // on screen is the document — not a second drawing of it that can drift.
 function POEbillModal({ po, onClose }) {
-  const { state, getVendor, getSO, getProduct } = useStore();
+  const { state, mutate, getVendor, getSO, getProduct, currentUser, getUser } = useStore();
+  const toast = useToast();
   const frame = React.useRef(null);
   const v = getVendor(po.vendor_id);
   const so = getSO(po.so_id);
-  const html = poEbillHtml(po, v, so, state.org, getProduct, { autoPrint: false });
   const e = po.ebill || {};
+  const role = currentUser ? (getUser(currentUser) || {}).role : '';
+  const canEditTax = ['Purchase', 'Project Manager', 'Org Admin', 'Managing Director'].includes(role);
+
+  // --- tax editing ---------------------------------------------------------
+  // Held locally while it is being worked on, so the document redraws as fast
+  // as it is typed, and written to the PO on Save. Nothing is committed by
+  // merely opening the dialog.
+  const [taxCfg, setTaxCfg] = React.useState(() => JSON.parse(JSON.stringify(po.tax_config || {})));
+  const [sel, setSel] = React.useState({});
+  const [tab, setTab] = React.useState('doc');      // doc | tax
+  const [dirty, setDirty] = React.useState(false);
+
+  const poDraft = { ...po, tax_config: taxCfg };
+  const html = poEbillHtml(poDraft, v, so, state.org, getProduct, { autoPrint: false });
+
+  const lineTax = (pid) => poLineTax(poDraft, pid);
+  const setLines = (pids, key, rate) => {
+    setTaxCfg(c => {
+      const lines = { ...(c.lines || {}) };
+      pids.forEach(pid => { lines[pid] = { key, rate: rate == null ? taxKind(key).rate : Number(rate) }; });
+      return { ...c, lines };
+    });
+    setDirty(true);
+  };
+  // "Everything on this PO" — the common case, one click.
+  const setAllLines = (key, rate) => {
+    setTaxCfg(c => ({ ...c, default: { key, rate: rate == null ? taxKind(key).rate : Number(rate) }, lines: {} }));
+    setSel({}); setDirty(true);
+  };
+
+  const selKeys = Object.keys(sel).filter(k => sel[k]);
+  const items = po.items || [];
+  const allTicked = items.length > 0 && items.every(it => sel[it.product_id]);
+
+  const totals = items.reduce((a, it) => {
+    const base = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+    const t = lineTax(it.product_id);
+    const calc = taxOn(base, t.key, t.rate);
+    return { base: a.base + base, tax: a.tax + calc.tax, total: a.total + calc.total };
+  }, { base: 0, tax: 0, total: 0 });
+
+  const saveTax = () => {
+    mutate(st => ({
+      ...st,
+      vendor_pos: st.vendor_pos.map(x => x.id === po.id ? { ...x, tax_config: taxCfg } : x),
+    }), { action: 'po-tax', entity: 'VendorPO', entity_id: po.id,
+          detail: `Tax updated on ${po.po_no} · ${inr(totals.total)}` });
+    setDirty(false);
+    toast(`Tax saved on ${po.po_no} · ${inr(totals.total)}`, 'success');
+  };
 
   const doPrint = () => {
     // Print the frame itself, so the paper is exactly what was previewed.
     // If the browser refuses (some block printing a frame), fall back to the
     // separate window rather than silently doing nothing.
+    // While the tax tab is open the frame is not mounted, so print from the
+    // draft — which carries any tax edited but not yet saved. What comes out of
+    // the printer is what is on screen either way.
     try {
-      const w = frame.current && frame.current.contentWindow;
+      const w = tab === 'doc' && frame.current && frame.current.contentWindow;
       if (w) { w.focus(); w.print(); return; }
     } catch (err) { /* fall through */ }
-    printPOEbill(po, v, so, state.org, getProduct);
+    printPOEbill(poDraft, v, so, state.org, getProduct);
   };
 
   return (
-    <Modal title={`PO e-Bill — ${e.no || po.po_no}`} size="lg" onClose={onClose} footer={
+    <Modal title={`PO e-Bill — ${e.no || po.po_no}`} size="xl" onClose={onClose} footer={
       <>
         <span className="tiny muted" style={{ marginRight: 'auto' }}>
           {po.po_no} · {v ? v.name : ''}{so ? ` · ${so.so_no}` : ''}
+          {' · '}<strong>{inr(totals.total)}</strong>
+          {dirty && <span style={{ color: 'var(--warning)' }}> · unsaved tax changes</span>}
         </span>
+        {dirty && <button className="btn" onClick={saveTax}><Icon name="save" size={13}/>Save tax</button>}
         <button className="btn" onClick={onClose}>Close</button>
         <button className="btn btn-primary" onClick={doPrint}><Icon name="print" size={13}/>Print / Download PDF</button>
       </>
     }>
-      <iframe
-        ref={frame}
-        title="PO e-Bill preview"
-        srcDoc={html}
-        style={{ width: '100%', height: '62vh', minHeight: 380, border: '1px solid var(--border)',
-                 borderRadius: 'var(--radius)', background: '#fff' }}
-      />
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+        <button className={`btn btn-sm ${tab === 'doc' ? 'btn-primary' : ''}`} onClick={() => setTab('doc')}>
+          <Icon name="receipt" size={12}/>Document
+        </button>
+        {canEditTax && (
+          <button className={`btn btn-sm ${tab === 'tax' ? 'btn-primary' : ''}`} onClick={() => setTab('tax')}>
+            <Icon name="edit" size={12}/>Tax ({items.length} line{items.length === 1 ? '' : 's'})
+          </button>
+        )}
+        <span className="tiny muted" style={{ marginLeft: 'auto', alignSelf: 'center' }}>
+          {inr(totals.base)} + {totals.tax < 0 ? 'withheld ' : ''}{inr(Math.abs(totals.tax))} = <strong>{inr(totals.total)}</strong>
+        </span>
+      </div>
+
+      {tab === 'doc' ? (
+        <iframe
+          ref={frame}
+          title="PO e-Bill preview"
+          srcDoc={html}
+          style={{ width: '100%', height: '58vh', minHeight: 360, border: '1px solid var(--border)',
+                   borderRadius: 'var(--radius)', background: '#fff' }}
+        />
+      ) : (
+        <div>
+          {/* One tax for the whole PO — what most POs need, in one click. */}
+          <div className="card mb-2"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px' }}>
+            <span className="tiny muted" style={{ fontWeight: 600 }}>Apply to</span>
+            <select className="select" style={{ height: 28, width: 120 }} value={selKeys.length ? 'sel' : 'all'}
+              onChange={e2 => { if (e2.target.value === 'all') setSel({}); else setSel(Object.fromEntries(items.map(i => [i.product_id, true]))); }}>
+              <option value="all">every line</option>
+              <option value="sel">ticked lines{selKeys.length ? ` (${selKeys.length})` : ''}</option>
+            </select>
+            {TAX_KINDS.filter(k => k.key !== 'none').map(k => (
+              <button key={k.key} className="btn btn-sm"
+                onClick={() => (selKeys.length ? setLines(selKeys, k.key) : setAllLines(k.key))}
+                title={k.sign < 0 ? 'Withheld from what we pay the vendor' : 'Added to the amount'}>
+                {k.label}
+              </button>
+            ))}
+            <button className="btn btn-sm" onClick={() => (selKeys.length ? setLines(selKeys, 'none') : setAllLines('none'))}>No tax</button>
+          </div></div>
+
+          <div className="card">
+            <div className="card-body flush" style={{ maxHeight: '46vh', overflow: 'auto' }}>
+              <table className="t">
+                <thead><tr>
+                  <th style={{ width: 30 }}>
+                    <input type="checkbox" checked={allTicked} title="Tick every line"
+                      onChange={e2 => setSel(e2.target.checked ? Object.fromEntries(items.map(i => [i.product_id, true])) : {})}/>
+                  </th>
+                  <th>Item</th>
+                  <th className="num" style={{ width: 56 }}>Qty</th>
+                  <th className="num" style={{ width: 96 }}>Amount</th>
+                  <th style={{ width: 168 }}>Tax</th>
+                  <th className="num" style={{ width: 78 }}>Rate %</th>
+                  <th className="num" style={{ width: 110 }}>With tax</th>
+                </tr></thead>
+                <tbody>
+                  {items.map((it, i) => {
+                    const pr = getProduct(it.product_id) || {};
+                    const base = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+                    const t = lineTax(it.product_id);
+                    const calc = taxOn(base, t.key, t.rate);
+                    const kind = taxKind(t.key);
+                    return (
+                      <tr key={i}>
+                        <td><input type="checkbox" checked={!!sel[it.product_id]}
+                          onChange={() => setSel(x => ({ ...x, [it.product_id]: !x[it.product_id] }))}/></td>
+                        <td>
+                          <div className="small trunc" style={{ maxWidth: 300 }}>{pr.name || it.product_id}</div>
+                          <div className="tiny muted mono">{pr.code || ''}</div>
+                        </td>
+                        <td className="num mono small">{qty(it.qty)}</td>
+                        <td className="num mono small">{inr(base)}</td>
+                        <td>
+                          <select className="select" style={{ height: 26, fontSize: 11.5, width: '100%' }}
+                            value={t.key} onChange={e2 => setLines([it.product_id], e2.target.value)}>
+                            {TAX_KINDS.map(k => <option key={k.key} value={k.key}>{k.label}</option>)}
+                          </select>
+                        </td>
+                        <td className="num">
+                          {kind.key === 'none' ? <span className="muted tiny">—</span> : (
+                            <input className="input num" type="number" step="0.1" min="0" value={t.rate}
+                              onChange={e2 => setLines([it.product_id], t.key, e2.target.value)}
+                              style={{ height: 26, width: '100%', textAlign: 'right' }}/>
+                          )}
+                          {kind.split && <div className="tiny muted">{Math.round((t.rate / 2) * 100) / 100}+{Math.round((t.rate / 2) * 100) / 100}</div>}
+                        </td>
+                        <td className="num mono small" style={{ color: calc.tax < 0 ? 'var(--danger)' : 'inherit' }}>
+                          {inr(calc.total)}
+                          <div className="tiny muted">{calc.label}</div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan="3"></td>
+                    <td className="num mono small">{inr(totals.base)}</td>
+                    <td className="tiny muted">{totals.tax < 0 ? 'withheld' : 'tax'}</td>
+                    <td className="num mono small">{inr(totals.tax)}</td>
+                    <td className="num mono"><strong>{inr(totals.total)}</strong></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+          <div className="tiny muted mt-2">
+            TDS is <strong>withheld</strong> from what we pay the vendor, so it reduces the total.
+            GST and TCS are added. The document and the Grand Total follow these as you change them.
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
@@ -1573,9 +1744,9 @@ function ReceiveModal({ po, onClose }) {
               <tr key={i} style={{ opacity: off ? 0.5 : 1 }}>
                 <td><input type="checkbox" checked={!!it.recv} onChange={e => { const on = e.target.checked; const n = [...items]; n[i] = on ? { ...it, recv: true, received: it.qty, rejected: 0, to_pool: 0 } : { ...it, recv: false, received: 0, rejected: 0, to_pool: 0 }; setItems(n); }}/></td>
                 <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
-                <td className="num mono small muted">{it.qty}</td>
+                <td className="num mono small muted">{qty(it.qty)}</td>
                 <td className="num mono small">
-                  {it.outstanding > 0 ? it.outstanding
+                  {it.outstanding > 0 ? qty(it.outstanding)
                     : <span className="badge success tiny" title="Fully received on an earlier delivery">done</span>}
                 </td>
                 <td className="num"><input type="number" min="0" max={it.outstanding} className="input mono" disabled={off} value={it.received} onChange={e => { const n = [...items]; n[i] = { ...it, received: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 66, textAlign: 'right' }}/></td>
@@ -1687,7 +1858,7 @@ function GRNNew() {
                       <tr key={i} style={{ opacity: off ? 0.5 : 1 }}>
                         <td><input type="checkbox" checked={!!it.recv} onChange={e => { const on = e.target.checked; const next=[...items]; next[i] = on ? {...it, recv:true, received: it.qty, accepted: it.qty, rejected:0, to_pool:0} : {...it, recv:false, received:0, accepted:0, rejected:0, to_pool:0}; setItems(next); }}/></td>
                         <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
-                        <td className="num">{it.qty}</td>
+                        <td className="num">{qty(it.qty)}</td>
                         <td className="num">
                           <input type="number" className="input mono" min="0" value={it.received} disabled={off}
                                  onChange={e => { const v = parseInt(e.target.value) || 0; const next=[...items]; next[i] = {...it, received: v, accepted: Math.max(0, v - it.rejected - (it.to_pool||0))}; setItems(next); }}
@@ -2341,7 +2512,7 @@ function InTransitModal({ po, onClose }) {
                 return (
                   <tr key={i}>
                     <td>{pr ? pr.name : it.product_id}<div className="tiny muted mono">{pr ? pr.code : ''}</div></td>
-                    <td className="num">{it.qty}</td>
+                    <td className="num">{qty(it.qty)}</td>
                     <td className="num" style={{ width: 120 }}>
                       <input className="input num" type="number" min="0" max={it.qty} value={qty[it.product_id] != null ? qty[it.product_id] : ''}
                         onChange={e => {

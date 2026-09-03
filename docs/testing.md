@@ -29,7 +29,7 @@ broken.
 | `receipt-engine-check` | every screen agrees on `soRequired`; a bundled order receives in full; invoicing obeys the workflow; e-Bill columns | receiving posted a **sixth** of the order |
 | `dispatch-invoice-check` | customer wording, partial→final adding to the order value, no double billing, the over-dispatch cap | — |
 | `status-check` | every lifecycle transition, forward-only, manual states untouched, order numbering | orders sat on Draft with goods received against them |
-| `numbering-check` | the format of every document number, and that ten raised in one action are ten different numbers | two POs shared one e-Bill number |
+| `numbering-check` | every document number's format and uniqueness; quantity formatting; per-line tax including the TDS sign | two POs shared one e-Bill number; quantities read "1.0000" |
 
 ## How to write one
 

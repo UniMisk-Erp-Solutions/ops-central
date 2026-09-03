@@ -337,6 +337,74 @@ function partyItemName(aliasMap, product, mode) {
            altCode: theirCode, altName: theirName, mapped: mapped, uom: a ? a.uom : null };
 }
 
+// A quantity as a person would write it. 1 rather than 1.0000, 2.5 rather than
+// 2.5000, and a value that is a hair off a whole number — the residue of
+// dividing by a bundle size — shown as the whole number it is meant to be.
+function qty(n) {
+  const v = Number(n);
+  if (!isFinite(v)) return '0';
+  if (Math.abs(v - Math.round(v)) < 1e-6) return String(Math.round(v));
+  return String(Math.round(v * 1000) / 1000);
+}
+
+// ===========================================================================
+// Tax on a purchase order line
+// ===========================================================================
+// A flat 18% on everything is not how purchasing works. Within one state a line
+// is CGST+SGST (9+9); across states it is IGST (18). Labour and professional
+// charges carry TDS, which is WITHHELD from what we pay the vendor rather than
+// added to it. TCS is collected on top.
+//
+// `sign` is the whole point: getting it backwards turns a deduction into a
+// surcharge and the vendor is paid the wrong amount.
+const TAX_KINDS = [
+  { key: 'none',      label: 'No tax',            short: 'None',      rate: 0,  sign: 0,  split: false },
+  { key: 'cgst_sgst', label: 'CGST + SGST',       short: 'CGST+SGST', rate: 18, sign: 1,  split: true  },
+  { key: 'igst',      label: 'IGST',              short: 'IGST',      rate: 18, sign: 1,  split: false },
+  { key: 'tds_labour',label: 'TDS — Labour',      short: 'TDS (Lab)', rate: 2,  sign: -1, split: false },
+  { key: 'tds_prof',  label: 'TDS — Professional',short: 'TDS (Prof)',rate: 10, sign: -1, split: false },
+  { key: 'tcs',       label: 'TCS',               short: 'TCS',       rate: 0.1,sign: 1,  split: false },
+];
+const taxKind = (key) => TAX_KINDS.find(t => t.key === key) || TAX_KINDS[0];
+
+// Common GST rates, offered rather than typed.
+const GST_RATES = [0, 5, 12, 18, 28];
+
+// How the tax reads on the document: "CGST+SGST 9+9%", "IGST 18%",
+// "TDS (Lab) 2%". A split tax shows both halves, because that is what the
+// invoice has to show.
+function taxLabel(key, rate) {
+  const k = taxKind(key);
+  const r = rate == null ? k.rate : Number(rate);
+  if (k.key === 'none') return '—';
+  if (k.split) {
+    const half = Math.round((r / 2) * 100) / 100;
+    return `${k.short} ${half}+${half}%`;
+  }
+  return `${k.short} ${r}%`;
+}
+
+// The tax on one line, and the amount after it.
+//   amount   qty x rate, before tax
+//   returns  { tax, total, label }  — tax negative for a withholding
+function taxOn(amount, key, rate) {
+  const k = taxKind(key);
+  const r = rate == null ? k.rate : (Number(rate) || 0);
+  const tax = Math.round(amount * (r / 100) * k.sign * 100) / 100;
+  return { tax, total: Math.round((amount + tax) * 100) / 100, label: taxLabel(key, r), sign: k.sign, rate: r };
+}
+
+// What tax applies to one line of a PO, from its tax_config.
+// Falls back to the PO default, then to IGST 18 — which is what every existing
+// e-Bill was printed with, so nothing already issued changes meaning.
+function poLineTax(po, productId) {
+  const cfg = (po && po.tax_config) || {};
+  const line = (cfg.lines || {})[productId];
+  const dflt = cfg.default;
+  const pick = line || dflt || { key: 'igst', rate: 18 };
+  return { key: pick.key || 'igst', rate: pick.rate == null ? taxKind(pick.key).rate : pick.rate };
+}
+
 // ===========================================================================
 // Document numbers
 // ===========================================================================
@@ -479,6 +547,7 @@ function itemCost(state, productId) {
 }
 
 Object.assign(window, {
+  qty, TAX_KINDS, GST_RATES, taxKind, taxLabel, taxOn, poLineTax,
   docStem, docNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
   nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,

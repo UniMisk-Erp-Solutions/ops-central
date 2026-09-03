@@ -18,7 +18,8 @@ Sr No. | Part No. | Description | Due on | Unit | Qty | Rate | Tax | Amount with
                                                               Grand Total
 ```
 
-**Tax is the RATE and the amount is INCLUSIVE** — the same pair their own BOQ
+Tax is set **per line** — CGST+SGST, IGST, TDS or TCS — see
+[po-tax.md](./po-tax.md). **Tax is the RATE and the amount is INCLUSIVE** — the same pair their own BOQ
 uses ("Tax Rate %" / "Total with Taxes"), so the two documents read against each
 other line for line. *Due on* is the PO's expected delivery date.
 
@@ -33,7 +34,8 @@ asserts they are otherwise byte-identical.
 
 ### Numbering
 
-`PO202609001 → EB202609001` — the PO's own number wearing a different prefix.
+`PO202609001 → INV202609001` — the same number as the vendor's invoice for that PO,
+so there is one reference to quote about it.
 Full scheme in [document-numbering.md](./document-numbering.md).
 
 > It used to be a counter over "how many POs already have one", read from a
