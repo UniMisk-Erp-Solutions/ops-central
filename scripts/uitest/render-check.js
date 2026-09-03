@@ -114,7 +114,8 @@ const NEEDED = ['useStore', 'StoreProvider', 'App', 'useAliasMap', 'partyItemNam
   'soRequired', 'soRequiredList', 'POEbillModal', 'poEbillHtml', 'printPOEbill', 'poEbillNo',
   'buildDispatchInvoice', 'raiseDispatchInvoice', 'invoiceCustName', 'custRefName',
   'soDerivedStatus', 'soEffectiveStatus', 'soAdvanceStatus', 'nextSoNo', 'soNoTaken',
-  'docNo', 'vendorPoNo', 'challanNo', 'vendorInvoiceNo', 'poEbillNoFor', 'clientInvoiceNo'];
+  'docNo', 'vendorPoNo', 'challanNo', 'vendorInvoiceNo', 'poEbillNoFor', 'clientInvoiceNo',
+  'qty', 'TAX_KINDS', 'taxKind', 'taxLabel', 'taxOn', 'poLineTax'];
 const missing = NEEDED.filter(n => typeof base[n] === 'undefined');
 if (missing.length) fail('globals never reached window: ' + missing.join(', '));
 else console.log('  ok  all files execute · all cross-file globals present');

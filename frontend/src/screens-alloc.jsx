@@ -339,7 +339,7 @@ function VendorAllocator({ soId, onClose }) {
                             <span className="tiny muted" style={{ fontWeight: 400 }}> · {g.rows.length} item(s)
                               {gv.size > 1 ? ` · ${gv.size} vendors` : ''}</span>
                           </td>
-                          <td className="num tiny muted">{g.rows.reduce((a, r) => a + r.qty, 0)}</td>
+                          <td className="num tiny muted">{qty(g.rows.reduce((a, r) => a + r.qty, 0))}</td>
                           <td>
                             <select className="select" style={{ height: 26, fontSize: 11.5, width: '100%' }}
                               value={gv.size === 1 ? [...gv][0] : ''}
@@ -376,7 +376,7 @@ function VendorAllocator({ soId, onClose }) {
                                 <div className="small trunc" style={{ maxWidth: 330 }}>{p.name}</div>
                                 <div className="tiny muted mono">{p.code}</div>
                               </td>
-                              <td className="num mono small">{r.qty}</td>
+                              <td className="num mono small">{qty(r.qty)}</td>
                               <td>
                                 <select className="select" style={{ height: 26, fontSize: 11.5, width: '100%' }}
                                   value={r.vendor_id} onChange={e => patch([r.key], { vendor_id: e.target.value })}>

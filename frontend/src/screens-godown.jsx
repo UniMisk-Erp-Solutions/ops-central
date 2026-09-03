@@ -654,7 +654,7 @@ function VGPoolHistoryCard({ so }) {
               <tr key={r.id} onClick={() => setView(r)} style={{ cursor: 'pointer' }}>
                 <td className="mono small"><a>{r.no}</a></td>
                 <td>{r.direction === 'in' ? <span className="badge success dot">From pool</span> : <span className="badge info dot">To pool</span>}</td>
-                <td className="small">{(r.items || []).map(it => `${it.qty}× ${it.name}`).join(', ')}</td>
+                <td className="small">{(r.items || []).map(it => `${qty(it.qty)}× ${it.name}`).join(', ')}</td>
                 <td className="small">{(getUser(r.accepted_by || r.by) || {}).name || r.by}{r.requested_by ? <div className="tiny muted">req: {(getUser(r.requested_by) || {}).name || r.requested_by}</div> : null}</td>
                 <td className="mono small">{fmtDate(r.date)}</td>
               </tr>
@@ -1077,7 +1077,7 @@ function VGImplPanel({ so }) {
                     <span className="badge accent tiny">{lg.hours || 0}h</span>
                     {by && <span className="tiny muted">· {by.name}</span>}
                   </div>
-                  {(lg.items || []).filter(it => Number(it.qty) > 0).length > 0 && <div className="tiny" style={{ marginTop: 3 }}>Used: {lg.items.filter(it => Number(it.qty) > 0).map(it => `${it.qty}× ${it.name}`).join(' · ')}</div>}
+                  {(lg.items || []).filter(it => Number(it.qty) > 0).length > 0 && <div className="tiny" style={{ marginTop: 3 }}>Used: {lg.items.filter(it => Number(it.qty) > 0).map(it => `${qty(it.qty)}× ${it.name}`).join(' · ')}</div>}
                   {lg.notes && <div className="tiny muted" style={{ marginTop: 2 }}>{lg.notes}</div>}
                   {(() => {
                     const atts = (lg.items || []).flatMap(it => (it.files || []).map(f => ({ ...f, item: it.name })));
@@ -1305,7 +1305,7 @@ function VirtualGodownView({ soId, embedded }) {
                       ) : <Icon name="check" size={12} color="var(--success)"/>}</td>}
                       <td>{c.product.name}</td>
                       <td className="mono small muted">{c.product.code}</td>
-                      <td className="num">{c.qty}</td>
+                      <td className="num">{qty(c.qty)}</td>
                       <td className="num">{c.onPO > 0
                         ? <span className="badge" style={{ minWidth: 28, justifyContent: 'center' }} title={c.onOrder > 0 ? `${c.onOrder} not shipped by the vendor yet` : 'All of it has shipped'}>{c.onPO}</span>
                         : <span className="muted" title="Nothing ordered for this item yet">—</span>}</td>
@@ -1614,7 +1614,7 @@ function CrossSOTransfers() {
   const history = requests.filter(t => ['Confirmed', 'Rejected'].includes(t.status));
 
   const txLabel = (t) => `${getSO(t.from_so)?.so_no || t.from_so} → ${getSO(t.to_so)?.so_no || t.to_so}`;
-  const itemsLabel = (t) => (t.items || []).map(it => `${it.qty}× ${getProduct(it.product_id)?.name || it.product_id}`).join(', ');
+  const itemsLabel = (t) => (t.items || []).map(it => `${qty(it.qty)}× ${getProduct(it.product_id)?.name || it.product_id}`).join(', ');
   const reject = (t) => {
     mutate(s => ({ ...s, transfer_requests: s.transfer_requests.map(x => x.id === t.id ? { ...x, status: 'Rejected', rejected_by: currentUser, rejected_role: role, rejected_date: TODAY } : x), notifications: [{ id: 'n-txr-' + Date.now(), kind: 'transfer', text: `Transfer ${txLabel(t)} rejected by ${role}`, date: TODAY, read: false, user_id: t.requested_by }, ...s.notifications] }), { action: 'reject', entity: 'TransferRequest', entity_id: t.challan ? t.challan.no : t.id, user_id: currentUser, detail: `Transfer rejected by ${role} · ${txLabel(t)} · ${itemsLabel(t)}` });
     toast('Transfer rejected', '');
@@ -1746,7 +1746,7 @@ function ApproveTransferModal({ transfer, onClose }) {
       ...s,
       transfer_requests: s.transfer_requests.map(t => t.id === transfer.id ? { ...t, status: 'Approved', approved_by: currentUser, approved_role: role, approved_date: TODAY, items: challan.items.map(it => ({ product_id: it.product_id, qty: it.qty })), challan } : t),
       notifications: [{ id: 'n-txa-' + Date.now(), kind: 'transfer', text: `Confirm receipt: transfer ${challan.no} · ${label} · check the challan & goods`, date: TODAY, read: false, ...(destPm ? { user_id: destPm } : { role: 'Project Manager' }) }, ...s.notifications],
-    }), { action: 'approve', entity: 'TransferRequest', entity_id: challan.no, user_id: currentUser, detail: `Transfer approved by ${role} · challan ${challan.no} issued · ${label} · ${challan.items.map(it => `${it.qty}× ${it.name}`).join(', ')}` });
+    }), { action: 'approve', entity: 'TransferRequest', entity_id: challan.no, user_id: currentUser, detail: `Transfer approved by ${role} · challan ${challan.no} issued · ${label} · ${challan.items.map(it => `${qty(it.qty)}× ${it.name}`).join(', ')}` });
     toast(`Approved · ${challan.no} generated`, 'success');
     onClose();
   };
