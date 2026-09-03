@@ -199,6 +199,7 @@ function SheetImportModal({ onClose, onCreated }) {
   const toast = useToast();
   const [rows, setRows] = React.useState(null);
   const [custId, setCustId] = React.useState('');
+  const [soNo, setSoNo] = React.useState(() => nextSoNo(state));   // editable suggestion
   const [newCust, setNewCust] = React.useState('');     // when adding one inline
   const [fileName, setFileName] = React.useState('');
   const [matrix, setMatrix] = React.useState(null);     // kept so we can re-match
@@ -356,6 +357,8 @@ function SheetImportModal({ onClose, onCreated }) {
   // -------------------------------------------------------------------------
   const doImport = async () => {
     if (!custReady) { setErr('Choose the customer this sheet came from, or type a new one.'); return; }
+    if (!String(soNo || '').trim()) { setErr('Give the order a number.'); return; }
+    if (soNoTaken(state, soNo)) { setErr(`Order number ${soNo.trim()} is already used.`); return; }
     if (!lines.length) { setErr('Nothing to import.'); return; }
     setErr(''); setBusy('import');
     try {
@@ -478,7 +481,7 @@ function SheetImportModal({ onClose, onCreated }) {
       // belongs in `extra`, which IS a jsonb column.
       const so = {
         id: soId,
-        so_no: `SO/FY26/${String(seq).padStart(4, '0')}`,
+        so_no: String(soNo).trim(),
         customer_id: customerId,
         customer_po: '',
         date: TODAY,
@@ -560,7 +563,9 @@ function SheetImportModal({ onClose, onCreated }) {
           {rows ? `${lines.length} order line(s) · ${counts.match} matched · ${counts.create} new · ${counts.skip} skipped` : ''}
         </span>
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={!rows || !!busy || !custReady || !lines.length} onClick={doImport}>
+        <button className="btn btn-primary"
+          disabled={!rows || !!busy || !custReady || !lines.length || !String(soNo || '').trim() || soNoTaken(state, soNo)}
+          onClick={doImport}>
           <Icon name="check" size={13}/>{busy === 'import' ? 'Creating…' : 'Create Sales Order'}
         </button>
       </>
@@ -570,6 +575,16 @@ function SheetImportModal({ onClose, onCreated }) {
       </div>}
 
       <div className="field-row">
+        <div className="field">
+          <label className="field-label">Sales order no. <span className="tiny muted">(as you refer to it)</span></label>
+          <input className="input mono" value={soNo} onChange={e => setSoNo(e.target.value)}
+            placeholder="e.g. ABG/2026/0117"/>
+          <div className="tiny muted mt-1">
+            {soNoTaken(state, soNo)
+              ? <span style={{ color: 'var(--danger)' }}>Already used by another order.</span>
+              : 'Type the number from the customer paperwork — it is used on the challan and invoice.'}
+          </div>
+        </div>
         <div className="field">
           <label className="field-label">Customer <span className="tiny muted">(whose sheet is this?)</span></label>
           <select className="select" value={custId} onChange={e => setCustId(e.target.value)}>

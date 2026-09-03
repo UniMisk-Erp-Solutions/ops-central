@@ -160,6 +160,7 @@ function SalesOrderNew() {
   const toast = useToast();
 
   const [customer, setCustomer] = React.useState('');
+  const [soNo, setSoNo] = React.useState(() => nextSoNo(state));   // editable suggestion
   const [poRef, setPoRef] = React.useState('');
   const [date, setDate] = React.useState(TODAY);
   const [expected, setExpected] = React.useState(() => {
@@ -255,7 +256,10 @@ function SalesOrderNew() {
   const grandTotal = taxableValue + cgst + sgst + igst;
 
   const customOk = customFields.every(f => !f.required || (extra[f.key] !== undefined && extra[f.key] !== ''));
-  const canSubmit = customer && poRef && lines.length > 0 && customOk;
+  // A blank or repeated order number would be quoted on the challan and the
+  // invoice, so it blocks submission the same way a missing customer does.
+  const soNoOk = !!String(soNo || '').trim() && !soNoTaken(state, soNo);
+  const canSubmit = customer && poRef && soNoOk && lines.length > 0 && customOk;
 
   // Pool reuse is now handled in the Virtual Godown (Purchase adds from the
   // Master Pool there, with smart suggestions), so the New SO no longer
@@ -275,7 +279,7 @@ function SalesOrderNew() {
     });
     const newSO = {
       id: 'so-' + Date.now(),
-      so_no: `SO/FY26/${String(17 + state.sales_orders.length).padStart(4, '0')}`,
+      so_no: String(soNo || '').trim() || nextSoNo(state),
       customer_id: customer, customer_po: poRef, date, expected, priority, order_type: orderType,
       pm, ship_to: cust.address, payment_terms: paymentTerms, status: 'Pending Approval',
       lines, notes, extra: billingPattern ? { ...extra, billing_pattern: billingPattern } : extra, pool_alloc,
@@ -331,17 +335,29 @@ function SalesOrderNew() {
               <div className="form-section-title">Customer & Order</div>
               <div className="field-row">
                 <div className="field">
+                  <label className="field-label">Sales Order No. *</label>
+                  <input className="input mono" value={soNo} onChange={e => setSoNo(e.target.value)}
+                    placeholder="e.g. ABG/2026/0117"/>
+                  <div className="field-hint">
+                    {soNoTaken(state, soNo)
+                      ? <span style={{ color: 'var(--danger)' }}>Already used by another order</span>
+                      : 'Your own reference · used on the challan and invoice'}
+                  </div>
+                </div>
+                <div className="field">
+                  <label className="field-label">Customer PO Reference (UID) *</label>
+                  <input className="input mono" placeholder="e.g. RC/PO/2026/0312" value={poRef} onChange={e => setPoRef(e.target.value)}/>
+                  <div className="field-hint">Manually entered · never auto-generated</div>
+                </div>
+              </div>
+              <div className="field-row mt-2">
+                <div className="field">
                   <label className="field-label">Customer *</label>
                   <select className="select" value={customer} onChange={e => setCustomer(e.target.value)}>
                     <option value="">Select customer…</option>
                     {state.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                   {cust && <div className="tiny muted mt-1"><span className="mono">{cust.gstin}</span> · {cust.state} · {cust.terms}</div>}
-                </div>
-                <div className="field">
-                  <label className="field-label">Customer PO Reference (UID) *</label>
-                  <input className="input mono" placeholder="e.g. RC/PO/2026/0312" value={poRef} onChange={e => setPoRef(e.target.value)}/>
-                  <div className="field-hint">Manually entered · never auto-generated</div>
                 </div>
               </div>
               <div className="field-row-3 mt-2">
