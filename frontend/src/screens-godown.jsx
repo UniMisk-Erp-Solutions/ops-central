@@ -216,7 +216,7 @@ async function vgReceiveComponents(so, picks, ctx) {
     const mdT = state.config.vendor_po_md_threshold != null ? state.config.vendor_po_md_threshold : 500000;
     const needsMD = amount > mdT;
     createdPONeedsMD = needsMD;
-    const po = { id: 'po-' + Date.now() + '-vg', po_no: `VPO/FY26/${String(40 + state.vendor_pos.length).padStart(4, '0')}`, so_id: so.id, vendor_id: vendorId, date: TODAY, expected: TODAY, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: newLines.map(l => ({ product_id: l.product_id, qty: l.qty, rate: l.rate })), ebill: {}, source: 'vg-receive' };
+    const po = { id: 'po-' + Date.now() + '-vg', po_no: vendorPoNo(state, TODAY), so_id: so.id, vendor_id: vendorId, date: TODAY, expected: TODAY, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: newLines.map(l => ({ product_id: l.product_id, qty: l.qty, rate: l.rate })), ebill: {}, source: 'vg-receive' };
     mutate(s => ({ ...s, vendor_pos: [po, ...s.vendor_pos], notifications: [{ id: 'n-vgpo-' + Date.now(), kind: 'po', text: `${po.po_no} auto-created from VG receive for ${so.so_no}${needsMD ? ' · needs MD approval before receiving' : ''}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications] }), { action: 'create', entity: 'VendorPO', entity_id: po.id });
     if (!needsMD) perPo[po.id] = { po, items: po.items.map(l => ({ product_id: l.product_id, qty: l.qty, rate: l.rate, received: l.qty })) };
   }

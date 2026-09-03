@@ -24,7 +24,7 @@ something was wrong in a way that was not obvious.
 ## Before deploying
 
 ```bash
-for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status; do
+for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering; do
   node scripts/uitest/$t-check.js frontend
 done
 ```
@@ -46,6 +46,9 @@ a new check, and why it must be made to fail first.
   `from VPO/0002`. A guess presented as fact is worse than a blank.
 - **Per-organization state on `window` has no RLS.** Clear it when the user or
   organization changes.
+- **Document numbers are built in `utils.jsx`**, derived from what exists rather
+  than from a count, and handed out one at a time. See
+  [docs/document-numbering.md](./docs/document-numbering.md).
 
 ## Scope
 

@@ -597,9 +597,8 @@ function buildFractionInvoice(so, state, currentUser, getUser) {
   if (implLine) { lines.push(implLine); subtotal += implLine.amount; }
   if (subtotal <= 0.5) return null;
   const total = Math.round(subtotal * 1.18);
-  const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
-  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY, type: 'Partial', mode: 'itemfraction', lines, comp_consumed: comp, subtotal, gst: total - subtotal, total, created_by: currentUser || null, role };
+  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: _invNoFor(so, state), date: TODAY, type: 'Partial', mode: 'itemfraction', lines, comp_consumed: comp, subtotal, gst: total - subtotal, total, created_by: currentUser || null, role };
   const invoices = [...(so.invoices || []), invoice];
   const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices) };
   return { so: nextSO, invoice, fully: false };
@@ -636,9 +635,8 @@ function buildConsolidatedInvoice(so, state, currentUser, getUser) {
   const subtotal = invLines.reduce((a, x) => a + x.amount, 0);
   if (subtotal <= 0.5) return null;
   const total = Math.round(subtotal * 1.18);
-  const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
-  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY, type: 'Final', mode: 'consolidated', consolidated: true, lines: invLines, comp_consumed: {}, subtotal, gst: total - subtotal, total, created_by: currentUser || null, role };
+  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: _invNoFor(so, state), date: TODAY, type: 'Final', mode: 'consolidated', consolidated: true, lines: invLines, comp_consumed: {}, subtotal, gst: total - subtotal, total, created_by: currentUser || null, role };
   const invoices = [...(so.invoices || []), invoice];
   const nextSO = { ...so, invoices, status: 'Invoiced', invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices) };
   return { so: nextSO, invoice, fully: true };
@@ -692,11 +690,10 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
   subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
   const total = Math.round(subtotal * 1.18);
   const fully = (remainingBilled - subtotal) <= 0.5;
-  const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
   const invoice = {
     id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5),
-    no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY,
+    no: _invNoFor(so, state), date: TODAY,
     type: fully ? 'Final' : 'Partial', mode, lines, comp_consumed: comp,
     subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
   };
@@ -788,6 +785,19 @@ window.custRefName = custRefName;
 window.invoiceCustName = invoiceCustName;
 window.stampCustNames = stampCustNames;
 
+// Every client invoice number comes from here: INV + the customer's own order
+// reference. With invoicing on dispatch an order normally carries SEVERAL
+// invoices, so anything after the first is suffixed — two invoices sharing a
+// number is a compliance problem, not a cosmetic one.
+function _invNoFor(so, state) {
+  const used = [];
+  ((state && state.sales_orders) || []).forEach(x => {
+    (x.invoices || []).forEach(i => used.push(i.no));
+    if (x.invoice_no) used.push(x.invoice_no);
+  });
+  return clientInvoiceNo(so.so_no, used);
+}
+
 function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
   if (!dc || !Array.isArray(dc.items) || !dc.items.length) return null;
   // One challan, one invoice. Re-opening a dispatch must never re-bill it.
@@ -832,11 +842,10 @@ function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
   subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
   const total = Math.round(subtotal * 1.18);
   const fully = (remainingBilled - subtotal) <= 0.5;
-  const seqBase = (state.sales_orders || []).reduce((a, x) => a + ((x.invoices || []).length || (x.invoice_no ? 1 : 0)), 0);
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
   const invoice = {
     id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5),
-    no: `INV/FY26/${String(73 + seqBase).padStart(4, '0')}`, date: TODAY,
+    no: _invNoFor(so, state), date: TODAY,
     type: fully ? 'Final' : 'Partial', mode: 'dispatch',
     dc_id: dc.id, dc_no: dc.dc_no || '',
     lines, comp_consumed: comp,

@@ -33,7 +33,8 @@ asserts they are otherwise byte-identical.
 
 ### Numbering
 
-`VPO/FY26/0044 → VPO-EB/FY26/0044` — derived from the PO's own number.
+`PO202609001 → EB202609001` — the PO's own number wearing a different prefix.
+Full scheme in [document-numbering.md](./document-numbering.md).
 
 > It used to be a counter over "how many POs already have one", read from a
 > stale snapshot, so two POs e-Billed in one action got the **same number**.

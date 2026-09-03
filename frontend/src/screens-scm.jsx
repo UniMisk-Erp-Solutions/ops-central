@@ -282,11 +282,10 @@ function OutwardDispatchModal({ so, onClose }) {
   const submit = () => {
     if (!picked.length) { toast('Tick at least one item and set a quantity'); return; }
     setBusy(true);
-    const seq = (state.outward_dispatches || []).length + 1;
     const dc = {
       id: 'dc-' + Date.now(),
       so_id: so.id,
-      dc_no: `DC/OUT/${String(seq).padStart(4, '0')}`,
+      dc_no: challanNo(state, TODAY),
       date: TODAY,
       items: picked.map(r => {
         const p = getProduct(r.product_id) || {};
