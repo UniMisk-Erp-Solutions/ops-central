@@ -161,7 +161,10 @@ const res = sandbox.raiseDispatchInvoice('so-1', DC1, {
 });
 check('with it ON, the invoice is committed to the order', !!res, true);
 check('...and lands on the sales order', (committed.sales_orders[0].invoices || []).length, 1);
-check('...and Collections is told', /INV\/FY26/.test(committed.notifications[0].text), true);
+// The number now carries the customer's own order reference, so the old
+// INV/FY26 pattern is gone by design.
+check('...and Collections is told, quoting the new-format number',
+  /INVSO(FY26)?0*1/i.test(committed.notifications[0].text.replace(/[^A-Za-z0-9]/g, '')), true);
 
 console.log('\n[9] EVERY invoice reads in the customer wording, not only the dispatch one');
 // The order as the importer builds it: each line and each component keeps the

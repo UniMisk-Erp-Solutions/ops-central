@@ -1,7 +1,7 @@
 # The check suite
 
 ```bash
-for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status; do
+for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering; do
   node scripts/uitest/$t-check.js frontend
 done
 ```
@@ -29,6 +29,7 @@ broken.
 | `receipt-engine-check` | every screen agrees on `soRequired`; a bundled order receives in full; invoicing obeys the workflow; e-Bill columns | receiving posted a **sixth** of the order |
 | `dispatch-invoice-check` | customer wording, partial→final adding to the order value, no double billing, the over-dispatch cap | — |
 | `status-check` | every lifecycle transition, forward-only, manual states untouched, order numbering | orders sat on Draft with goods received against them |
+| `numbering-check` | the format of every document number, and that ten raised in one action are ten different numbers | two POs shared one e-Bill number |
 
 ## How to write one
 

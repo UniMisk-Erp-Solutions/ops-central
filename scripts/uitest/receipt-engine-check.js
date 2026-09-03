@@ -289,8 +289,13 @@ async function run(poItems, picks, live) {
   const nA = sandbox.poEbillNo({ po_no: 'VPO/FY26/0043' });
   const nB = sandbox.poEbillNo({ po_no: 'VPO/FY26/0044' });
   check('two POs get two different numbers', nA !== nB, true);
+  // A PO now numbers PO202609001, so its e-Bill is EB202609001 — the same
+  // number wearing a different prefix. An OLD-format PO still yields something
+  // unique and traceable rather than failing.
   check('...derived from the PO so the two documents read together',
-    [nA, nB], ['VPO-EB/FY26/0043', 'VPO-EB/FY26/0044']);
+    [sandbox.poEbillNo({ po_no: 'PO202609043' }), sandbox.poEbillNo({ po_no: 'PO202609044' })],
+    ['EB202609043', 'EB202609044']);
+  check('an old-format PO still gets a unique e-Bill', [nA, nB], ['EBVPOFY260043', 'EBVPOFY260044']);
   check('the same PO always gets the same number',
     sandbox.poEbillNo({ po_no: 'VPO/FY26/0044' }), nB);
 

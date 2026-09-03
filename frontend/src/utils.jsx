@@ -337,6 +337,75 @@ function partyItemName(aliasMap, product, mode) {
            altCode: theirCode, altName: theirName, mapped: mapped, uom: a ? a.uom : null };
 }
 
+// ===========================================================================
+// Document numbers
+// ===========================================================================
+// One scheme, one place. Every document number in the system is built here so
+// two screens cannot invent two different formats for the same kind of paper —
+// which is how VPO/FY26/0043 and 0044 ended up sharing one e-Bill number.
+//
+//   Vendor PO          PO202609001     prefix + year + month + sequence
+//   Delivery challan   DC202609001     same shape
+//   Vendor invoice     INV202609001    the PO's own number, re-prefixed
+//   PO e-Bill          EB202609001     likewise
+//   Client invoice     INV<SO number>  the customer's own order reference
+//
+// The sequence runs within a year+month, because the prefix already carries
+// both. A new month starts again at 001.
+
+// Just the digits and letters, upper-cased — for turning "VPO/FY26/0044" or
+// "ABG/2026/0117" into something that can sit inside a document number.
+function docStem(v) {
+  return String(v == null ? '' : v).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+}
+
+// PREFIX + YYYYMM + NNN, continuing from the highest already issued this month.
+//
+// Derived from what exists rather than from a stored counter, so it is
+// self-healing: an import, a restore or a row deleted by hand cannot leave the
+// counter pointing at a number already in use.
+function docNo(prefix, existing, dateStr) {
+  const src = String(dateStr || TODAY);
+  const stem = String(prefix).toUpperCase() + src.slice(0, 4) + src.slice(5, 7);
+  let max = 0;
+  (existing || []).forEach(v => {
+    const n = docStem(v);
+    if (n.indexOf(stem) !== 0) return;
+    const tail = parseInt(n.slice(stem.length).replace(/\D/g, ''), 10);
+    if (isFinite(tail) && tail > max) max = tail;
+  });
+  return stem + String(max + 1).padStart(3, '0');
+}
+
+const vendorPoNo   = (state, date) => docNo('PO', ((state && state.vendor_pos) || []).map(p => p.po_no), date);
+const challanNo    = (state, date) => docNo('DC', ((state && state.outward_dispatches) || []).map(d => d.dc_no), date);
+
+// A vendor's invoice and the PO e-Bill both belong to ONE purchase order, so
+// they are that PO's number wearing a different prefix. No counter, no
+// collision, and the three documents read against each other at a glance.
+function reprefix(poNo, prefix) {
+  const n = docStem(poNo).replace(/^PO/, '');
+  return prefix + (n || docStem(poNo));
+}
+const vendorInvoiceNo = (poNo) => reprefix(poNo, 'INV');
+const poEbillNoFor    = (poNo) => reprefix(poNo, 'EB');
+
+// The client's invoice carries THEIR order number, because that is what they
+// will match it against.
+//
+// An order can carry several invoices — with invoicing on dispatch that is the
+// normal case, not the exception — so the first takes the plain number and any
+// further one is suffixed. Two invoices sharing a number is a compliance
+// problem, not a cosmetic one.
+function clientInvoiceNo(soNo, existingNos) {
+  const base = 'INV' + docStem(soNo);
+  const taken = new Set((existingNos || []).map(v => String(v || '')));
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(base + '-' + n)) n++;
+  return base + '-' + n;
+}
+
 // ===== Sales order numbers =====
 // A suggestion only. Purchase overwrite it with the customer's own reference,
 // which is the number everybody actually quotes.
@@ -410,6 +479,7 @@ function itemCost(state, productId) {
 }
 
 Object.assign(window, {
+  docStem, docNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
   nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
   inrFmt, inr, inrK, fmtDate, daysBetween, TODAY, statusClass, SO_LIFECYCLE,

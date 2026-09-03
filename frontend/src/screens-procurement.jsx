@@ -526,11 +526,14 @@ function generateSplitVendorPOs(so, alloc, ctx) {
   }));
   const entries = Object.entries(groups);
   if (!entries.length) { toast('Allocate at least one item to a vendor'); return; }
-  const base = 40 + state.vendor_pos.length;
+  // Issued one at a time, each aware of the ones already handed out in this
+  // same action, so a batch of POs cannot collide.
+  const __issued = state.vendor_pos.map(p => p.po_no);
+  const nextPo = () => { const n = vendorPoNo({ vendor_pos: __issued.map(x => ({ po_no: x })) }, TODAY); __issued.push(n); return n; };
   const expected = (() => { const d = new Date(TODAY); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
   const pos = entries.map(([vid, items], i) => {
     const amount = items.reduce((s, it) => s + it.qty * it.rate, 0);
-    return { id: 'po-' + Date.now() + '-' + i, po_no: `VPO/FY26/${String(base + i).padStart(4, '0')}`, so_id: so.id, vendor_id: vid, date: TODAY, expected, status: amount > (state.config.vendor_po_md_threshold ?? 500000) ? 'Pending MD Approval' : 'Issued', amount, items, ebill: {}, source: 'sourcing-split' };
+    return { id: 'po-' + Date.now() + '-' + i, po_no: nextPo(), so_id: so.id, vendor_id: vid, date: TODAY, expected, status: amount > (state.config.vendor_po_md_threshold ?? 500000) ? 'Pending MD Approval' : 'Issued', amount, items, ebill: {}, source: 'sourcing-split' };
   });
   const anyMD = pos.some(p => p.status === 'Pending MD Approval');
   mutate(s => ({
@@ -1308,8 +1311,9 @@ function GRNDetail({ grnId }) {
 // One e-Bill number per PO, derived from the PO's own number so it cannot
 // collide with another issued in the same breath.
 function poEbillNo(po) {
-  const tail = String((po && po.po_no) || '').match(/(\d+)\s*$/);
-  return `VPO-EB/FY26/${tail ? tail[1] : String((po && po.id) || '').slice(-4)}`;
+  // The e-Bill belongs to ONE purchase order, so it is that PO's number wearing
+  // a different prefix: PO202609001 -> EB202609001. No counter, no collision.
+  return poEbillNoFor((po && po.po_no) || (po && po.id) || '');
 }
 window.poEbillNo = poEbillNo;
 
@@ -1331,7 +1335,7 @@ async function postReceiptForPO(po, items, meta, ctx) {
   const ebill = po.ebill && po.ebill.generated ? po.ebill : { no: poEbillNo(po), irn: (po.id + po.po_no).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16).toUpperCase(), date: grnDate, amount: Math.round((po.amount || 0) * 1.18), generated: true, auto: true };
   const rateOf = {}; (po.items || []).forEach(it => { rateOf[it.product_id] = it.rate; });
   const recvValue = norm.reduce((s, it) => s + (it.accepted || 0) * (rateOf[it.product_id] || 0), 0);
-  const autoVI = recvValue > 0 ? { id: 'vi-' + Date.now() + rnd, vendor_invoice_no: `VINV/FY26/${String(1 + (state.vendor_invoices || []).length + seqOff).padStart(4, '0')}`, po_id: po.id, grn_id: grn.id, vendor_id: po.vendor_id, date: grnDate, amount: Math.round(recvValue), status: 'Booked', tolerance: 'within' } : null;
+  const autoVI = recvValue > 0 ? { id: 'vi-' + Date.now() + rnd, vendor_invoice_no: vendorInvoiceNo(po.po_no), po_id: po.id, grn_id: grn.id, vendor_id: po.vendor_id, date: grnDate, amount: Math.round(recvValue), status: 'Booked', tolerance: 'within' } : null;
   // A PO is only fully received when cumulative accepted >= ordered for EVERY line
   // (prior GRNs for this PO + this receipt). Otherwise it stays 'Partially Received'
   // so it remains receivable for the rest. Whole-PO receipts still resolve to complete.
@@ -1838,7 +1842,7 @@ function RecordVendorInvoiceModal({ onClose, poId }) {
   const submit = () => {
     if (!po) { toast('Pick a received Vendor PO'); return; }
     // Invoice number is optional — auto-number if left blank.
-    const finalNo = invNo.trim() || `VINV/FY26/${String(1 + state.vendor_invoices.length).padStart(4, '0')}`;
+    const finalNo = invNo.trim() || vendorInvoiceNo(po ? po.po_no : '');
     // Auto-book clean matches; only out-of-tolerance invoices stop for review.
     const vendorName = getVendor(po.vendor_id)?.name || 'vendor';
     const vi = {
@@ -2085,11 +2089,14 @@ function generateVendorPOsFromSourcing(so, sourcing, ctx) {
   const { state, mutate, toast, navigate, getProduct } = ctx;
   const groups = vendorPOGroups(state, so, sourcing, getProduct);
   if (groups.length === 0) { toast('No vendor selections found to generate POs'); return; }
-  const base = 40 + state.vendor_pos.length;
+  // Issued one at a time, each aware of the ones already handed out in this
+  // same action, so a batch of POs cannot collide.
+  const __issued = state.vendor_pos.map(p => p.po_no);
+  const nextPo = () => { const n = vendorPoNo({ vendor_pos: __issued.map(x => ({ po_no: x })) }, TODAY); __issued.push(n); return n; };
   const expected = (() => { const d = new Date(TODAY); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
   const pos = groups.map((g, i) => ({
     id: 'po-' + Date.now() + '-' + i,
-    po_no: `VPO/FY26/${String(base + i).padStart(4, '0')}`,
+    po_no: nextPo(),
     so_id: so.id, vendor_id: g.vendor_id, date: TODAY, expected,
     status: g.amount > (state.config.vendor_po_md_threshold ?? 500000) ? 'Pending MD Approval' : 'Issued',
     amount: g.amount, items: g.items, ebill: {}, source: 'sourcing',
@@ -2159,7 +2166,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
   const submit = () => {
     const real = items.filter(i => i.qty > 0);
     if (!so || !vendor || real.length === 0) { toast('Pick SO, vendor and at least one item'); return; }
-    const poNo = `VPO/FY26/${String(40 + state.vendor_pos.length).padStart(4, '0')}`;
+    const poNo = vendorPoNo(state, TODAY);
     const po = { id: 'po-' + Date.now(), po_no: poNo, so_id: so, vendor_id: vendor, date: TODAY, expected, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: real, ebill: {}, source: 'manual' };
     mutate(s => ({
       ...s,
