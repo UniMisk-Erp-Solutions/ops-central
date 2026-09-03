@@ -337,6 +337,24 @@ function partyItemName(aliasMap, product, mode) {
            altCode: theirCode, altName: theirName, mapped: mapped, uom: a ? a.uom : null };
 }
 
+// ===== Sales order numbers =====
+// A suggestion only. Purchase overwrite it with the customer's own reference,
+// which is the number everybody actually quotes.
+function nextSoNo(state) {
+  const n = ((state && state.sales_orders) || []).length;
+  return `SO/FY26/${String(17 + n).padStart(4, '0')}`;
+}
+
+// Is this number free? Compared case-insensitively and ignoring surrounding
+// space, because "so/fy26/0003 " and "SO/FY26/0003" are the same order to a
+// human and would be two to a database.
+function soNoTaken(state, no, exceptId) {
+  const want = String(no || '').trim().toLowerCase();
+  if (!want) return false;
+  return ((state && state.sales_orders) || []).some(
+    s => s.id !== exceptId && String(s.so_no || '').trim().toLowerCase() === want);
+}
+
 // ===== What an order needs =====
 // A line holds `bundle_qty` sets of its components, and each component's `qty`
 // is PER SET. The total is therefore qty x bundle_qty, and forgetting the
@@ -392,7 +410,7 @@ function itemCost(state, productId) {
 }
 
 Object.assign(window, {
-  soRequired, soRequiredList, lastBuyOf, itemCost,
+  nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
   inrFmt, inr, inrK, fmtDate, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
   Icon, StatusBadge, PriorityBadge, Avatar, Delta, Toggle, Modal,

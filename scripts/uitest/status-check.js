@@ -118,5 +118,15 @@ check('stock pulled from the surplus pool advances the order',
     Object.assign(baseSO(), { pool_alloc: [{ product_id: 'p-chassis', qty: 1 }] })),
   'Material Received');
 
+console.log('\n[6] the order number is theirs, not ours');
+const stNo = { sales_orders: [{ id: 'a', so_no: 'ABG/2026/0117' }, { id: 'b', so_no: 'SO/FY26/0018' }] };
+check('a suggestion is offered, never forced', typeof sandbox.nextSoNo(stNo), 'string');
+check('a free number is free', sandbox.soNoTaken(stNo, 'ABG/2026/0118'), false);
+check('a duplicate is caught', sandbox.soNoTaken(stNo, 'ABG/2026/0117'), true);
+check('...ignoring case and stray spaces', sandbox.soNoTaken(stNo, '  abg/2026/0117 '), true);
+check('an order does not clash with itself when edited',
+  sandbox.soNoTaken(stNo, 'ABG/2026/0117', 'a'), false);
+check('a blank number is not treated as taken', sandbox.soNoTaken(stNo, '   '), false);
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the status strip tells the truth');
 process.exit(bad ? 1 : 0);
