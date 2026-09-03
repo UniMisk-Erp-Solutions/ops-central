@@ -1385,14 +1385,21 @@ function poEbillHtml(po, vendor, so, org, getProduct, opts) {
   // CGST+SGST, another IGST, a labour charge TDS. The totals below are summed
   // from these, never recomputed at a flat rate.
   let sumBase = 0, sumTax = 0;
+  const summaryRows = [];
   const rows = (po.items || []).map((it, n) => {
     const p = getProduct(it.product_id) || {};
     const q = Number(it.qty) || 0;
     const rate = Number(it.rate) || 0;
     const base = q * rate;
-    const t = poLineTax(po, it.product_id);
-    const calc = taxOn(base, t.key, t.rate);
+    const taxes = poLineTaxes(po, it.product_id);
+    const calc = taxesOn(base, taxes);
     sumBase += base; sumTax += calc.tax;
+    summaryRows.push({ amount: base, taxes });
+    // Each tax on its own line in the cell, so a line carrying GST AND TDS
+    // shows both rather than one blended figure nobody can check.
+    const taxCell = calc.parts.length
+      ? calc.parts.map(x => `<div>${esc(x.label)}</div>`).join('')
+      : '<div>—</div>';
     return '<tr>' +
       `<td class="mono">${n + 1}</td>` +
       `<td class="mono">${esc(p.code || it.product_id)}</td>` +
@@ -1401,10 +1408,11 @@ function poEbillHtml(po, vendor, so, org, getProduct, opts) {
       `<td>${esc(p.uom || 'Nos.')}</td>` +
       `<td class="r mono">${esc(qty(q))}</td>` +
       `<td class="r mono">${esc(inr(rate))}</td>` +
-      `<td class="r mono">${esc(calc.label)}</td>` +
+      `<td class="r mono" style="white-space:nowrap">${taxCell}</td>` +
       `<td class="r mono">${esc(inr(calc.total))}</td>` +
       '</tr>';
   }).join('');
+  const summary = taxSummary(summaryRows);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(e.no || po.po_no)}</title><style>
     *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;margin:0;padding:26px;font-size:12.5px}
     .paper{max-width:900px;margin:0 auto;border:1px solid #e2e2e2;border-radius:10px;padding:24px}
@@ -1442,7 +1450,7 @@ function poEbillHtml(po, vendor, so, org, getProduct, opts) {
       <tbody>${rows}</tbody>
       <tfoot>
         <tr><td colspan="8" class="r">Taxable value</td><td class="r mono">${esc(inr(sumBase))}</td></tr>
-        <tr><td colspan="8" class="r">${sumTax < 0 ? 'Tax withheld' : 'Tax'}</td><td class="r mono">${esc(inr(sumTax))}</td></tr>
+        ${summary.map(x => `<tr><td colspan="8" class="r">${esc(x.label)}</td><td class="r mono">${esc(inr(x.amount))}</td></tr>`).join('')}
         <tr><td colspan="8" class="r"><strong>Grand Total</strong></td><td class="r mono"><strong>${esc(inr(sumBase + sumTax))}</strong></td></tr>
       </tfoot></table>
     <div class="sign"><div>For ${esc((org && org.name) || '')}</div><div>Vendor acknowledgement</div></div>
@@ -1486,20 +1494,63 @@ function POEbillModal({ po, onClose }) {
   const poDraft = { ...po, tax_config: taxCfg };
   const html = poEbillHtml(poDraft, v, so, state.org, getProduct, { autoPrint: false });
 
-  const lineTax = (pid) => poLineTax(poDraft, pid);
-  const setLines = (pids, key, rate) => {
+  const lineTaxes = (pid) => poLineTaxes(poDraft, pid);
+
+  // Write a whole list onto specific lines.
+  const putLines = (pids, taxes) => {
     setTaxCfg(c => {
       const lines = { ...(c.lines || {}) };
-      pids.forEach(pid => { lines[pid] = { key, rate: rate == null ? taxKind(key).rate : Number(rate) }; });
+      pids.forEach(pid => { lines[pid] = taxes.map(t => ({ key: t.key, rate: Number(t.rate) })); });
       return { ...c, lines };
     });
     setDirty(true);
   };
-  // "Everything on this PO" — the common case, one click.
-  const setAllLines = (key, rate) => {
-    setTaxCfg(c => ({ ...c, default: { key, rate: rate == null ? taxKind(key).rate : Number(rate) }, lines: {} }));
-    setSel({}); setDirty(true);
+
+  // ADD one tax to lines, keeping whatever is already there. A line routinely
+  // carries GST and TDS together, so adding must not replace.
+  //
+  // The same kind twice is refused — two IGST rows on one line is a mistake
+  // every time, and would silently double the charge. Adding a kind that is
+  // already there updates its rate instead.
+  const addTax = (pids, key, rate) => {
+    const r = rate == null ? taxKind(key).rate : Number(rate);
+    setTaxCfg(c => {
+      const lines = { ...(c.lines || {}) };
+      pids.forEach(pid => {
+        const cur = normaliseTaxes(
+          Object.prototype.hasOwnProperty.call(lines, pid) ? lines[pid] : poLineTaxes(poDraft, pid));
+        const at = cur.findIndex(t => t.key === key);
+        lines[pid] = at === -1 ? [...cur, { key, rate: r }]
+                               : cur.map((t, i) => i === at ? { key, rate: r } : t);
+      });
+      return { ...c, lines };
+    });
+    setDirty(true);
   };
+
+  const removeTax = (pid, idx) => {
+    setTaxCfg(c => {
+      const lines = { ...(c.lines || {}) };
+      const cur = normaliseTaxes(
+        Object.prototype.hasOwnProperty.call(lines, pid) ? lines[pid] : poLineTaxes(poDraft, pid));
+      lines[pid] = cur.filter((_, i) => i !== idx);
+      return { ...c, lines };
+    });
+    setDirty(true);
+  };
+
+  const setRate = (pid, idx, rate) => {
+    setTaxCfg(c => {
+      const lines = { ...(c.lines || {}) };
+      const cur = normaliseTaxes(
+        Object.prototype.hasOwnProperty.call(lines, pid) ? lines[pid] : poLineTaxes(poDraft, pid));
+      lines[pid] = cur.map((t, i) => i === idx ? { ...t, rate: Number(rate) || 0 } : t);
+      return { ...c, lines };
+    });
+    setDirty(true);
+  };
+
+  const clearTaxes = (pids) => { putLines(pids, []); setSel({}); };
 
   const selKeys = Object.keys(sel).filter(k => sel[k]);
   const items = po.items || [];
@@ -1507,10 +1558,14 @@ function POEbillModal({ po, onClose }) {
 
   const totals = items.reduce((a, it) => {
     const base = (Number(it.qty) || 0) * (Number(it.rate) || 0);
-    const t = lineTax(it.product_id);
-    const calc = taxOn(base, t.key, t.rate);
+    const calc = taxesOn(base, lineTaxes(it.product_id));
     return { base: a.base + base, tax: a.tax + calc.tax, total: a.total + calc.total };
   }, { base: 0, tax: 0, total: 0 });
+  // Per KIND, the way the document foots it — GST and TDS never blended.
+  const summary = taxSummary(items.map(it => ({
+    amount: (Number(it.qty) || 0) * (Number(it.rate) || 0),
+    taxes: lineTaxes(it.product_id),
+  })));
 
   const saveTax = () => {
     mutate(st => ({
@@ -1583,12 +1638,16 @@ function POEbillModal({ po, onClose }) {
             </select>
             {TAX_KINDS.filter(k => k.key !== 'none').map(k => (
               <button key={k.key} className="btn btn-sm"
-                onClick={() => (selKeys.length ? setLines(selKeys, k.key) : setAllLines(k.key))}
-                title={k.sign < 0 ? 'Withheld from what we pay the vendor' : 'Added to the amount'}>
-                {k.label}
+                onClick={() => addTax(selKeys.length ? selKeys : items.map(i => i.product_id), k.key)}
+                title={(k.sign < 0 ? 'Withheld from what we pay the vendor' : 'Added to the amount') +
+                       ' · adds to whatever these lines already carry'}>
+                + {k.label}
               </button>
             ))}
-            <button className="btn btn-sm" onClick={() => (selKeys.length ? setLines(selKeys, 'none') : setAllLines('none'))}>No tax</button>
+            <button className="btn btn-sm"
+              onClick={() => clearTaxes(selKeys.length ? selKeys : items.map(i => i.product_id))}>
+              Clear taxes
+            </button>
           </div></div>
 
           <div className="card">
@@ -1602,44 +1661,67 @@ function POEbillModal({ po, onClose }) {
                   <th>Item</th>
                   <th className="num" style={{ width: 56 }}>Qty</th>
                   <th className="num" style={{ width: 96 }}>Amount</th>
-                  <th style={{ width: 168 }}>Tax</th>
-                  <th className="num" style={{ width: 78 }}>Rate %</th>
+                  <th colSpan="2" style={{ width: 300 }}>Taxes <span className="tiny muted">(stack as many as apply)</span></th>
                   <th className="num" style={{ width: 110 }}>With tax</th>
                 </tr></thead>
                 <tbody>
                   {items.map((it, i) => {
                     const pr = getProduct(it.product_id) || {};
                     const base = (Number(it.qty) || 0) * (Number(it.rate) || 0);
-                    const t = lineTax(it.product_id);
-                    const calc = taxOn(base, t.key, t.rate);
-                    const kind = taxKind(t.key);
+                    const taxes = lineTaxes(it.product_id);
+                    const calc = taxesOn(base, taxes);
                     return (
                       <tr key={i}>
-                        <td><input type="checkbox" checked={!!sel[it.product_id]}
-                          onChange={() => setSel(x => ({ ...x, [it.product_id]: !x[it.product_id] }))}/></td>
-                        <td>
-                          <div className="small trunc" style={{ maxWidth: 300 }}>{pr.name || it.product_id}</div>
+                        <td style={{ verticalAlign: 'top', paddingTop: 10 }}>
+                          <input type="checkbox" checked={!!sel[it.product_id]}
+                            onChange={() => setSel(x => ({ ...x, [it.product_id]: !x[it.product_id] }))}/>
+                        </td>
+                        <td style={{ verticalAlign: 'top' }}>
+                          <div className="small trunc" style={{ maxWidth: 280 }}>{pr.name || it.product_id}</div>
                           <div className="tiny muted mono">{pr.code || ''}</div>
                         </td>
-                        <td className="num mono small">{qty(it.qty)}</td>
-                        <td className="num mono small">{inr(base)}</td>
-                        <td>
-                          <select className="select" style={{ height: 26, fontSize: 11.5, width: '100%' }}
-                            value={t.key} onChange={e2 => setLines([it.product_id], e2.target.value)}>
-                            {TAX_KINDS.map(k => <option key={k.key} value={k.key}>{k.label}</option>)}
+                        <td className="num mono small" style={{ verticalAlign: 'top' }}>{qty(it.qty)}</td>
+                        <td className="num mono small" style={{ verticalAlign: 'top' }}>{inr(base)}</td>
+                        {/* One row per tax. A line can carry as many as it needs. */}
+                        <td colSpan="2">
+                          {taxes.length === 0 && <div className="tiny muted">no tax</div>}
+                          {taxes.map((t, ti) => {
+                            const kind = taxKind(t.key);
+                            const part = taxOn(base, t.key, t.rate);
+                            return (
+                              <div key={ti} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 3 }}>
+                                <select className="select" style={{ height: 24, fontSize: 11, flex: 1, minWidth: 0 }}
+                                  value={t.key}
+                                  onChange={e2 => {
+                                    const next = taxes.map((x, j) => j === ti ? { key: e2.target.value, rate: taxKind(e2.target.value).rate } : x);
+                                    putLines([it.product_id], next);
+                                  }}>
+                                  {TAX_KINDS.filter(k => k.key !== 'none').map(k => (
+                                    <option key={k.key} value={k.key}
+                                      disabled={k.key !== t.key && taxes.some(x => x.key === k.key)}>{k.label}</option>
+                                  ))}
+                                </select>
+                                <input className="input num" type="number" step="0.1" min="0" value={t.rate}
+                                  onChange={e2 => setRate(it.product_id, ti, e2.target.value)}
+                                  style={{ height: 24, width: 58, textAlign: 'right', fontSize: 11 }}/>
+                                <span className="tiny muted mono" style={{ width: 74, textAlign: 'right' }}
+                                  title={kind.split ? `${Math.round((t.rate / 2) * 100) / 100}+${Math.round((t.rate / 2) * 100) / 100}` : ''}>
+                                  {inr(part.tax)}
+                                </span>
+                                <button className="btn btn-ghost btn-sm" title="Remove this tax"
+                                  onClick={() => removeTax(it.product_id, ti)}><Icon name="x" size={10}/></button>
+                              </div>
+                            );
+                          })}
+                          <select className="select" value="" style={{ height: 22, fontSize: 11, width: 128 }}
+                            onChange={e2 => { if (e2.target.value) { addTax([it.product_id], e2.target.value); e2.target.value = ''; } }}>
+                            <option value="">+ add tax…</option>
+                            {TAX_KINDS.filter(k => k.key !== 'none' && !taxes.some(x => x.key === k.key))
+                              .map(k => <option key={k.key} value={k.key}>{k.label}</option>)}
                           </select>
                         </td>
-                        <td className="num">
-                          {kind.key === 'none' ? <span className="muted tiny">—</span> : (
-                            <input className="input num" type="number" step="0.1" min="0" value={t.rate}
-                              onChange={e2 => setLines([it.product_id], t.key, e2.target.value)}
-                              style={{ height: 26, width: '100%', textAlign: 'right' }}/>
-                          )}
-                          {kind.split && <div className="tiny muted">{Math.round((t.rate / 2) * 100) / 100}+{Math.round((t.rate / 2) * 100) / 100}</div>}
-                        </td>
-                        <td className="num mono small" style={{ color: calc.tax < 0 ? 'var(--danger)' : 'inherit' }}>
+                        <td className="num mono small" style={{ verticalAlign: 'top', color: calc.tax < 0 ? 'var(--danger)' : 'inherit' }}>
                           {inr(calc.total)}
-                          <div className="tiny muted">{calc.label}</div>
                         </td>
                       </tr>
                     );
@@ -1649,8 +1731,19 @@ function POEbillModal({ po, onClose }) {
                   <tr>
                     <td colSpan="3"></td>
                     <td className="num mono small">{inr(totals.base)}</td>
-                    <td className="tiny muted">{totals.tax < 0 ? 'withheld' : 'tax'}</td>
-                    <td className="num mono small">{inr(totals.tax)}</td>
+                    <td colSpan="2" className="tiny muted">taxable value</td>
+                    <td></td>
+                  </tr>
+                  {summary.map((x, i) => (
+                    <tr key={i}>
+                      <td colSpan="4"></td>
+                      <td colSpan="2" className="tiny muted">{x.label}</td>
+                      <td className="num mono small" style={{ color: x.amount < 0 ? 'var(--danger)' : 'inherit' }}>{inr(x.amount)}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td colSpan="4"></td>
+                    <td colSpan="2" className="small"><strong>Grand Total</strong></td>
                     <td className="num mono"><strong>{inr(totals.total)}</strong></td>
                   </tr>
                 </tfoot>
@@ -1658,8 +1751,11 @@ function POEbillModal({ po, onClose }) {
             </div>
           </div>
           <div className="tiny muted mt-2">
-            TDS is <strong>withheld</strong> from what we pay the vendor, so it reduces the total.
-            GST and TCS are added. The document and the Grand Total follow these as you change them.
+            A line can carry <strong>several taxes at once</strong> — GST and TDS together, or GST and TCS.
+            Every one is worked out on the <strong>taxable value</strong>, never on a running total, so the
+            result does not depend on the order they were added.
+            TDS is <strong>withheld</strong> from what we pay the vendor and so reduces the total; GST and TCS add to it.
+            The document and the Grand Total follow as you change them.
           </div>
         </div>
       )}

@@ -27,7 +27,7 @@ _Last updated: 2026-09-03_
 | [receiving-grn.md](./receiving-grn.md) | Goods in | Stores confirms → Purchase accepts, the receive dialog, VG tracking columns, GRN visibility. |
 | [dispatch-invoicing.md](./dispatch-invoicing.md) | Goods out and billing | Partial dispatch, delivery challan, invoice on dispatch, invoices in the customer's own item names. |
 | [documents.md](./documents.md) | What we print | PO e-Bill, delivery challan, tax invoice — columns, numbering, preview-equals-paper. |
-| [po-tax.md](./po-tax.md) | Tax on a purchase order | CGST+SGST / IGST / TDS / TCS per line, in bulk or per PO; why the sign matters. |
+| [po-tax.md](./po-tax.md) | Tax on a purchase order | Several taxes stacked per line (GST + TDS + TCS), in bulk or per PO; why the sign and the base matter. |
 | [document-numbering.md](./document-numbering.md) | Every document number | `PO202609001`, `DC…`, `INV…`, `EB…`, the client invoice from their order number, and why numbers cannot collide. |
 | [sales-order-lifecycle.md](./sales-order-lifecycle.md) | Order status | Why status is derived from facts, every transition, what it will never do. |
 

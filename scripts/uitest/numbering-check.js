@@ -167,5 +167,56 @@ check('net tax, with the withholding netted off', sum.tax, 5300);
 check('grand total', sum.total, 40300);
 check('a flat 18% would have been wrong by', Math.round(35000 * 0.18) - sum.tax, 1000);
 
-console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - numbering, quantities and per-line tax all hold');
+console.log('\n[12] several taxes on ONE line');
+const many = sandbox.taxesOn(100000, [
+  { key: 'igst', rate: 18 }, { key: 'tds_prof', rate: 10 }, { key: 'tcs', rate: 0.1 },
+]);
+check('each tax is listed separately', many.parts.map(p => p.label),
+  ['IGST 18%', 'TDS (Prof) 10%', 'TCS 0.1%']);
+check('each on the TAXABLE value, not on a running total',
+  many.parts.map(p => p.amount), [18000, -10000, 100]);
+check('the net is their sum, withholding included', many.tax, 8100);
+check('and the total follows', many.total, 108100);
+check('the label reads as one string', many.label, 'IGST 18% · TDS (Prof) 10% · TCS 0.1%');
+
+console.log('\n[13] order of addition cannot change the answer');
+const a = sandbox.taxesOn(100000, [{ key: 'igst', rate: 18 }, { key: 'tds_prof', rate: 10 }]);
+const b = sandbox.taxesOn(100000, [{ key: 'tds_prof', rate: 10 }, { key: 'igst', rate: 18 }]);
+check('GST then TDS equals TDS then GST', [a.tax, a.total], [b.tax, b.total]);
+check('...which compounding would have broken', a.total, 108000);
+
+console.log('\n[14] GST and TDS together, the common real case');
+const gstTds = sandbox.taxesOn(50000, [{ key: 'cgst_sgst', rate: 18 }, { key: 'tds_labour', rate: 2 }]);
+check('CGST+SGST adds 9000, TDS withholds 1000',
+  gstTds.parts.map(p => p.amount), [9000, -1000]);
+check('net 8000 on 50000', gstTds.tax, 8000);
+check('payable 58000', gstTds.total, 58000);
+
+console.log('\n[15] old configurations still read');
+check('a single object becomes a one-item list',
+  sandbox.normaliseTaxes({ key: 'igst', rate: 18 }), [{ key: 'igst', rate: 18 }]);
+check('an explicit empty list is no tax', sandbox.normaliseTaxes([]), []);
+check('"none" is dropped rather than charged at 0',
+  sandbox.normaliseTaxes([{ key: 'none', rate: 0 }, { key: 'igst', rate: 18 }]),
+  [{ key: 'igst', rate: 18 }]);
+check('nothing at all is no tax', sandbox.normaliseTaxes(null), []);
+check('a PO saved with the old single-tax shape still works',
+  sandbox.poLineTaxes({ tax_config: { lines: { p1: { key: 'cgst_sgst', rate: 18 } } } }, 'p1'),
+  [{ key: 'cgst_sgst', rate: 18 }]);
+
+console.log('\n[16] the document foots each tax KIND separately');
+const kindSum = sandbox.taxSummary([
+  { amount: 100000, taxes: [{ key: 'igst', rate: 18 }] },
+  { amount: 50000, taxes: [{ key: 'igst', rate: 18 }, { key: 'tds_prof', rate: 10 }] },
+  { amount: 20000, taxes: [{ key: 'cgst_sgst', rate: 18 }] },
+]);
+check('one row per kind and rate', kindSum.map(x => x.label),
+  ['IGST 18%', 'TDS (Prof) 10%', 'CGST+SGST 9+9%']);
+check('IGST across two lines is summed', kindSum[0].amount, 27000);
+check('TDS is shown as the deduction it is', kindSum[1].amount, -5000);
+check('CGST+SGST on its own line', kindSum[2].amount, 3600);
+check('the three add to the net tax',
+  Math.round(kindSum.reduce((a2, x) => a2 + x.amount, 0)), 25600);
+
+console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - numbering, quantities and stacked per-line tax all hold');
 process.exit(bad ? 1 : 0);

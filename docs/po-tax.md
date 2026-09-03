@@ -14,8 +14,9 @@ not that tidy: within one state a line is **CGST+SGST**, across states it is
 **IGST**, and labour or professional charges carry **TDS**, which is *withheld*
 from what we pay the vendor rather than added to it.
 
-Purchase can now set the tax **per line**, on **ticked lines**, or on the
-**whole PO** in one click, and the document and Grand Total follow as they type.
+Purchase can now **stack as many taxes as a line needs** — GST *and* TDS, or GST
+*and* TCS — set per line, on ticked lines, or on the whole PO in one press, with
+the document and Grand Total following as they type.
 
 ## The tax kinds
 
@@ -37,15 +38,40 @@ that is what the document has to show.
 > error compounds across every PO. `taxOn()` carries a `sign` per kind, and the
 > test asserts TDS *reduces* the total while GST and TCS increase it.
 
+## Taxes stack
+
+A line is not limited to one. `IGST 18% + TDS (Prof) 10% + TCS 0.1%` on ₹1,00,000:
+
+| | |
+|---|---|
+| IGST 18% | +18,000 |
+| TDS (Prof) 10% | −10,000 |
+| TCS 0.1% | +100 |
+| **net tax** | **8,100** |
+| **total** | **1,08,100** |
+
+**Every tax is worked out on the taxable value** — the amount before any tax —
+never on a running total.
+
+> Compounding one tax onto another would make the answer depend on the order
+> they were added in. GST-then-TDS would differ from TDS-then-GST, and neither
+> would be explicable to whoever checks the invoice. The test asserts the two
+> orderings give the identical result.
+
+The same kind twice on one line is refused; choosing a kind already present
+updates its rate instead. Two IGST rows would silently double the charge.
+
 ## How to use it
 
 1. Open a vendor PO → **View e-Bill** → **Tax** tab.
-2. **Whole PO:** leave the selector on *every line* and press a tax button.
-3. **Some lines:** tick them, switch the selector to *ticked lines*, press a tax
-   button.
-4. **One line:** use its own dropdown, and adjust its rate if needed.
-5. **Save tax.** Nothing is committed by opening the dialog or by looking around
-   — the footer says *unsaved tax changes* until you do.
+2. **Whole PO:** with nothing ticked, press **+ IGST** (or any kind). It is
+   *added* to every line, keeping whatever they already carry.
+3. **Some lines:** tick them, then press **+ TDS — Labour**. Only those change.
+4. **One line:** use its own **+ add tax…** dropdown; adjust the rate beside each;
+   press **✕** to remove one.
+5. **Clear taxes** strips them from the ticked lines, or from all if none ticked.
+6. **Save tax.** Nothing is committed by opening the dialog — the footer says
+   *unsaved tax changes* until you do.
 
 The **Document** tab shows the printed page live, including edits not yet saved,
 and printing prints exactly that.
@@ -53,9 +79,13 @@ and printing prints exactly that.
 ## How it is stored
 
 ```json
-{ "lines": { "<product_id>": { "key": "tds_labour", "rate": 2 } },
-  "default": { "key": "igst", "rate": 18 } }
+{ "lines": { "<product_id>": [ { "key": "igst", "rate": 18 },
+                               { "key": "tds_labour", "rate": 2 } ] },
+  "default": [ { "key": "igst", "rate": 18 } ] }
 ```
+
+A PO saved before taxes could stack holds a single object rather than a list;
+`normaliseTaxes()` reads either, so nothing already issued changes meaning.
 
 in `vendor_pos.tax_config`, deliberately **not** inside `items`. The quantities
 and rates in `items` are read by receiving, GRN matching and the profit maths;
@@ -67,20 +97,26 @@ with, so nothing already issued changes meaning.
 
 ## Totals
 
-The footer sums the **lines**, never a flat rate:
+The footer sums the **lines**, never a flat rate, and shows **one row per tax
+kind** — an invoice has to say how much GST and how much TDS, not one blended
+figure:
 
 ```
-Taxable value   35,000
-Tax              5,300     (1,800 + 3,600 − 100 withheld)
-Grand Total     40,300
+Taxable value        1,70,000
+IGST 18%               27,000
+TDS (Prof) 10%         −5,000
+CGST+SGST 9+9%          3,600
+Grand Total          1,95,600
 ```
 
-A flat 18% would have read 6,300 — wrong by 1,000 on three lines. That
-comparison is in the test, so the difference stays visible.
+A flat 18% on a mixed PO is wrong by whatever the withholding comes to — the
+test carries a three-line example where the difference is 1,000, so it stays
+visible.
 
 ## Not covered
 
-- One tax kind per line. A line carrying both GST *and* TDS is not modelled; say
-  if that occurs in practice.
-- The client invoice still uses a single 18%. Only the PO e-Bill has per-line
-  tax so far.
+- **The client invoice still uses a flat 18%.** Only the PO e-Bill has per-line
+  tax so far; say the word and the same model goes there.
+- Every tax is computed on the taxable value. If your accountant needs TCS on
+  the GST-inclusive amount, that is one line in `taxesOn()` — tell me and it
+  becomes a per-kind setting.
