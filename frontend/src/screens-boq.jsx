@@ -128,17 +128,49 @@ function boqProgress(state, so) {
   });
 }
 
+// Everything there is to say about one line inside a BOQ: what it is called,
+// how much of it the group holds, how much has gone out, what is left, what it
+// is worth, and where it stands.
+//
+// ONE definition. The row total, the expanded detail and the invoice all read
+// this, so the figure in the summary can never disagree with the figures that
+// add up to it.
+//
+// Works on a raw BOQ as well as on a boqProgress row — a raw one simply has
+// nothing dispatched against it yet.
+function boqItemDetail(so, boq, getProduct) {
+  return ((boq && boq.items) || []).map(it => {
+    const l = ((so && so.lines) || []).find(x => x.id === it.line_id);
+    const c = l && (l.components || []).find(x => x.product_id === it.product_id);
+    const p = getProduct ? getProduct(it.product_id) : null;
+    const need = Number(it.need != null ? it.need : it.qty) || 0;
+    const dispatched = Number(it.dispatched) || 0;
+    const remaining = Math.max(0, need - dispatched);
+    const rate = c ? ((typeof compSellOf === 'function') ? compSellOf(c, p) : (Number(c.sell) || 0)) : 0;
+    // Their wording for the item, from the exact order line this BOQ names.
+    const ref = (c && c.customer_ref) || {};
+    const custLabel = String(ref.desc || ref.code || '').trim();
+    return {
+      line_id: it.line_id, product_id: it.product_id,
+      name: (p && p.name) || it.product_id,
+      code: (p && p.code) || '',
+      cust_label: custLabel, cust_code: String(ref.code || '').trim(),
+      unit: String(ref.unit || (p && p.unit) || '').trim(),
+      group: (l && l.customer_ref && l.customer_ref.po_sr)
+        ? `PO Sr ${l.customer_ref.po_sr}`
+        : ((l && (l.client_name || (l.customer_ref || {}).equip)) || ''),
+      need, dispatched, remaining, rate, amount: need * rate,
+      priced: rate > 0,
+      status: remaining <= 0.0001 ? 'Dispatched'
+            : dispatched > 0 ? 'Partly out'
+            : 'Pending',
+    };
+  });
+}
+
 // The value of a BOQ, at the order's own per-item prices.
 function boqValue(so, boq, getProduct) {
-  const priceOf = {};
-  ((so.lines) || []).forEach(l => (l.components || []).forEach(c => {
-    const k = (l.id || '') + '|' + c.product_id;
-    priceOf[k] = (typeof compSellOf === 'function')
-      ? compSellOf(c, getProduct ? getProduct(c.product_id) : null)
-      : (Number(c.sell) || 0);
-  }));
-  return (boq.items || []).reduce(
-    (a, it) => a + (Number(it.qty) || 0) * (Number(priceOf[it.line_id + '|' + it.product_id]) || 0), 0);
+  return boqItemDetail(so, boq, getProduct).reduce((a, d) => a + d.amount, 0);
 }
 
 window.boqOrderRows = boqOrderRows;
@@ -147,6 +179,7 @@ window.boqCommitted = boqCommitted;
 window.boqAvailable = boqAvailable;
 window.boqDispatched = boqDispatched;
 window.boqProgress = boqProgress;
+window.boqItemDetail = boqItemDetail;
 window.boqValue = boqValue;
 
 // ===========================================================================
@@ -156,6 +189,8 @@ function BOQPanel({ so }) {
   const { state, mutate, navigate, getProduct, getUser, currentUser } = useStore();
   const toast = useToast();
   const [showNew, setShowNew] = React.useState(false);
+  const [open, setOpen] = React.useState({});          // BOQ id -> expanded
+  const toggleOpen = (id) => setOpen(o => ({ ...o, [id]: !o[id] }));
   const role = currentUser ? (getUser(currentUser) || {}).role : '';
   const canManage = ['Purchase', 'Project Manager', 'Org Admin', 'Billing'].includes(role);
 
@@ -210,14 +245,24 @@ function BOQPanel({ so }) {
         ) : (
           <table className="t">
             <thead><tr>
+              <th style={{ width: 28 }}></th>
               <th>BOQ</th><th className="num">Items</th><th className="num">Units</th>
               <th style={{ width: 160 }}>Dispatched</th><th className="num">Value</th><th>Status</th><th></th>
             </tr></thead>
             <tbody>
               {rows.map(b => {
-                const val = boqValue(so, b, getProduct);
+                const det = boqItemDetail(so, b, getProduct);
+                const val = det.reduce((a, d) => a + d.amount, 0);
+                const isOpen = !!open[b.id];
                 return (
-                  <tr key={b.id} style={b.status === 'Cancelled' ? { opacity: 0.5 } : null}>
+                  <React.Fragment key={b.id}>
+                  <tr style={Object.assign({ cursor: 'pointer' },
+                        b.status === 'Cancelled' ? { opacity: 0.5 } : null)}
+                      onClick={() => toggleOpen(b.id)}>
+                    <td title={isOpen ? 'Hide the items' : 'Show every item in this BOQ'}
+                        style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                      <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={13}/>
+                    </td>
                     <td>
                       <div className="mono small">{b.no}</div>
                       <div className="tiny muted">{fmtDate(b.date)}{b.label ? ` · ${b.label}` : ''}</div>
@@ -239,13 +284,114 @@ function BOQPanel({ so }) {
                         : <span className="badge warning dot">{qty(b.need - b.got)} still to dispatch</span>}
                       {b.invoice_no && <div className="tiny muted mono">{b.invoice_no}</div>}
                     </td>
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}
+                        onClick={e => e.stopPropagation()}>
                       {b.invoice_no
                         ? <button className="btn btn-sm" onClick={() => navigate(`invoices/${so.id}`)}>Invoice</button>
                         : canManage && b.status !== 'Cancelled'
                           && <button className="btn btn-sm" onClick={() => cancel(b)}>Cancel</button>}
                     </td>
                   </tr>
+
+                  {/* Every item in this BOQ, and exactly where each one stands.
+                      Derived from the live state on every render, so a dispatch
+                      posted anywhere moves these figures with it. */}
+                  {isOpen && (
+                    <tr>
+                      <td colSpan={8} style={{ background: 'var(--bg-subtle)', padding: '8px 12px 12px' }}>
+                        {det.length === 0 ? (
+                          <div className="tiny muted">This BOQ has no items.</div>
+                        ) : (
+                          <>
+                            <div className="tiny muted mb-1">
+                              {det.length} item(s) in <strong className="mono">{b.no}</strong>
+                              {b.label ? ' \u00b7 ' + b.label : ''}
+                              {' \u2014 '}{qty(b.got)} of {qty(b.need)} unit(s) dispatched.
+                              {b.status === 'Cancelled'
+                                ? ' This BOQ is cancelled, so it will not bill.'
+                                : b.invoiced
+                                  ? ' Billed on ' + b.invoice_no + '.'
+                                  : b.complete
+                                    ? ' All of it is out, so its invoice is due.'
+                                    : ' It bills once the last ' + qty(b.need - b.got) + ' unit(s) go out.'}
+                            </div>
+                            <table className="t">
+                              <thead><tr>
+                                <th style={{ width: 26 }}>#</th>
+                                <th>Item</th>
+                                <th className="num" style={{ width: 66 }}>Qty</th>
+                                <th className="num" style={{ width: 82 }}>Dispatched</th>
+                                <th className="num" style={{ width: 78 }}>Remaining</th>
+                                <th className="num" style={{ width: 92 }}>Rate</th>
+                                <th className="num" style={{ width: 104 }}>Amount</th>
+                                <th style={{ width: 110 }}>Status</th>
+                              </tr></thead>
+                              <tbody>
+                                {det.map((d, i) => (
+                                  <tr key={d.line_id + '|' + d.product_id + '|' + i}>
+                                    <td className="tiny muted">{i + 1}</td>
+                                    <td>
+                                      <div className="small trunc" style={{ maxWidth: 380 }}>
+                                        {d.cust_label || d.name}
+                                      </div>
+                                      <div className="tiny muted trunc" style={{ maxWidth: 380 }}>
+                                        {d.cust_label ? d.name : ''}
+                                        {d.code ? (d.cust_label ? ' \u00b7 ' : '') + d.code : ''}
+                                        {d.group ? ' \u00b7 ' + d.group : ''}
+                                      </div>
+                                    </td>
+                                    <td className="num mono small">
+                                      {qty(d.need)}
+                                      {d.unit ? <span className="tiny muted"> {d.unit}</span> : null}
+                                    </td>
+                                    <td className="num mono small"
+                                        style={d.dispatched > 0 ? { color: 'var(--success)' } : null}>
+                                      {d.dispatched > 0 ? qty(d.dispatched) : '\u2014'}
+                                    </td>
+                                    <td className="num mono small"
+                                        style={d.remaining > 0 ? { fontWeight: 600 } : { color: 'var(--text-muted)' }}>
+                                      {d.remaining > 0 ? qty(d.remaining) : '\u2014'}
+                                    </td>
+                                    <td className="num mono small">
+                                      {d.priced ? inr(d.rate)
+                                        : <span className="tiny" style={{ color: 'var(--warning)' }}>not priced</span>}
+                                    </td>
+                                    <td className="num mono small">{d.priced ? inr(d.amount) : '\u2014'}</td>
+                                    <td>
+                                      {b.status === 'Cancelled' ? <span className="badge dot">Cancelled</span>
+                                        : b.invoiced ? <span className="badge success dot">Invoiced</span>
+                                        : d.status === 'Dispatched' ? <span className="badge success dot">Dispatched</span>
+                                        : d.status === 'Partly out' ? <span className="badge info dot">Partly out</span>
+                                        : <span className="badge warning dot">Pending</span>}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot><tr>
+                                <td></td>
+                                <td className="small" style={{ fontWeight: 600 }}>Total</td>
+                                <td className="num mono small" style={{ fontWeight: 600 }}>{qty(b.need)}</td>
+                                <td className="num mono small" style={{ fontWeight: 600 }}>{qty(b.got)}</td>
+                                <td className="num mono small" style={{ fontWeight: 600 }}>{qty(b.need - b.got)}</td>
+                                <td></td>
+                                <td className="num mono small" style={{ fontWeight: 600 }}>{inr(val)}</td>
+                                <td></td>
+                              </tr></tfoot>
+                            </table>
+                            {det.some(d => !d.priced) && (
+                              <div className="tiny mt-1" style={{ color: 'var(--warning)' }}>
+                                <Icon name="alert" size={11}/>{' '}
+                                {det.filter(d => !d.priced).length} item(s) have no client price yet, so this BOQ
+                                is worth {inr(val)} so far. Set the price per unit in the Bill of Materials
+                                above \u2014 the invoice bills what is priced there.
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>

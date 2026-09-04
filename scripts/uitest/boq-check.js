@@ -260,6 +260,46 @@ const vSO = withBoqs(baseSO(), [
 check('the panel figure matches the invoice subtotal exactly',
   sandbox.boqValue(vSO, sandbox.soBoqs(vSO)[0], getProduct), 1000000);
 
+console.log('\n[10b] the expanded detail agrees with the row above it');
+// The drilldown is where somebody checks a figure they distrust. If it does not
+// add up to the summary, both numbers become worthless.
+const detSO = withBoqs(baseSO(), [
+  boq('b1', 'BOQ202609001', [
+    { line_id: 'l1', product_id: 'p-sw', qty: 8 },
+    { line_id: 'l1', product_id: 'p-psu', qty: 4 },
+    { line_id: 'l2', product_id: 'p-sfp', qty: 6 },
+  ]),
+]);
+// 5 switches and all 4 PSUs have gone out; no SFPs yet.
+const stDet = stateWith(detSO, [[{ product_id: 'p-sw', qty: 5 }, { product_id: 'p-psu', qty: 4 }]]);
+const rowDet = sandbox.boqProgress(stDet, detSO)[0];
+const det = sandbox.boqItemDetail(detSO, rowDet, getProduct);
+check('one detail line per item in the BOQ', det.length, 3);
+check('quantity per line is what the BOQ holds', det.map(d => d.need), [8, 4, 6]);
+check('dispatched is per line, not the order total', det.map(d => d.dispatched), [5, 4, 0]);
+check('remaining is what each line still owes', det.map(d => d.remaining), [3, 0, 6]);
+check('never negative, even when more shipped than the BOQ holds',
+  sandbox.boqItemDetail(detSO, sandbox.boqProgress(
+    stateWith(detSO, [[{ product_id: 'p-sw', qty: 99 }]]), detSO)[0], getProduct)[0].remaining, 0);
+check('each line carries its own status', det.map(d => d.status),
+  ['Partly out', 'Dispatched', 'Pending']);
+check('the dispatched column sums to the figure on the summary row',
+  det.reduce((a, d) => a + d.dispatched, 0), rowDet.got);
+check('and the quantity column sums to the summary units',
+  det.reduce((a, d) => a + d.need, 0), rowDet.need);
+check('the amount column sums to the value shown on the row',
+  det.reduce((a, d) => a + d.amount, 0), sandbox.boqValue(detSO, rowDet, getProduct));
+check('lines are named as the customer named them',
+  det.map(d => d.cust_label), ['CORE SWITCH 24P', 'REDUNDANT PSU 2KW', '10G OPTICAL MODULE']);
+check('with our own name kept for the warehouse',
+  det.map(d => d.code), ['C9300-24T', 'PWR-2KWAC', 'SFP-10G']);
+check('an unpriced line is flagged rather than shown as free',
+  sandbox.boqItemDetail(
+    { id: 'x', lines: [{ id: 'l1', bundle_qty: 1, components: [{ product_id: 'p-sw', qty: 2 }] }] },
+    { items: [{ line_id: 'l1', product_id: 'p-sw', qty: 2 }] }, getProduct)[0].priced, false);
+check('a BOQ that has not shipped at all reads zero, not blank',
+  sandbox.boqItemDetail(detSO, sandbox.soBoqs(detSO)[0], getProduct).map(d => d.dispatched), [0, 0, 0]);
+
 console.log('\n[11] BOQ numbers follow the one document-numbering scheme');
 const numState = { sales_orders: [withBoqs(baseSO(), [
   boq('b1', 'BOQ202609001', []), boq('b2', 'BOQ202609002', []),
@@ -278,6 +318,17 @@ check('the dispatch path can reach the biller', typeof sandbox.invoiceReadyBoqs,
 const soJsx = fs.readFileSync(path.join(dir, 'src', 'screens-so.jsx'), 'utf8');
 check('the panel sits with the bill of materials on the order page',
   /BOQPanel\s+so=\{so\}/.test(soJsx), true);
+const boqJsx = fs.readFileSync(path.join(dir, 'src', 'screens-boq.jsx'), 'utf8');
+check('every BOQ row expands to its items', /toggleOpen\(/.test(boqJsx), true);
+// An icon name this component set does not know renders NOTHING, silently — an
+// invisible toggle nobody can find. The names are camelCase here.
+check('the expand chevron uses an icon that exists',
+  /chevronDown/.test(boqJsx) && !/chevron-down/.test(boqJsx), true);
+const iconNames = new Set([...fs.readFileSync(path.join(dir, 'src', 'utils.jsx'), 'utf8')
+  .matchAll(/^\s{4}([a-zA-Z][a-zA-Z0-9]*):\s*<>/gm)].map(m => m[1]));
+const usedIcons = [...boqJsx.matchAll(/<Icon\s+name=["']([a-zA-Z-]+)["']/g)].map(m => m[1]);
+check('and so does every other icon on this screen',
+  usedIcons.filter(n => !iconNames.has(n)), []);
 const scm = fs.readFileSync(path.join(dir, 'src', 'screens-scm.jsx'), 'utf8');
 check('a dispatch triggers BOQ billing', /invoiceReadyBoqs\(/.test(scm), true);
 check('an order with no BOQ still bills per challan, as it always did',

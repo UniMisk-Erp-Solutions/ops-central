@@ -47,6 +47,35 @@ The BOQ is saved onto the order at `so.extra.boqs`:
 
 Purchase, Project Manager, Billing and Org Admin can create and cancel one.
 
+### Seeing inside one
+
+Every row on the panel opens. Click it — or the chevron — and it lists every item
+the BOQ holds, with one line each for:
+
+| Column | Means |
+|---|---|
+| Qty | how much of that item this BOQ holds, in the customer's unit |
+| Dispatched | how much of it has actually gone out |
+| Remaining | what it still owes before this BOQ can bill |
+| Rate / Amount | the client price per unit, and the line's value |
+| Status | `Pending` · `Partly out` · `Dispatched`, or `Invoiced` once billed |
+
+Items read as **the customer named them**, with our own name and code underneath
+and the customer's PO serial alongside, so a line can be matched against their
+sheet without translating it first.
+
+The footer totals the columns, and those totals are the same numbers shown on the
+summary row above. They cannot drift: the row and the drilldown both come from
+`boqItemDetail`, and the check asserts each column sums to its summary figure.
+
+Nothing here is stored. It is derived from the live state on every render, so a
+dispatch posted anywhere moves these figures the moment it lands.
+
+A line with no client price yet shows **not priced** rather than a rate of zero,
+and a banner under the table says how many there are and what the BOQ is worth so
+far. A price of zero and an unset price look identical on an invoice and are not
+at all the same thing.
+
 ### The two rules that make the arithmetic safe
 
 **An item belongs to at most one BOQ.** Otherwise the same goods are billed
@@ -119,7 +148,7 @@ This is the trap that produced duplicate invoice numbers before.
 
 | Thing | Where |
 |---|---|
-| Engine — free quantity, allocation, progress, value | `frontend/src/screens-boq.jsx` |
+| Engine — free quantity, allocation, progress, per-item detail, value | `frontend/src/screens-boq.jsx` |
 | `BOQPanel`, `CreateBOQModal` | `frontend/src/screens-boq.jsx` |
 | `buildBoqInvoice`, `buildBoqFinalInvoice`, `invoiceReadyBoqs` | `frontend/src/screens-billing.jsx` |
 | Dispatch trigger | `frontend/src/screens-scm.jsx` (`OutwardDispatchModal`) |
@@ -141,6 +170,13 @@ This is the trap that produced duplicate invoice numbers before.
   rule.
 - **Over-dispatch does not inflate a BOQ's `got`.** Each BOQ takes at most what
   it needs from the pool.
+- **`boqItemDetail` is the one definition of a BOQ line.** The panel row, the
+  expanded table and `boqValue` all read it. Compute any of those separately and
+  the summary will eventually disagree with the lines that make it up.
+- **Icon names in this codebase are camelCase** — `chevronDown`, not
+  `chevron-down`. An unknown name renders *nothing*, silently, so a mistyped one
+  ships as an invisible button. `boq-check` now asserts every icon on this screen
+  exists.
 - **The invoice cap still applies.** A BOQ invoice is clamped to what the order
   has left to bill, so BOQs that overlap a manual adjustment can never bill more
   than the order is worth.
