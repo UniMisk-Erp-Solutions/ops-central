@@ -14,6 +14,7 @@
 | Vendor invoice | the PO's number, re-prefixed | `INV202609001` |
 | PO e-Bill | **the same number as the vendor invoice** | `INV202609001` |
 | Client invoice | `INV` + the customer's own order number | `INVABG20260117` |
+| Billing group (BOQ) | `BOQ` + YYYY + MM + NNN | `BOQ202609001` |
 | Sales order | **typed in** — the customer's reference | `ABG/2026/0117` |
 
 ## How each one works

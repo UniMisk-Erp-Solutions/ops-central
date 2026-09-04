@@ -35,6 +35,13 @@ the only point where the quantity is final.
 Absent reads as false, so an organization that has never heard of the key
 behaves exactly as it does today.
 
+### Unless the order has billing groups
+
+If the order carries **BOQs**, they decide what is invoiced, not the challan. A
+dispatch bills every BOQ that has just become complete, and bills nothing at all
+if none has. An order with no BOQ bills per challan exactly as described here.
+See [boq-billing.md](./boq-billing.md).
+
 ### The name
 
 Each line is named as **the customer ordered it** — their description and part

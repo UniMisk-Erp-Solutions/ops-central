@@ -309,11 +309,31 @@ function OutwardDispatchModal({ so, onClose }) {
     // Deliberately AFTER the challan is committed: if invoicing fails or there
     // is nothing to bill, the dispatch still stands. Goods left the building
     // either way, and that fact must not depend on the paperwork.
+    // If the order has billing groups, THEY decide what is invoiced — a BOQ
+    // bills only when its last item is out. An order with no BOQ falls back to
+    // billing the challan itself, which is what it did before BOQs existed.
     let inv = null;
-    if (wfOn('invoice_on_dispatch') && window.raiseDispatchInvoice) {
+    let boqInvoices = [];
+    const hasBoqs = (window.soBoqs ? window.soBoqs(so) : []).filter(b => b.status !== 'Cancelled').length > 0;
+    if (wfOn('invoice_on_dispatch') && hasBoqs && window.invoiceReadyBoqs) {
+      boqInvoices = window.invoiceReadyBoqs(so.id, { state, mutate, currentUser, getUser, getProduct }) || [];
+    } else if (wfOn('invoice_on_dispatch') && window.raiseDispatchInvoice) {
       inv = window.raiseDispatchInvoice(so.id, dc, { mutate, currentUser, getUser, getProduct });
     }
     setBusy(false);
+    if (boqInvoices.length) {
+      toast(`${dc.dc_no} created · ${units} unit(s) out · ${boqInvoices.length} BOQ invoice(s): ${boqInvoices.map(b => b.invoice.no).join(', ')}`, 'success');
+      onClose();
+      return;
+    }
+    if (hasBoqs) {
+      const pending = (window.boqProgress ? window.boqProgress(state, so) : [])
+        .filter(b => !b.invoiced && b.status !== 'Cancelled' && !b.complete).length;
+      toast(`${dc.dc_no} created · ${units} unit(s) out` +
+        (pending ? ` · ${pending} BOQ(s) not complete yet, so nothing billed` : ''), 'success');
+      onClose();
+      return;
+    }
     if (inv) {
       toast(`${dc.dc_no} created · ${units} unit(s) out · invoice ${inv.invoice.no} raised for ${inr(inv.invoice.total)}`, 'success');
     } else if (wfOn('invoice_on_dispatch')) {

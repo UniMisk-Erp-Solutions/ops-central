@@ -858,6 +858,198 @@ function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
   return { so: nextSO, invoice, fully };
 }
 
+// ===========================================================================
+// Invoicing a BOQ
+// ===========================================================================
+// A BOQ bills as one invoice, the moment its LAST item is dispatched. Not
+// before: seven of ten items out is nothing to bill, because the customer
+// agreed to be billed for the ten.
+//
+// This is the same document as any other client invoice — same numbering, same
+// customer wording, same cap — scoped to the BOQ's own lines.
+function buildBoqInvoice(so, state, boq, currentUser, getUser, getProduct) {
+  if (!boq || !(boq.items || []).length) return null;
+  if (boq.invoice_no) return null;                                  // already billed
+  if ((so.invoices || []).some(i => i.boq_id === boq.id)) return null;
+  if ((so.invoices || []).length === 0 && so.invoice_no) return null;   // legacy direct invoice
+
+  const invoicedSub = (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0);
+  const remainingBilled = Math.max(0, _soBilled(so, state) - invoicedSub);
+  if (remainingBilled <= 0.5) return null;
+
+  // Priced from the order's own lines, per (line, item) — the same component the
+  // BOM editor prices and the profit panel reads.
+  const lines = []; const comp = {}; let subtotal = 0;
+  (boq.items || []).forEach(it => {
+    const q = Number(it.qty) || 0;
+    if (q <= 0) return;
+    const l = (so.lines || []).find(x => x.id === it.line_id);
+    const c = l && (l.components || []).find(x => x.product_id === it.product_id);
+    const p = getProduct(it.product_id);
+    const rate = c ? ((typeof window.compSellOf === 'function') ? window.compSellOf(c, p) : (Number(c.sell) || 0)) : 0;
+    // This BOQ item names its own order line, so take THAT line's wording first.
+    // The order-wide scan is the fallback, and it would pick whichever line
+    // mentions the product first — wrong when a product sits in two bundles
+    // under two different customer descriptions.
+    const cn = (c && custRefName(c.customer_ref))
+            || invoiceCustName(so, { ref_id: it.product_id }, getProduct);
+    lines.push({
+      kind: 'component', ref_id: it.product_id,
+      label: (cn && cn.label) || (p ? p.name : it.product_id),
+      cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '',
+      our_name: p ? p.name : '', our_code: p ? p.code : '',
+      qty: q, unit_price: rate, amount: q * rate,
+    });
+    comp[it.product_id] = (comp[it.product_id] || 0) + q;
+    subtotal += q * rate;
+  });
+  if (subtotal <= 0.5) return null;      // nothing priced — the caller explains
+
+  subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
+  const total = Math.round(subtotal * 1.18);
+  const fully = (remainingBilled - subtotal) <= 0.5;
+  const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
+  const invoice = {
+    id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5),
+    no: _invNoFor(so, state), date: TODAY,
+    type: fully ? 'Final' : 'Partial', mode: 'boq',
+    boq_id: boq.id, boq_no: boq.no,
+    lines, comp_consumed: comp,
+    subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
+  };
+  const invoices = [...(so.invoices || []), invoice];
+  const nextSO = {
+    ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY,
+    invoice_amount: _nonConsolidatedTotal(invoices),
+    status: fully ? 'Invoiced' : so.status,
+    // Stamp the invoice onto the BOQ so it can never bill twice.
+    extra: { ...(so.extra || {}), boqs: ((so.extra && so.extra.boqs) || []).map(
+      b => b.id === boq.id ? { ...b, invoice_no: invoice.no, invoice_id: invoice.id, invoiced_date: TODAY } : b) },
+  };
+  return { so: nextSO, invoice, fully };
+}
+
+// The FINAL invoice, once every BOQ on the order has fired.
+//
+// BOQs need not cover the whole order — Purchase may leave units out of every
+// billing group. When the last BOQ has been invoiced, whatever else has actually
+// been DISPATCHED and never billed is swept into one closing invoice. Goods
+// still sitting in the godown are not in it; nothing is billed before it ships,
+// which is the same rule every other invoice on this order follows.
+//
+// If the BOQs did cover everything, there is no remainder and the last BOQ
+// invoice is itself already typed 'Final'. Nothing extra is raised.
+function buildBoqFinalInvoice(so, state, currentUser, getUser, getProduct) {
+  const boqs = soBoqs(so).filter(b => b.status !== 'Cancelled');
+  if (!boqs.length) return null;
+  if (!boqs.every(b => !!b.invoice_no)) return null;        // a BOQ is still open
+  if ((so.invoices || []).some(i => i.mode === 'boq-final')) return null;
+
+  const invoicedSub = (so.invoices || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.subtotal || 0), 0);
+  const remainingBilled = Math.max(0, _soBilled(so, state) - invoicedSub);
+  if (remainingBilled <= 0.5) return null;                  // order fully billed already
+
+  // Dispatched, minus everything already invoiced (BOQ or challan).
+  const left = { ...(window.boqDispatched ? window.boqDispatched(state, so) : {}) };
+  (so.invoices || []).filter(i => !i.consolidated).forEach(i => {
+    Object.entries(i.comp_consumed || {}).forEach(([pid, q]) => {
+      left[pid] = (left[pid] || 0) - (Number(q) || 0);
+    });
+  });
+
+  const lines = []; const comp = {}; let subtotal = 0;
+  (window.boqOrderRows ? window.boqOrderRows(so) : []).forEach(r => {
+    const take = Math.min(r.qty, Math.max(0, left[r.product_id] || 0));
+    if (take <= 0.0001) return;
+    left[r.product_id] -= take;
+    const l = (so.lines || []).find(x => x.id === r.line_id);
+    const c = l && (l.components || []).find(x => x.product_id === r.product_id);
+    const p = getProduct(r.product_id);
+    const rate = c ? ((typeof window.compSellOf === 'function') ? window.compSellOf(c, p) : (Number(c.sell) || 0)) : 0;
+    const cn = invoiceCustName(so, { ref_id: r.product_id }, getProduct);
+    lines.push({
+      kind: 'component', ref_id: r.product_id,
+      label: (cn && cn.label) || (p ? p.name : r.product_id),
+      cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '',
+      our_name: p ? p.name : '', our_code: p ? p.code : '',
+      qty: take, unit_price: rate, amount: take * rate,
+    });
+    comp[r.product_id] = (comp[r.product_id] || 0) + take;
+    subtotal += take * rate;
+  });
+  if (subtotal <= 0.5) return null;         // nothing dispatched outside the BOQs
+
+  subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
+  const total = Math.round(subtotal * 1.18);
+  const fully = (remainingBilled - subtotal) <= 0.5;
+  const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
+  const invoice = {
+    id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5),
+    no: _invNoFor(so, state), date: TODAY,
+    type: fully ? 'Final' : 'Partial', mode: 'boq-final',
+    lines, comp_consumed: comp,
+    subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
+  };
+  const invoices = [...(so.invoices || []), invoice];
+  return { so: { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY,
+                 invoice_amount: _nonConsolidatedTotal(invoices),
+                 status: fully ? 'Invoiced' : so.status },
+           invoice, fully, final: true };
+}
+
+// Bill every BOQ that has become complete. Runs after a dispatch, and from the
+// button on the BOQ panel.
+//
+// Computed INSIDE the updater against the latest state, and one BOQ at a time,
+// because each invoice changes what is left to bill for the next.
+function invoiceReadyBoqs(soId, ctx) {
+  const { mutate, currentUser, getUser, getProduct } = ctx;
+  const made = [];
+  mutate(s => {
+    let so = (s.sales_orders || []).find(x => x.id === soId);
+    if (!so) return s;
+    let notes = [];
+    for (let guard = 0; guard < 50; guard++) {
+      const ready = (window.boqProgress ? window.boqProgress(s, so) : []).filter(b => b.readyToInvoice);
+      if (!ready.length) break;
+      const built = buildBoqInvoice(so, s, ready[0], currentUser, getUser, getProduct);
+      if (!built) break;                       // unpriced, or nothing left to bill
+      so = built.so;
+      made.push(built);
+      notes.push({
+        id: 'n-boqinv-' + Date.now() + made.length, kind: 'invoice',
+        text: `${built.invoice.no} (${built.invoice.type}) raised for ${ready[0].no} · ${so.so_no} · ${inrK(built.invoice.total)}${built.fully ? ' · order fully invoiced' : ''}`,
+        date: TODAY, read: false, role: 'Collections',
+      });
+    }
+    // Every BOQ has fired -> close the order out with whatever else shipped.
+    const closing = buildBoqFinalInvoice(so, s, currentUser, getUser, getProduct);
+    if (closing) {
+      so = closing.so;
+      made.push(closing);
+      notes.push({
+        id: 'n-boqfin-' + Date.now(), kind: 'invoice',
+        text: `${closing.invoice.no} (Final) raised on ${so.so_no} · ${inrK(closing.invoice.total)} — all BOQs billed`,
+        date: TODAY, read: false, role: 'Collections',
+      });
+    }
+
+    if (!made.length) return s;
+    const finalSO = so;
+    return {
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === soId ? finalSO : x),
+      notifications: [...notes.reverse(), ...s.notifications],
+    };
+  }, { action: 'boq-invoice', entity: 'SalesOrder', entity_id: soId,
+       detail: `BOQ billing run` });
+  return made;
+}
+
+window.buildBoqInvoice = buildBoqInvoice;
+window.buildBoqFinalInvoice = buildBoqFinalInvoice;
+window.invoiceReadyBoqs = invoiceReadyBoqs;
+
 // Raise it, against the latest state inside the updater.
 function raiseDispatchInvoice(soId, dc, ctx) {
   const { mutate, currentUser, getUser, getProduct } = ctx;

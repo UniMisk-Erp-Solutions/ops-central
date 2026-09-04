@@ -1068,6 +1068,8 @@ function SalesOrderDetail({ soId }) {
               what is left. It sits above the bill of materials because that is
               the question being asked while the BOM is edited. */}
           <SOProfitPanel so={so}/>
+          {/* What gets billed together, decided on top of the bill of materials. */}
+          {typeof BOQPanel !== 'undefined' && <BOQPanel so={so}/>}
           {canEditSO && !billingLocked && (
             <div className="card"><div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div className="grow"><strong className="small">Bill of Materials</strong><div className="tiny muted">Purchase / PM can adjust line items, quantities and components here after approval — flows into procurement & the Virtual Godown.</div></div>

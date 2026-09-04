@@ -496,6 +496,9 @@ function docNo(prefix, existing, dateStr) {
   return stem + String(max + 1).padStart(3, '0');
 }
 
+// A billing group carved out of an order's bill of materials.
+const boqNo        = (state, date) => docNo('BOQ', ((state && state.sales_orders) || [])
+  .flatMap(so => ((so.extra && so.extra.boqs) || []).map(b => b.no)), date);
 const vendorPoNo   = (state, date) => docNo('PO', ((state && state.vendor_pos) || []).map(p => p.po_no), date);
 const challanNo    = (state, date) => docNo('DC', ((state && state.outward_dispatches) || []).map(d => d.dc_no), date);
 
@@ -600,7 +603,7 @@ function itemCost(state, productId) {
 Object.assign(window, {
   qty, TAX_KINDS, GST_RATES, taxKind, taxLabel, taxOn, taxesOn, normaliseTaxes,
   poLineTax, poLineTaxes, taxSummary,
-  docStem, docNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
+  docStem, docNo, boqNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
   nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
   inrFmt, inr, inrK, fmtDate, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
