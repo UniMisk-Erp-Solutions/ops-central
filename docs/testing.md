@@ -6,7 +6,18 @@ for t in render boot import alloc pricing receive receipt-engine dispatch-invoic
 done
 ```
 
-Needs `npm i --no-save @babel/standalone react react-dom jsdom` once.
+Needs `npm i --no-save @babel/standalone@7.29.0 react@18.3.1 react-dom@18.3.1 jsdom`
+once, at the repository root.
+
+Pin those versions, and install them **in one command**. Two traps:
+
+- `index.html` loads `@babel/standalone@7.29.0`. Babel 8 defaults to the
+  automatic JSX runtime and emits `import ... from "react/jsx-runtime"`, which
+  the sandbox cannot execute — the checks die with *"Cannot use import statement
+  outside a module"* on a file that is perfectly fine in the browser.
+- `--no-save` **prunes** whatever is not named in that command. Installing one
+  package on its own removes the rest, and the suite then reports
+  *"Missing dev deps"* or *"Cannot find module 'react-dom/client'"*.
 
 ---
 
