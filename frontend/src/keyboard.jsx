@@ -5,9 +5,10 @@
 // keyboard than on a mouse. Every screen can be driven without one.
 //
 //   Tab         reaches every control, including the lists
-//   arrows      move within whatever has focus — a list, a row of tabs, the
-//               sidebar. NOWHERE ELSE: on the page itself they scroll it, the
-//               way they do in every other program
+//   up / down   move through the list on the page. On a screen with no list
+//               they are left alone and the page scrolls, as it always did
+//   left/right  cross between the sidebar and the page; along a row of tabs;
+//               and right opens the selected row. NEVER browser history
 //   Enter       press what is focused; in a list, open the row
 //   Space       tick the box on the row
 //   Ctrl+K, /   the command palette — every screen and record, by name
@@ -67,12 +68,12 @@ function kbdIsControl(el) {
 //       overlay  the command palette or the help sheet is open, and owns the keys
 //       control  focus is on a button, link or checkbox — it answers Enter and
 //                Space itself, and this layer must not answer them as well
-//       group    focus is inside a strip of tabs ('horizontal') or the sidebar
-//                ('vertical'), where the arrows should move along it
-//       inList   focus is inside a data list. ONLY THEN do the arrows drive
-//                rows. Anywhere else they scroll the page, because that is what
-//                they do in every other program and taking it away is worse
-//                than any shortcut is good
+//       pane     which part of the screen has focus: 'sidebar', 'tabs' or the
+//                page itself. The arrows mean something different in each, and
+//                left and right cross between the first and the last
+//       inList   focus is inside a data list
+//       onRow    a row is already selected, so the bulk keys join in and Enter
+//                opens the row rather than pressing whatever else has focus
 //       pending  the previous keystroke was "g", so this one names a screen
 //
 // Returns null for anything the app should keep its hands off — which is most
@@ -84,8 +85,9 @@ function kbdResolve(e, ctx) {
   const typing = !!(ctx && ctx.typing);
   const overlay = !!(ctx && ctx.overlay);
   const control = !!(ctx && ctx.control);
-  const group = ctx && ctx.group;                  // 'horizontal' | 'vertical' | null
+  const pane = (ctx && ctx.pane) || 'main';        // 'sidebar' | 'tabs' | 'main'
   const inList = !!(ctx && ctx.inList);
+  const onRow = !!(ctx && ctx.onRow);              // a row is already selected
   const pending = ctx && ctx.pending;
 
   // Ctrl+K opens the palette from anywhere at all, mid-word included: it is the
@@ -115,38 +117,56 @@ function kbdResolve(e, ctx) {
   }
   if (key === 'g') return { action: 'pending', pending: 'g' };
 
-  // Enter and Space belong to whatever is focused, if anything is. A div that
-  // was put in the tab order has no built-in Enter, so it is pressed here; a
-  // real button has one, and the handler checks before pressing it twice.
-  if (control && (key === 'Enter' || key === ' ')) return { action: 'activate' };
-
-  // Inside a strip of tabs or the sidebar, the arrows move along it.
-  if (group === 'horizontal' && key === 'ArrowRight') return { action: 'group-move', delta: 1 };
-  if (group === 'horizontal' && key === 'ArrowLeft') return { action: 'group-move', delta: -1 };
-  if (group === 'vertical' && key === 'ArrowDown') return { action: 'group-move', delta: 1 };
-  if (group === 'vertical' && key === 'ArrowUp') return { action: 'group-move', delta: -1 };
-
-  // Inside a list, the arrows drive the rows.
-  if (inList) {
-    switch (key) {
-      case 'ArrowDown':  return { action: 'row-move', delta: 1 };
-      case 'ArrowUp':    return { action: 'row-move', delta: -1 };
-      case 'PageDown':   return { action: 'row-move', delta: 10 };
-      case 'PageUp':     return { action: 'row-move', delta: -10 };
-      case 'Home':       return { action: 'row-first' };
-      case 'End':        return { action: 'row-last' };
-      case 'ArrowRight': return { action: 'row-open' };
-      case 'ArrowLeft':  return { action: 'leave-list' };
-      case ' ':          return { action: 'row-tick' };
-      default:           break;
-    }
+  // ---- A strip of tabs: left and right move along it -----------------------
+  if (pane === 'tabs') {
+    if (key === 'ArrowRight') return { action: 'group-move', delta: 1 };
+    if (key === 'ArrowLeft') return { action: 'group-move', delta: -1 };
+    if (key === 'Enter' || key === ' ') return { action: 'activate' };
   }
 
-  // Everything else the arrows might have meant, they no longer do. Scrolling a
-  // page with the arrow keys is older than this software and belongs to the
-  // person using it.
-  if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
-       'PageDown', 'PageUp', 'Home', 'End'].includes(key)) return null;
+  // ---- The sidebar: up and down move down it, RIGHT COMES BACK OUT ---------
+  // Without that last one focus goes into the sidebar and cannot get out again
+  // except by tabbing through the whole of it. Left is deliberately nothing:
+  // there is nothing to the left of the sidebar.
+  if (pane === 'sidebar') {
+    if (key === 'ArrowDown') return { action: 'group-move', delta: 1 };
+    if (key === 'ArrowUp') return { action: 'group-move', delta: -1 };
+    if (key === 'ArrowRight') return { action: 'pane-main' };
+    if (key === 'ArrowLeft') return null;
+    if (key === 'Enter' || key === ' ') return { action: 'activate' };
+    if (['PageDown', 'PageUp', 'Home', 'End'].includes(key)) return null;
+  }
+
+  // ---- The page itself ----------------------------------------------------
+  // Up and down drive the list WITHOUT having to Tab onto it first. Requiring
+  // that was the whole complaint: on a screen that is a list of orders, the
+  // arrows should move through the orders, which is what they do in every other
+  // program an accountant uses. Moving the selection scrolls it into view, so
+  // nothing is lost by it — and on a screen with no list at all they are left
+  // alone and the page scrolls as before.
+  if (key === 'ArrowDown') return { action: 'row-move', delta: 1 };
+  if (key === 'ArrowUp') return { action: 'row-move', delta: -1 };
+
+  // The bulk keys only join in once a list is actually being driven. Until
+  // then Home and End belong to the page, where they mean top and bottom.
+  if (inList || onRow) {
+    if (key === 'PageDown') return { action: 'row-move', delta: 10 };
+    if (key === 'PageUp') return { action: 'row-move', delta: -10 };
+    if (key === 'Home') return { action: 'row-first' };
+    if (key === 'End') return { action: 'row-last' };
+  }
+
+  // Left goes to the sidebar, right comes back — the two panes of the screen.
+  // Neither one touches browser history.
+  if (key === 'ArrowLeft') return { action: 'pane-sidebar' };
+  if (key === 'ArrowRight') return onRow ? { action: 'row-open' } : { action: 'pane-main' };
+
+  if (key === 'Enter') return onRow ? { action: 'row-open' }
+                                    : (control ? { action: 'activate' } : null);
+  if (key === ' ') return onRow ? { action: 'row-tick' }
+                                : (control ? { action: 'activate' } : null);
+
+  if (['PageDown', 'PageUp', 'Home', 'End'].includes(key)) return null;
 
   switch (key) {
     case '/':          return { action: 'search' };
@@ -402,6 +422,41 @@ function kbdVisible(el) {
   } catch (e) { return true; }
 }
 
+// Which part of the screen is being driven. Left and right cross between the
+// sidebar and the page, so this has to be right or focus gets stuck in one.
+function kbdPaneOf(el) {
+  if (!el || !el.closest) return 'main';
+  if (el.closest('.tabs, .role-switcher')) return 'tabs';
+  if (el.closest('.sidebar')) return 'sidebar';
+  return 'main';
+}
+
+// Move focus to the sidebar, landing on the screen you are actually on.
+function kbdFocusSidebar(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || !d.querySelector) return null;
+  const side = d.querySelector('.sidebar');
+  if (!side) return null;
+  const target = side.querySelector('.nav-item.active') || side.querySelector('.nav-item');
+  if (!target || !target.focus) return null;
+  try { target.focus(); } catch (e) {}
+  return target;
+}
+
+// Come back out of the sidebar onto the page. The list is the useful landing
+// place when there is one, because that is what the arrows will then drive.
+function kbdFocusMain(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || !d.querySelector) return null;
+  const main = d.querySelector('.main');
+  if (!main) return null;
+  const target = main.querySelector('[data-kbd-list]')
+    || main.querySelector('button:not([disabled]), a[href], [data-kbd-click], input:not([disabled])');
+  if (!target || !target.focus) return null;
+  try { target.focus(); } catch (e) {}
+  return target;
+}
+
 function kbdGroupMove(el, delta) {
   const g = kbdGroupOf(el);
   if (!g) return null;
@@ -506,6 +561,9 @@ window.kbdIsInList = kbdIsInList;
 window.kbdEnhance = kbdEnhance;
 window.kbdActivate = kbdActivate;
 window.kbdVisible = kbdVisible;
+window.kbdPaneOf = kbdPaneOf;
+window.kbdFocusSidebar = kbdFocusSidebar;
+window.kbdFocusMain = kbdFocusMain;
 window.kbdGroupOf = kbdGroupOf;
 window.kbdGroupMove = kbdGroupMove;
 window.KBD_CLICK_CLASSES = KBD_CLICK_CLASSES;
@@ -602,13 +660,13 @@ function KeyboardLayer() {
     const onKey = (e) => {
       const overlayOpen = palette || help;
       const focused = e.target || document.activeElement;
-      const grp = overlayOpen ? null : kbdGroupOf(focused);
       const inList = !overlayOpen && kbdIsInList(focused);
       const act = kbdResolve(e, {
         typing: kbdIsTyping(focused),
         control: kbdIsControl(focused),
-        group: grp ? grp.orientation : null,
+        pane: overlayOpen ? 'main' : kbdPaneOf(focused),
         inList,
+        onRow: !overlayOpen && !!kbdCurrentRow(null, focused),
         overlay: overlayOpen,
         pending,
       });
@@ -669,7 +727,14 @@ function KeyboardLayer() {
           e.preventDefault(); setPending(null); go(act.route);
           return;
 
-        case 'row-move':  e.preventDefault(); kbdMove(act.delta, null, focused); return;
+        case 'row-move': {
+          // Nothing focused? Drive the first list on the page. That is the
+          // screen somebody is looking at, and needing to Tab onto it first was
+          // the reason the arrows appeared to do nothing at all.
+          const moved = kbdMove(act.delta, null, focused);
+          if (moved) e.preventDefault();     // no list here — let the page scroll
+          return;
+        }
         case 'row-first': e.preventDefault(); kbdJump('first', null, focused); return;
         case 'row-last':  e.preventDefault(); kbdJump('last', null, focused); return;
 
@@ -685,15 +750,19 @@ function KeyboardLayer() {
           if (kbdTickRow(null, focused)) e.preventDefault();
           return;
 
-        case 'leave-list': {
-          // Left steps OUT of the list. It does not go back in history: doing
+        case 'pane-sidebar':
+          // Left crosses to the sidebar. It does NOT go back in history: doing
           // that from a stray keypress is how somebody loses a half-typed form.
           e.preventDefault();
           kbdClearCursor();
-          const list = focused && focused.closest && focused.closest('[data-kbd-list]');
-          if (list && list.blur) { try { list.blur(); } catch (err) {} }
+          kbdFocusSidebar();
           return;
-        }
+
+        case 'pane-main':
+          // And right comes back out. Without this, focus that wandered into
+          // the sidebar could only escape by tabbing through the whole of it.
+          if (kbdFocusMain()) e.preventDefault();
+          return;
 
         case 'search': {
           const box = document.querySelector('.main input[type="search"]')
@@ -711,12 +780,14 @@ function KeyboardLayer() {
     // something straight away. Leaving it drops the highlight, so there is never
     // a selected row on a list nobody is driving.
     const onFocusIn = (e) => {
-      const list = e.target && e.target.closest && e.target.closest('[data-kbd-list]');
-      if (list) {
-        if (!kbdCurrentRow(null, e.target)) kbdMove(1, null, e.target);
-      } else {
-        kbdClearCursor();
-      }
+      const el = e.target;
+      const list = el && el.closest && el.closest('[data-kbd-list]');
+      // Tabbing onto a list selects its first row, so the arrows visibly do
+      // something straight away.
+      if (list && !kbdCurrentRow(null, el)) kbdMove(1, null, el);
+      // Focus moving into the sidebar drops the row highlight — that row is not
+      // what the arrows are driving any more, and leaving it lit is a lie.
+      else if (el && el.closest && el.closest('.sidebar')) kbdClearCursor();
     };
     window.addEventListener('keydown', onKey);
     document.addEventListener('focusin', onFocusIn);
@@ -813,14 +884,19 @@ function CommandPalette({ onClose, go, role, state }) {
 // The shortcut sheet
 // ============================================================================
 const KBD_SHEET = [
-  { group: 'In a list (Tab onto it first)', keys: [
-    ['Tab', 'onto the list — the whole list is one stop'],
-    ['↓ / ↑', 'next row / previous row'],
+  { group: 'The list on the page', keys: [
+    ['↓ / ↑', 'move through the rows — just press them'],
     ['PgDn / PgUp', 'ten rows at a time'],
     ['Home / End', 'first row / last row'],
     ['→ or Enter', 'open the selected row'],
     ['Space', 'tick the box on it'],
-    ['←', 'step back out of the list'],
+    ['Tab', 'onto a particular list — the whole list is one stop'],
+  ]},
+  { group: 'Across the screen', keys: [
+    ['←', 'to the sidebar'],
+    ['→', 'back out to the page'],
+    ['↓ / ↑ there', 'down the sidebar (Enter opens)'],
+    ['← / → on tabs', 'along a row of tabs'],
   ]},
   { group: 'Getting somewhere', keys: [
     ['Ctrl + K', 'the command palette — every screen and record'],
@@ -831,9 +907,6 @@ const KBD_SHEET = [
   { group: 'Anything on the page', keys: [
     ['Tab / Shift + Tab', 'every button, tab, card, chip and field, in order'],
     ['Enter or Space', 'press whatever is focused'],
-    ['← / →', 'along a row of tabs'],
-    ['↑ / ↓', 'down the sidebar (Enter opens)'],
-    ['arrows elsewhere', 'scroll the page, as they always did'],
   ]},
   { group: 'In a dialog or form', keys: [
     ['Tab / Shift + Tab', 'between fields, staying inside the dialog'],

@@ -129,39 +129,73 @@ check('Ctrl+Down is left alone', act('ArrowDown', {}, { ctrlKey: true }), null);
 check('Ctrl+Alt+K is NOT our palette', act('k', {}, { ctrlKey: true, altKey: true }), null);
 check('but plain Ctrl+K is', act('k', {}, { ctrlKey: true }), 'palette');
 check('and so is Cmd+K on a Mac', act('k', {}, { metaKey: true }), 'palette');
-check('shift does not change an arrow in a list',
-  act('ArrowDown', { inList: true }, { shiftKey: true }), 'row-move');
+check('shift does not change a bare arrow',
+  act('ArrowDown', {}, { shiftKey: true }), 'row-move');
 
-console.log('\n[4] THE ARROWS BELONG TO THE PAGE UNLESS A LIST HAS FOCUS');
-// The first version of this took the arrow keys everywhere, so a page could no
-// longer be scrolled with them and Left went back in history from anywhere at
-// all. Scrolling with the arrows is older than this software and belongs to the
-// person using it.
+console.log('\n[4] UP AND DOWN DRIVE THE LIST ON THE PAGE');
+// Twice wrong before this. First the arrows were global, so a page could not be
+// scrolled and Left went back in history from anywhere. Then they were confined
+// to a list you had to Tab onto first, so on a screen that IS a list of orders
+// the arrows appeared to do nothing at all.
+//
+// They drive the list on the page, without ceremony. Moving the selection
+// scrolls it into view, so nothing is lost — and the handler only swallows the
+// key when there was actually a list to move, so a screen without one still
+// scrolls.
 const ARROWS = ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'PageDown', 'PageUp', 'Home', 'End'];
-check('on the page itself, every arrow is left alone',
-  ARROWS.filter(k => act(k, {}) !== null), []);
-check('and nothing anywhere goes back in history any more',
-  ARROWS.map(k => act(k, {})).concat(ARROWS.map(k => act(k, { inList: true })))
+check('down moves through the list straight away, with nothing focused',
+  sandbox.kbdResolve(K('ArrowDown'), {}), { action: 'row-move', delta: 1 });
+check('and up moves back', sandbox.kbdResolve(K('ArrowUp'), {}), { action: 'row-move', delta: -1 });
+check('nothing anywhere goes back in browser history',
+  ARROWS.map(k => act(k, {}))
+    .concat(ARROWS.map(k => act(k, { onRow: true })))
+    .concat(ARROWS.map(k => act(k, { pane: 'sidebar' })))
     .filter(a => a === 'back'), []);
 
-const inL = { inList: true };
-check('in a list, down moves one row',
-  sandbox.kbdResolve(K('ArrowDown'), inL), { action: 'row-move', delta: 1 });
-check('up moves one row back',
-  sandbox.kbdResolve(K('ArrowUp'), inL), { action: 'row-move', delta: -1 });
-check('page down moves ten', sandbox.kbdResolve(K('PageDown'), inL), { action: 'row-move', delta: 10 });
-check('page up moves ten back', sandbox.kbdResolve(K('PageUp'), inL), { action: 'row-move', delta: -10 });
-check('right opens the row', act('ArrowRight', inL), 'row-open');
-check('Home jumps to the first row', act('Home', inL), 'row-first');
-check('End jumps to the last', act('End', inL), 'row-last');
-check('space ticks the row', act(' ', inL), 'row-tick');
-check('left steps OUT of the list, it does not go back', act('ArrowLeft', inL), 'leave-list');
-check('and still nothing fires while typing in a list',
-  ARROWS.filter(k => act(k, { inList: true, typing: true }) !== null), []);
+// Home and End mean top and bottom of a page until a list is actually being
+// driven. Taking them before that is taking something people already use.
+check('Home belongs to the page until a row is selected', act('Home', {}), null);
+check('End too', act('End', {}), null);
+check('but once a row is selected, Home is the first row', act('Home', { onRow: true }), 'row-first');
+check('and End the last', act('End', { onRow: true }), 'row-last');
+check('page down moves ten rows',
+  sandbox.kbdResolve(K('PageDown'), { onRow: true }), { action: 'row-move', delta: 10 });
+check('page up ten back',
+  sandbox.kbdResolve(K('PageUp'), { onRow: true }), { action: 'row-move', delta: -10 });
+
+check('right opens the selected row', act('ArrowRight', { onRow: true }), 'row-open');
+check('Enter opens it too', act('Enter', { onRow: true }), 'row-open');
+check('space ticks its box', act(' ', { onRow: true }), 'row-tick');
+check('with no row selected, Enter presses whatever is focused',
+  act('Enter', { control: true }), 'activate');
+check('and does nothing at all when nothing is focused', act('Enter', {}), null);
+
+check('nothing fires while typing, however the page is arranged',
+  ARROWS.filter(k => act(k, { typing: true }) !== null
+              || act(k, { typing: true, onRow: true }) !== null
+              || act(k, { typing: true, pane: 'sidebar' }) !== null), []);
 
 check('slash goes to the search box', act('/'), 'search');
 check('question mark opens the shortcut list', act('?'), 'help');
 check('a letter on its own does nothing', act('z'), null);
+
+console.log('\n[4b] the side arrows cross between the sidebar and the page');
+// Focus used to go into the sidebar and stay there: down moved along it, and
+// nothing brought it back out except tabbing through the whole thing.
+check('left crosses to the sidebar', act('ArrowLeft', {}), 'pane-sidebar');
+check('and from the sidebar, RIGHT COMES BACK OUT',
+  act('ArrowRight', { pane: 'sidebar' }), 'pane-main');
+check('left in the sidebar does nothing — there is nothing further left',
+  act('ArrowLeft', { pane: 'sidebar' }), null);
+check('down moves along the sidebar',
+  sandbox.kbdResolve(K('ArrowDown'), { pane: 'sidebar' }), { action: 'group-move', delta: 1 });
+check('up moves back along it',
+  sandbox.kbdResolve(K('ArrowUp'), { pane: 'sidebar' }), { action: 'group-move', delta: -1 });
+check('Enter opens the sidebar link', act('Enter', { pane: 'sidebar' }), 'activate');
+check('the sidebar does not steal Home and End either',
+  ['Home', 'End', 'PageUp', 'PageDown'].filter(k => act(k, { pane: 'sidebar' }) !== null), []);
+check('right with a row selected opens the row, it does not jump panes',
+  act('ArrowRight', { onRow: true }), 'row-open');
 
 console.log('\n[5] "g" then a key jumps to a screen');
 check('g alone only arms the sequence',
@@ -188,14 +222,12 @@ check('and so is Space', act(' ', { control: true }), 'activate');
 // "activate" does not mean "click it". A real button already acts on Enter, and
 // the handler presses only the divs that were put in the tab order — asserted
 // against a real button in [10b].
-check('the arrows do NOT move a list from a focused button',
-  act('ArrowDown', { control: true }), null);
-check('they do once focus is in the list itself',
-  act('ArrowDown', { control: true, inList: true }), 'row-move');
+check('the arrows still move the list from a focused button — nothing else wants them',
+  act('ArrowDown', { control: true }), 'row-move');
+check('but not from a field', act('ArrowDown', { control: true, typing: true }), null);
 check('and Escape still works', act('Escape', { control: true }), 'escape');
-check('with nothing focused at all, Enter does nothing', act('Enter', {}), null);
-check('it opens a row only once focus is in the list',
-  act('Enter', { inList: true, control: true }), 'activate');
+check('with nothing focused and no row picked, Enter does nothing', act('Enter', {}), null);
+check('it opens the row once one is selected', act('Enter', { onRow: true }), 'row-open');
 
 const ctl = (tag, attrs) => ({ tagName: tag, getAttribute: k => (attrs || {})[k] || null });
 check('a button is a control', sandbox.kbdIsControl(ctl('BUTTON')), true);
@@ -209,25 +241,16 @@ check('tabindex="-1" is not in the tab order, so not a control',
   sandbox.kbdIsControl(ctl('DIV', { tabindex: '-1' })), false);
 check('nothing focused is not a control', sandbox.kbdIsControl(null), false);
 
-console.log('\n[5c] tabs and the sidebar move under the arrows');
-check('right moves along a strip of tabs',
-  sandbox.kbdResolve(K('ArrowRight'), { control: true, group: 'horizontal' }),
+console.log('\n[5c] a strip of tabs moves under the side arrows');
+check('right moves along the tabs',
+  sandbox.kbdResolve(K('ArrowRight'), { control: true, pane: 'tabs' }),
   { action: 'group-move', delta: 1 });
-check('left moves back along it',
-  sandbox.kbdResolve(K('ArrowLeft'), { control: true, group: 'horizontal' }),
+check('left moves back along them',
+  sandbox.kbdResolve(K('ArrowLeft'), { control: true, pane: 'tabs' }),
   { action: 'group-move', delta: -1 });
-check('down moves along the sidebar',
-  sandbox.kbdResolve(K('ArrowDown'), { control: true, group: 'vertical' }),
-  { action: 'group-move', delta: 1 });
-check('and left in the sidebar is not a group move',
-  act('ArrowLeft', { control: true, group: 'vertical' }), null);
-// Going back in history because somebody pressed left on a button is the kind
-// of surprise that loses work.
-check('left on a button does NOT go back', act('ArrowLeft', { control: true }), null);
-check('right on a button does NOT open a row', act('ArrowRight', { control: true }), null);
-check('and with nothing focused, left does nothing at all', act('ArrowLeft', {}), null);
-check('a group cannot be moved while typing in it',
-  act('ArrowRight', { typing: true, group: 'horizontal' }), null);
+check('Enter presses the focused tab', act('Enter', { control: true, pane: 'tabs' }), 'activate');
+check('tabs cannot be moved while typing',
+  act('ArrowRight', { typing: true, pane: 'tabs' }), null);
 
 console.log('\n[6] an open palette owns the keyboard');
 check('the list behind it does not move',
@@ -299,6 +322,70 @@ check('and moving in the other is independent',
 check('opening from a list opens ITS row, not the first on the page',
   (sandbox.kbdCurrentRow(null, fromPos) || {}).id, 'p1');
 
+// Hand the document back to the one the sections below were written against.
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
+console.log('\n[6c] focus can always get out of the sidebar again');
+// The bug: arrow into the sidebar and focus stayed there. Down moved along it,
+// left did nothing, and the only way back to the page was to Tab through every
+// remaining link. On a wide screen that is most of the app out of reach.
+const domP = new JSDOM(`<!doctype html><html><body><div class="app">
+  <aside class="sidebar">
+    <div class="nav-item" id="nav1" tabindex="0" role="link">Dashboard</div>
+    <div class="nav-item active" id="nav2" tabindex="0" role="link">Sales Orders</div>
+    <div class="nav-item" id="nav3" tabindex="0" role="link">Customers</div>
+  </aside>
+  <div class="tabs"><button class="tab" id="tabA">Overview</button></div>
+  <main class="main">
+    <button id="firstbtn">Edit items</button>
+    <table class="t" id="mainlist"><tbody>
+      <tr id="m1" style="cursor: pointer"><td>SO/FY26/0001</td></tr>
+      <tr id="m2" style="cursor: pointer"><td>SO/FY26/0002</td></tr>
+    </tbody></table>
+  </main>
+</div></body></html>`);
+const DP = domP.window.document;
+sandbox.document = DP;
+sandbox.getComputedStyle = domP.window.getComputedStyle.bind(domP.window);
+sandbox.kbdEnhance();
+
+check('a sidebar link reports the sidebar', sandbox.kbdPaneOf(DP.getElementById('nav2')), 'sidebar');
+check('a tab reports the tabs', sandbox.kbdPaneOf(DP.getElementById('tabA')), 'tabs');
+check('a button on the page reports the page', sandbox.kbdPaneOf(DP.getElementById('firstbtn')), 'main');
+check('and so does nothing in particular', sandbox.kbdPaneOf(DP.body), 'main');
+
+check('crossing left lands on the screen you are actually on',
+  (sandbox.kbdFocusSidebar() || {}).id, 'nav2');
+check('and focus really moved there', DP.activeElement.id, 'nav2');
+check('crossing back right lands on the list, which the arrows then drive',
+  (sandbox.kbdFocusMain() || {}).id, 'mainlist');
+check('and focus really moved back', DP.activeElement.id, 'mainlist');
+check('so the sidebar is never a dead end', sandbox.kbdPaneOf(DP.activeElement), 'main');
+
+// With no list on the screen, coming back out still has to land somewhere.
+const domQ = new JSDOM(`<!doctype html><html><body><div class="app">
+  <aside class="sidebar"><div class="nav-item" id="s1" tabindex="0">Settings</div></aside>
+  <main class="main"><p>A form with no list at all</p><button id="save">Save</button></main>
+</div></body></html>`);
+sandbox.document = domQ.window.document;
+sandbox.getComputedStyle = domQ.window.getComputedStyle.bind(domQ.window);
+check('on a screen with no list, right lands on the first control',
+  (sandbox.kbdFocusMain() || {}).id, 'save');
+check('and the sidebar still takes focus', (sandbox.kbdFocusSidebar() || {}).id, 's1');
+
+// Nothing focused at all: the arrows still have to find the list.
+sandbox.document = DP;
+sandbox.getComputedStyle = domP.window.getComputedStyle.bind(domP.window);
+sandbox.kbdClearCursor();
+check('with nothing focused, down finds the list on the page',
+  (sandbox.kbdMove(1, null, DP.body) || {}).id, 'm1');
+check('and keeps going', (sandbox.kbdMove(1, null, DP.body) || {}).id, 'm2');
+// Must be asked of the document that screen actually lives in.
+sandbox.document = domQ.window.document;
+sandbox.getComputedStyle = domQ.window.getComputedStyle.bind(domQ.window);
+check('on a screen with no list, it moves nothing and the page scrolls',
+  sandbox.kbdMove(1, null, domQ.window.document.body), null);
 // Hand the document back to the one the sections below were written against.
 sandbox.document = D;
 sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
