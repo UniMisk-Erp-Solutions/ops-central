@@ -168,13 +168,17 @@ function kbdResolve(e, ctx) {
   // control, which may want them for itself. Scoped to those two keys: a bare
   // `if (control) return null` here swallows Enter before the line below ever
   // sees it, and every button on the page goes dead.
-  if (control && (key === 'ArrowLeft' || key === 'ArrowRight')) return null;
-  // Crossing panes reaches past a dialog to the page it is covering.
+  // Left crosses to the sidebar from ANYWHERE on the page — a focused button
+  // included. It is not destructive and there is nothing else to its left, so a
+  // guard here only strands somebody who has tabbed into the page. (Crossing
+  // panes would reach past a dialog to the page it covers, so not from under
+  // one; and on a tab strip left already moved along the tabs, above.)
   if (key === 'ArrowLeft') return dialog ? null : { action: 'pane-sidebar' };
-  if (key === 'ArrowRight') {
-    if (onRow) return { action: 'row-open' };
-    return dialog ? null : { action: 'pane-main' };
-  }
+
+  // Right opens the selected row. With nothing selected there is nothing to the
+  // right of the page, so it does nothing — crossing "out to the page" from
+  // somewhere already on it moved focus for no reason.
+  if (key === 'ArrowRight') return onRow ? { action: 'row-open' } : null;
 
   // WHATEVER HAS FOCUS WINS. A row being selected somewhere on the page must
   // never stop the button under your finger from being pressed — that is a
@@ -186,6 +190,12 @@ function kbdResolve(e, ctx) {
                                   : (onRow ? { action: 'row-tick' } : null);
 
   if (['PageDown', 'PageUp', 'Home', 'End'].includes(key)) return null;
+
+  // Every screen has one obvious blue button — New Sales Order, New GRN, Create
+  // BOQ, Receive. Tabbing to it works, but not having to reach for anything is
+  // the whole point. Inside a dialog Ctrl+Enter is already that button, so this
+  // stays out of the way there.
+  if (key === 'n' && !dialog) return { action: 'primary-action' };
 
   // The tabs across a record, from anywhere on the page. Bracket keys sit next
   // to each other and are on every layout; the digits go straight to one, which
@@ -914,6 +924,16 @@ function KeyboardLayer() {
           if (kbdTabTo(act.to)) e.preventDefault();
           return;
 
+        case 'primary-action': {
+          // The page's own primary button, the one it is for. Nothing happens
+          // on a screen without one, so the key goes back to the page.
+          const main = document.querySelector('.main');
+          const btn = main && Array.from(main.querySelectorAll('.btn-primary:not([disabled])'))
+            .filter(kbdVisible)[0];
+          if (btn) { e.preventDefault(); btn.focus(); btn.click(); }
+          return;
+        }
+
         case 'pane-sidebar':
           // Left crosses to the sidebar. It does NOT go back in history: doing
           // that from a stray keypress is how somebody loses a half-typed form.
@@ -1065,6 +1085,11 @@ const KBD_SHEET = [
     ['] / [', 'next tab / previous tab, from anywhere'],
     ['1 … 9', 'straight to that tab'],
     ['← / →', 'along them, once one has focus'],
+  ]},
+  { group: 'Doing the thing', keys: [
+    ['n', 'the blue button on this screen — new order, new GRN, create'],
+    ['Enter', 'press whatever is focused'],
+    ['Ctrl + Enter', 'save the open dialog'],
   ]},
   { group: 'Getting somewhere', keys: [
     ['Ctrl + K', 'the command palette — every screen and record'],

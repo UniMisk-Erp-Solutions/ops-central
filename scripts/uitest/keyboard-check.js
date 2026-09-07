@@ -263,6 +263,39 @@ check('nor as part of a browser combination',
 check('a digit mid-way through a g jump just forgets the jump',
   act('3', { pending: 'g' }), 'clear-pending');
 
+console.log('\n[5d2] left ALWAYS reaches the sidebar from the page');
+// The bug: left was blocked whenever a control had focus, to stop it going back
+// in browser history. It stopped doing that long ago — it crosses to the
+// sidebar now — so the guard only stranded you. Cross right into the page, land
+// on a button, and there was no way back with the arrows at all.
+check('left goes to the sidebar with nothing focused', act('ArrowLeft', {}), 'pane-sidebar');
+check('and from a focused button too', act('ArrowLeft', { control: true }), 'pane-sidebar');
+check('and with a row selected', act('ArrowLeft', { onRow: true }), 'pane-sidebar');
+check('and from a focused list', act('ArrowLeft', { control: true, inList: true }), 'pane-sidebar');
+check('in the sidebar it stays put — nothing is further left',
+  act('ArrowLeft', { pane: 'sidebar', control: true }), null);
+check('on a tab strip it still moves along the tabs',
+  act('ArrowLeft', { pane: 'tabs', control: true }), 'group-move');
+check('and never from under a dialog', act('ArrowLeft', { dialog: true, control: true }), null);
+check('right out of the sidebar still crosses to the page',
+  act('ArrowRight', { pane: 'sidebar', control: true }), 'pane-main');
+check('right on the page opens the selected row',
+  act('ArrowRight', { onRow: true, control: true }), 'row-open');
+check('and does nothing when no row is selected — there is nothing to its right',
+  act('ArrowRight', { control: true }), null);
+
+console.log('\n[5d3] one key for the button this screen is for');
+// Every screen has one obvious blue button — New Sales Order, New GRN, Create
+// BOQ. Tabbing to it works, but the whole point of a keyboard is not having to.
+check('n presses the primary button on the page', act('n', {}), 'primary-action');
+check('not while typing a name', act('n', { typing: true }), null);
+check('not inside a dialog, where Ctrl+Enter is the primary button',
+  act('n', { dialog: true }), null);
+check('not behind the palette', act('n', { overlay: true }), null);
+check('not with a modifier held', act('n', {}, { ctrlKey: true }), null);
+check('and g then n is still the GRN screen, not this',
+  sandbox.kbdResolve(K('n'), { pending: 'g' }), { action: 'goto', route: 'grn' });
+
 console.log('\n[5e] a focused button is pressed, even with a row selected');
 // The bug: once a row was selected, Enter meant "open the row" everywhere —
 // including while focus sat on a button. Tab to "New Sales Order", press Enter,
@@ -276,8 +309,11 @@ check('with nothing focused, Enter still opens the selected row',
 check('and Space still ticks it', act(' ', { onRow: true }), 'row-tick');
 check('focus on the list itself still means the row — the handler routes it',
   act('Enter', { control: true, inList: true, onRow: true }), 'activate');
-check('right on a focused button does not open the row either',
-  act('ArrowRight', { control: true, onRow: true }), null);
+// Enter and Space are the focused control's, because a button uses them. The
+// side arrows are not — a button does nothing with them — so right stays the
+// selected row's, wherever focus happens to be.
+check('right still opens the selected row, which no button wanted anyway',
+  act('ArrowRight', { control: true, onRow: true }), 'row-open');
 
 console.log('\n[5f] an open dialog owns the screen');
 // A dialog is meant to be the only thing you can operate. Left crossed to the
@@ -469,6 +505,34 @@ sandbox.document = domQ.window.document;
 sandbox.getComputedStyle = domQ.window.getComputedStyle.bind(domQ.window);
 check('on a screen with no list, it moves nothing and the page scrolls',
   sandbox.kbdMove(1, null, domQ.window.document.body), null);
+// Hand the document back to the one the sections below were written against.
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
+console.log('\n[6c2] "n" presses the blue button this screen is for');
+const domN2 = new JSDOM(`<!doctype html><html><body><div class="app">
+  <aside class="sidebar"><div class="nav-item active" tabindex="0">Sales Orders</div></aside>
+  <main class="main">
+    <button class="btn" id="secondary">Import sheet</button>
+    <button class="btn btn-primary" id="theblue">New Sales Order</button>
+    <button class="btn btn-primary" id="later" disabled>Approve</button>
+  </main>
+</div></body></html>`);
+const DN2 = domN2.window.document;
+sandbox.document = DN2;
+sandbox.getComputedStyle = domN2.window.getComputedStyle.bind(domN2.window);
+sandbox.kbdEnhance();
+
+check('a primary button is reachable by Tab, as a button always was',
+  DN2.getElementById('theblue').getAttribute('tabindex'), null);
+check('and the pass never took it out of the tab order',
+  DN2.getElementById('theblue').getAttribute('tabindex') !== '-1', true);
+const blues = Array.from(DN2.querySelectorAll('.main .btn-primary:not([disabled])'))
+  .filter(sandbox.kbdVisible);
+check('the screen primary button is the first enabled blue one',
+  blues.length && blues[0].id, 'theblue');
+check('a disabled one is never it', blues.some(b => b.id === 'later'), false);
+
 // Hand the document back to the one the sections below were written against.
 sandbox.document = D;
 sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
