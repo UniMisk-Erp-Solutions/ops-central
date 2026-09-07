@@ -625,6 +625,10 @@ function SourcingDetail({ srcId }) {
   if (!src) return <div className="page"><div className="empty">{state.loaded ? <><div className="empty-title">Inquiry not found</div><button className="btn mt-2" onClick={() => navigate('sourcing')}>← Back</button></> : <div className="empty-title">Loading…</div>}</div></div>;
 
   const cust = getCustomer(src.customer_id);
+  // Declared here, not further down: it is read by canEditPrices below, and a
+  // const cannot be read before its declaration runs. It threw for every role
+  // that can convert an inquiry, and took the whole page with it.
+  const locked = src.status === 'Converted';
   const margin = computeMargin(src, picks, getProduct);
   // Per-line (bundle) vendor cost = sum of its components' chosen-vendor unit cost.
   const unitCostByPid = {}; (margin.perItem || []).forEach(pi => { unitCostByPid[pi.product_id] = pi.unit; });
@@ -661,7 +665,6 @@ function SourcingDetail({ srcId }) {
     setLinePrices(m => ({ ...m, [l.id]: bundleUnit }));
     mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? { ...x, our_price: null, lines: (x.lines || []).map(ln => ln.id === l.id ? { ...ln, unit_price: bundleUnit, components: (ln.components || []).map(c => ({ ...c, sell_price: Number(cp[c.product_id]) || 0 })) } : ln) } : x) }), { action: 'set-our-price', entity: 'Sourcing', entity_id: src.id, detail: `Component prices set · ${src.src_no}` });
   };
-  const locked = src.status === 'Converted';
   const hasQuotes = (src.quote_vendors || []).length > 0;
   // Implementation-only inquiries have no supply bundles → no vendor sourcing step.
   const hasSupply = (src.lines || []).length > 0;

@@ -533,6 +533,74 @@ check('the three clickable rows, and no others',
 check('a total row with no handler is skipped', sandbox.kbdRows().some(r => r.id === 'dead'), false);
 check('and a row can opt out by hand', sandbox.kbdRows().some(r => r.id === 'skip'), false);
 
+console.log('\n[7b] a row you can WORK IN counts, not only one that opens');
+// Most tables in this app are not lists of records: they are the bill of
+// materials, the receive lines, the tax lines, the allocation grid. Their rows
+// open nothing, but they hold the tick boxes and quantities the work happens
+// in. Requiring a clickable row meant the arrows did nothing on most of the
+// screens where they help most — which is exactly what was reported.
+const domW = new JSDOM(`<!doctype html><html><body><main class="main">
+  <table class="t" id="receive"><tbody>
+    <tr id="w1"><td>Chassis</td><td><input type="checkbox"></td><td><input type="number" value="1"></td></tr>
+    <tr id="w2"><td>PSU</td><td><input type="checkbox"></td><td><input type="number" value="4"></td></tr>
+    <tr id="w3"><td>Cable</td><td colspan="2"><button>Split</button></td></tr>
+    <tr id="wdis"><td>Retired line</td><td><input type="checkbox" disabled></td></tr>
+    <tr id="wtot"><td>Grand total</td><td>5</td></tr>
+    <tr id="wskip" data-kbd-skip><td>opted out</td><td><input type="text"></td></tr>
+  </tbody></table>
+</main></body></html>`);
+const DW = domW.window.document;
+sandbox.document = DW;
+sandbox.getComputedStyle = domW.window.getComputedStyle.bind(domW.window);
+
+check('a row with a tick box is worth moving to',
+  sandbox.kbdRowUsable(DW.getElementById('w1')), true);
+check('so is one with a quantity to type',
+  sandbox.kbdRowUsable(DW.getElementById('w2')), true);
+check('and one with a button in it', sandbox.kbdRowUsable(DW.getElementById('w3')), true);
+check('a totals row is not — stopping on "Grand total" helps nobody',
+  sandbox.kbdRowUsable(DW.getElementById('wtot')), false);
+check('nor is a row whose only control is disabled',
+  sandbox.kbdRowUsable(DW.getElementById('wdis')), false);
+check('and a row can still opt out by hand',
+  sandbox.kbdRowUsable(DW.getElementById('wskip')), false);
+check('so the arrows walk exactly the rows with work in them',
+  sandbox.kbdRows(null, DW.body).map(r => r.id), ['w1', 'w2', 'w3']);
+check('and the table counts as a list, worth a tab stop',
+  sandbox.kbdLists().map(t => t.id), ['receive']);
+
+// Right, on a row that opens nothing, goes INTO it — which is what somebody
+// working down a receive sheet wants next.
+check('such a row does not pretend to open anything',
+  sandbox.kbdRowOpens(DW.getElementById('w1')), false);
+sandbox.kbdMove(1, null, DW.body);
+check('right hands focus to the first control in the row',
+  sandbox.kbdOpenRow(null, DW.body), true);
+check('and it really is that control',
+  DW.activeElement.type, 'checkbox');
+check('space still ticks it from the row', sandbox.kbdTickRow(null, DW.body), true);
+
+// A row that DOES open something is still clicked, exactly as before.
+const domO = new JSDOM(`<!doctype html><html><body><main class="main"><table class="t"><tbody>
+  <tr id="o1" style="cursor: pointer"><td>SO/FY26/0001</td><td><input type="checkbox"></td></tr>
+</tbody></table></main></body></html>`);
+const DO = domO.window.document;
+sandbox.document = DO;
+sandbox.getComputedStyle = domO.window.getComputedStyle.bind(domO.window);
+let rowOpened = 0;
+DO.getElementById('o1').addEventListener('click', () => rowOpened++);
+sandbox.kbdMove(1, null, DO.body);
+check('a row that opens a record is clicked, not stepped into',
+  sandbox.kbdRowOpens(DO.getElementById('o1')), true);
+sandbox.kbdOpenRow(null, DO.body);
+check('and its own handler ran', rowOpened, 1);
+check('the checkbox inside it did NOT take focus instead',
+  DO.activeElement === DO.getElementById('o1').querySelector('input'), false);
+
+// Hand the document back to the one the sections below were written against.
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
 console.log('\n[8] moving, and stopping at the ends');
 check('the first press lands on the first row', sandbox.kbdMove(1).id, 'r1');
 check('the next moves down one', sandbox.kbdMove(1).id, 'r2');

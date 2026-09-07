@@ -31,6 +31,16 @@ function fmtDate(iso) {
   return `${dd}-${months[dt.getMonth()]}-${dt.getFullYear()}`;
 }
 
+// n days after an ISO date, as an ISO date. Empty for anything that is not a
+// date: new Date(undefined).toISOString() throws RangeError, and a throw
+// during render takes the whole page with it.
+function addDays(iso, n) {
+  if (!iso) return '';
+  const t = new Date(iso + (String(iso).length === 10 ? 'T00:00:00' : '')).getTime();
+  if (!isFinite(t)) return '';
+  return new Date(t + n * 86400000).toISOString().slice(0, 10);
+}
+
 function daysBetween(a, b) {
   const A = new Date(a + 'T00:00:00');
   const B = new Date(b + 'T00:00:00');
@@ -710,7 +720,7 @@ Object.assign(window, {
   docStem, docNo, boqNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
   nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
-  inrFmt, inr, inrK, fmtDate, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
+  inrFmt, inr, inrK, fmtDate, addDays, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
   Icon, StatusBadge, PriorityBadge, Avatar, Delta, Toggle, Modal,
   ToastProvider, useToast,
   useAliasMap, invalidateAliasMap, partyItemName,

@@ -1,7 +1,7 @@
 # The check suite
 
 ```bash
-for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering boq keyboard; do
+for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering boq keyboard reach; do
   node scripts/uitest/$t-check.js frontend
 done
 ```
@@ -42,6 +42,7 @@ broken.
 | `status-check` | every lifecycle transition, forward-only, manual states untouched, order numbering | orders sat on Draft with goods received against them |
 | `numbering-check` | every document number's format and uniqueness; quantity formatting; per-line tax including the TDS sign | two POs shared one e-Bill number; quantities read "1.0000" |
 | `keyboard-check` | that no shortcut fires while somebody is typing, that the browser keeps its own, row movement and its ends, that every clickable div is reachable by Tab while a row's children are not, that up/down drive the list while Home/End stay with the page until a row is picked, that focus can always get back out of the sidebar, that the record tabs answer from anywhere and step from whichever tab is really active, that a group of buttons is one tab stop rather than one each, that Enter walks a dialog's fields while a textarea keeps it, that nothing touches browser history, and that the palette cannot offer a screen the sidebar hides | a stray key mid-entry loses an accountant's work, and a palette is a permissions hole if it is a second list |
+| `reach-check` | that all 31 screens render **with real work in the tenant**, that nothing carrying a pointer cursor is left out of the tab order, that Down moves on every screen with rows, and that a tab strip is one stop | the engine was right in isolation while the arrows did nothing on half the app. Its first run found two page-whiting crashes: a `const` read above its declaration in `SourcingDetail`, and `new Date(undefined).toISOString()` on an invoice with no date |
 | `boq-check` | free quantity per billing group, oldest-first dispatch allocation, seven-of-ten raises nothing, one invoice per BOQ ever, the Final sweep, and that the expanded per-item figures sum to the summary row | a BOQ that bills twice, or one closed by goods belonging to an earlier BOQ, is money out of the door |
 
 ## How to write one

@@ -200,9 +200,14 @@ const KBD_GOTO = {
 // list would go stale and move the cursor to the wrong row, which for somebody
 // approving payments is the worst possible bug.
 
-// The rows a person can actually act on. Every clickable row in this app is
-// marked the same way — an inline cursor:pointer — so no screen needed changing
-// to take part, and a screen written tomorrow joins in for free.
+// The rows a person can actually act on: ones that open a record, and ones that
+// merely hold a tick box or a quantity to type. Most tables in this app are the
+// second kind — the bill of materials, the receive lines, the tax lines — and
+// they are where the work happens.
+//
+// Nothing had to be marked up for this. A row that opens something already
+// carries the app's own mark for that, an inline cursor:pointer; a row you can
+// work in is one with a control in it.
 // `from` is whatever has focus. If it is inside a list, THAT list is the scope —
 // a screen can hold several, and the arrows must drive the one being used, not
 // whichever happens to be first on the page.
@@ -214,19 +219,40 @@ function kbdRows(doc, from) {
   if (!scope || !scope.querySelectorAll) return [];
   const out = [];
   const sel = scope.matches && scope.matches('table.t') ? 'tbody tr' : 'table.t tbody tr';
-  scope.querySelectorAll(sel).forEach(tr => {
-    if (tr.getAttribute('data-kbd-skip') != null) return;
-    let pointer = false;
-    try {
-      const styleAttr = String(tr.getAttribute('style') || '');
-      pointer = /cursor\s*:\s*pointer/i.test(styleAttr);
-      if (!pointer && typeof getComputedStyle === 'function') {
-        pointer = getComputedStyle(tr).cursor === 'pointer';
-      }
-    } catch (err) { pointer = false; }
-    if (pointer) out.push(tr);
-  });
+  scope.querySelectorAll(sel).forEach(tr => { if (kbdRowUsable(tr)) out.push(tr); });
   return out;
+}
+
+// Can anything be done on this row?
+//
+//   it opens something          — a pointer cursor, the app's own mark for that
+//   or it holds a control       — a tick box, a quantity, a button
+//
+// A totals row has neither, and is skipped: stopping the cursor on "Grand total"
+// helps nobody. A row can also opt out with data-kbd-skip.
+function kbdRowUsable(tr) {
+  if (!tr || !tr.getAttribute) return false;
+  if (tr.getAttribute('data-kbd-skip') != null) return false;
+  try {
+    const styleAttr = String(tr.getAttribute('style') || '');
+    if (/cursor\s*:\s*pointer/i.test(styleAttr)) return true;
+    if (typeof getComputedStyle === 'function'
+        && getComputedStyle(tr).cursor === 'pointer') return true;
+  } catch (err) { /* no layout — fall through to the controls */ }
+  return !!(tr.querySelector && tr.querySelector(
+    'input:not([disabled]):not([type="hidden"]), select:not([disabled]),'
+    + ' textarea:not([disabled]), button:not([disabled]), [data-kbd-click]'));
+}
+
+// Does the row open something of its own, or does it only hold controls?
+function kbdRowOpens(tr) {
+  if (!tr || !tr.getAttribute) return false;
+  try {
+    const styleAttr = String(tr.getAttribute('style') || '');
+    if (/cursor\s*:\s*pointer/i.test(styleAttr)) return true;
+    return typeof getComputedStyle === 'function'
+      && getComputedStyle(tr).cursor === 'pointer';
+  } catch (err) { return false; }
 }
 
 // Where the cursor is now. Held as an attribute rather than a class because
@@ -279,10 +305,26 @@ function kbdCurrentRow(doc, from) {
 
 // Open the row under the cursor. A real click, so the screen's own handler runs
 // — this layer knows nothing about what any particular row does, and must not.
+// Enter, or right, on the selected row.
+//
+// A row that opens a record is clicked, exactly as a mouse would. A row that
+// only holds controls — a quantity to type, a box to tick — hands focus to the
+// first of them instead, which is what somebody moving down a receive sheet
+// actually wants next.
 function kbdOpenRow(doc, from) {
   const row = kbdCurrentRow(doc, from);
   if (!row) return false;
-  if (typeof row.click === 'function') { row.click(); return true; }
+  if (kbdRowOpens(row)) {
+    if (typeof row.click === 'function') { row.click(); return true; }
+    return false;
+  }
+  const first = row.querySelector && row.querySelector(
+    'input:not([disabled]):not([type="hidden"]), select:not([disabled]),'
+    + ' textarea:not([disabled]), button:not([disabled]), [data-kbd-click]');
+  if (first && first.focus) {
+    try { first.focus(); if (first.select) first.select(); } catch (e) {}
+    return true;
+  }
   return false;
 }
 
@@ -356,9 +398,7 @@ function kbdLists(doc) {
   return Array.from(d.querySelectorAll('table.t')).filter(t => {
     const body = t.querySelector('tbody');
     if (!body) return false;
-    return Array.from(body.querySelectorAll('tr')).some(
-      tr => (tr.getAttribute('style') || '').match(/cursor\s*:\s*pointer/i)
-            && tr.getAttribute('data-kbd-skip') == null);
+    return Array.from(body.querySelectorAll('tr')).some(kbdRowUsable);
   });
 }
 
@@ -654,6 +694,8 @@ window.KBD_CLICK_CLASSES = KBD_CLICK_CLASSES;
 window.kbdResolve = kbdResolve;
 window.KBD_GOTO = KBD_GOTO;
 window.kbdRows = kbdRows;
+window.kbdRowUsable = kbdRowUsable;
+window.kbdRowOpens = kbdRowOpens;
 window.kbdMove = kbdMove;
 window.kbdJump = kbdJump;
 window.kbdSetCursor = kbdSetCursor;

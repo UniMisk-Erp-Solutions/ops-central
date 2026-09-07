@@ -269,7 +269,7 @@ function InvoiceDetail({ soId, invId }) {
               <div className="dl">
                 <dt>EWB No</dt><dd className="mono">EWB-2312-0231-{(45000 + parseInt(so.id.replace('so-','')) * 33).toString()}</dd>
                 <dt>Generated via</dt><dd>NIC API · auto</dd>
-                <dt>Valid until</dt><dd className="mono">{fmtDate(new Date(new Date(so.invoice_date).getTime() + 3 * 86400000).toISOString().slice(0,10))} 23:59</dd>
+                <dt>Valid until</dt><dd className="mono">{addDays(docDate, 3) ? `${fmtDate(addDays(docDate, 3))} 23:59` : '—'}</dd>
                 <dt>Vehicle</dt><dd className="mono">MH-04-EZ-9921</dd>
                 <dt>Distance</dt><dd>247 km</dd>
                 <dt>Type</dt><dd>Outward · Supply</dd>
