@@ -20,6 +20,7 @@ touches browser history.
 |---|---|
 | `Tab` / `Shift+Tab` | every button, tab, card, chip, swatch, list and field, in order |
 | `Enter` / `Space` | press whatever is focused |
+| **`Alt` + letter** | **straight to that screen or button — hold `Alt` to see every letter** |
 | `n` | the blue button this screen is for — new order, new GRN, create |
 | `Ctrl + K` | the command palette — every screen and record, by name |
 | `/` | jump to the search box on this screen |
@@ -236,6 +237,41 @@ select and a button already do something with it, and any field can opt out with
 in **one** place — the keyboard layer, not the dialog. If the dialog pressed the
 button as well, one `Ctrl+Enter` would submit twice.
 
+### Alt and a letter — the Tally and Excel way
+
+**Hold `Alt` and every screen and button on the page shows its letter.** Press
+the letter and you are there. No hunting, no counting Tab presses.
+
+**A screen's letter never moves.** It is the same letter as its `g` jump — one
+letter per screen, two ways to press it — taken from a fixed table rather than
+from whatever happens to be on the page, so it is worth learning:
+
+| | | | | |
+|---|---|---|---|---|
+| `d` Dashboard | `t` My Tasks | `s` Sales Orders | `c` Customers | `q` Sourcing |
+| `g` Godowns | `m` SCM | `l` Surplus Pool | `x` Transfers | `r` RFQ |
+| `p` Vendor POs | `n` GRN | `w` 3-Way Match | `v` Vendors | `i` Invoices |
+| `o` Collections | `b` Products | `k` Item Mapping | `a` Audit | `u` Customisation |
+
+**A button's letter comes from its own label** — first free letter, in the order
+the buttons appear. Those move between screens, which is exactly why holding
+`Alt` shows them. A busy screen can run its own labels out; then it takes a free
+letter no screen uses, and only failing that one that does. A button nobody can
+press is worse than an arbitrary letter.
+
+**Where a button claims a letter a screen also uses, the button wins** — it is
+the thing in front of you — and the screen's badge goes grey so you can see what
+happened. That is how the ribbon and the Tally menu behave. When the button goes
+away, the screen's letter comes straight back.
+
+Inside a dialog, only the dialog's own buttons answer `Alt` — the page behind it
+is not something a keystroke should reach.
+
+It works **mid-word in a field**. `Alt` types nothing, so there is nothing for it
+to interrupt, and being able to leave a half-filled screen the moment you think
+of it is the point. `Ctrl+Alt` and `Cmd+Alt` are left alone, and so is `Alt+←`,
+which is still the browser going back.
+
 ### The tabs on a record
 
 An order carries nine tabs and they are the main way around it, so they get keys
@@ -371,6 +407,7 @@ without matching half the list.
 | `kbdIsTyping`, `kbdIsControl` — the two guards | `frontend/src/keyboard.jsx` |
 | `kbdRows`, `kbdMove`, `kbdOpenRow`, `kbdTickRow` — the cursor | `frontend/src/keyboard.jsx` |
 | `kbdRowUsable`, `kbdRowOpens` — what counts as a row | `frontend/src/keyboard.jsx` |
+| `KBD_NAV_KEY`, `kbdPickLetter`, `kbdAssignAccessKeys`, `kbdAccessTarget` — the Alt letters | `frontend/src/keyboard.jsx` |
 | `kbdIsClickable`, `kbdEnhance`, `kbdActivate` — the clickable divs | `frontend/src/keyboard.jsx` |
 | `kbdLists`, `kbdIsInList` — a list as one tab stop | `frontend/src/keyboard.jsx` |
 | `kbdPaneOf`, `kbdFocusSidebar`, `kbdFocusMain` — crossing the screen | `frontend/src/keyboard.jsx` |
@@ -415,6 +452,12 @@ without matching half the list.
 - **Count the presses, not the possibilities.** Every control was reachable by
   Tab for two rounds of this, and it still felt broken, because reaching the page
   cost thirty presses. A group that belongs together is one stop.
+- **On a Mac, `Option`+a letter is a dead key, not the letter.** `Alt+e` arrives
+  as `´`. `kbdAltLetter` falls back to the physical key (`e.code`), or the whole
+  feature is unusable there.
+- **The `Alt` letters for screens are DERIVED from the `g` table**, never typed
+  out a second time. Two tables would drift, and then a screen would have two
+  different letters depending on how you reached for it.
 - **A roving group's members are `tabindex="-1"` on purpose.** Exactly one holds
   the tab stop; the rest are -1 so Tab passes the group in one press. Anything
   that walks the group — `kbdGroupMove` — must therefore include -1, or it finds

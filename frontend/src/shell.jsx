@@ -99,6 +99,7 @@ function Sidebar() {
             const holdsStop = active || (!anyActive && gi === 0 && ii === 0);
             return (
               <div key={it.id} className={`nav-item ${active ? 'active' : ''}`}
+                   data-nav={it.id}
                    role="link" tabIndex={holdsStop ? 0 : -1}
                    aria-current={active ? 'page' : undefined}
                    onClick={() => navigate(it.id)}
