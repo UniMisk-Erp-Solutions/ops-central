@@ -45,7 +45,7 @@ Across the screen:
 
 | Key | What it does |
 |---|---|
-| `←` | to the sidebar, from anywhere on the page |
+| `←` | to the sidebar, from anywhere on the page (on a tab strip, along the tabs first) |
 | `→` | out of the sidebar to the page; on the page, opens the selected row |
 | `↑` `↓` in the sidebar | down the sidebar (`Enter` opens) |
 
@@ -433,6 +433,12 @@ without matching half the list.
   `if (control) return null` before the arrow handling, which swallowed `Enter`
   before the line that handles it and killed every button on the page. Scope a
   guard to the keys it is about.
+- **Anywhere the arrows mean something local, check what happens at the END of
+  it.** On a strip of tabs left moves along the tabs — and on the FIRST tab there
+  was nothing to its left, so it did nothing, and focus that had crossed into the
+  page and landed on the tabs could never get back to the sidebar. Left off the
+  first tab crosses instead. A group you can enter has to be a group you can
+  leave, in the direction you entered from.
 - **A guard written for a rule that has since changed becomes a bug.** Left and
    right were blocked on a focused control back when left meant "go back in
    browser history". Left has crossed to the sidebar for a while, and the guard

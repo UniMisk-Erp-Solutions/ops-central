@@ -537,6 +537,66 @@ check('a disabled one is never it', blues.some(b => b.id === 'later'), false);
 sandbox.document = D;
 sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
 
+console.log('\n[6c3] the first tab is not a dead end');
+// The report: right crosses into the page, but nothing crosses back. On a strip
+// of tabs left moves ALONG the tabs, and on the first one there is nothing to
+// its left — so it did nothing, and focus that had landed on the tabs could
+// never get back to the sidebar. Left off the first tab crosses instead.
+const domX = new JSDOM(`<!doctype html><html><body><div class="app">
+  <aside class="sidebar">
+    <div class="nav-item" id="xa" tabindex="-1" role="link">Dashboard</div>
+    <div class="nav-item active" id="xb" tabindex="0" role="link">Sales Orders</div>
+  </aside>
+  <main class="main">
+    <div class="tabs">
+      <button class="tab active" id="x1">Overview</button>
+      <button class="tab" id="x2">Line Items</button>
+      <button class="tab" id="x3">Procurement</button>
+    </div>
+    <table class="t" id="xlist"><tbody>
+      <tr id="xr1" style="cursor: pointer"><td>SO/FY26/0001</td></tr>
+    </tbody></table>
+  </main>
+</div></body></html>`);
+const DX = domX.window.document;
+sandbox.document = DX;
+sandbox.getComputedStyle = domX.window.getComputedStyle.bind(domX.window);
+sandbox.kbdEnhance();
+
+check('left off the FIRST tab crosses to the sidebar',
+  (sandbox.kbdGroupMoveOrExit(DX.getElementById('x1'), -1).exited || {}).id, 'xb');
+check('and focus really moved there', DX.activeElement.id, 'xb');
+check('left from a tab in the middle just moves along the strip',
+  (sandbox.kbdGroupMoveOrExit(DX.getElementById('x2'), -1).moved || {}).id, 'x1');
+check('it does not cross when it had somewhere to go',
+  sandbox.kbdGroupMoveOrExit(DX.getElementById('x2'), -1).exited, null);
+check('right off the LAST tab stays put — nothing is to its right',
+  (sandbox.kbdGroupMoveOrExit(DX.getElementById('x3'), 1).moved || {}).id, 'x3');
+check('and never crosses rightwards', sandbox.kbdGroupMoveOrExit(DX.getElementById('x3'), 1).exited, null);
+check('the top of the sidebar still clamps rather than crossing',
+  sandbox.kbdGroupMoveOrExit(DX.getElementById('xa'), -1).exited, null);
+
+// The whole round trip, which is what was reported broken.
+// Which tab holds the strip's stop depends on where it was last left, so this
+// asserts the round trip, not one particular landing spot.
+sandbox.kbdFocusMain();
+check('right out of the sidebar lands on the page',
+  sandbox.kbdPaneOf(DX.activeElement) !== 'sidebar', true);
+// Pressing left, the way somebody actually does: along the strip, then off the
+// end of it and across. It has to arrive, from wherever it landed.
+let guard = 0;
+while (sandbox.kbdPaneOf(DX.activeElement) !== 'sidebar' && guard++ < 10) {
+  if (sandbox.kbdPaneOf(DX.activeElement) === 'tabs') sandbox.kbdGroupMoveOrExit(DX.activeElement, -1);
+  else sandbox.kbdFocusSidebar();
+}
+check('and pressing left gets back to the sidebar, from wherever it landed',
+  DX.activeElement.id, 'xb');
+check('in a couple of presses, not by luck', guard <= 4, true);
+
+// Hand the document back to the one the sections below were written against.
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
 console.log('\n[6d] and they actually switch');
 const domT = new JSDOM(`<!doctype html><html><body><div class="app">
   <aside class="sidebar"><div class="nav-item active" tabindex="0">Sales Orders</div></aside>
