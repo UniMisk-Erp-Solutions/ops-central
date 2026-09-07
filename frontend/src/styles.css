@@ -795,3 +795,126 @@ table.t tr.subrow td:first-child { border-left: 2px solid var(--accent-border); 
 .doc-paper .totals { width: 320px; margin-left: auto; margin-top: 8px; }
 .doc-paper .totals td { border: none; padding: 3px 0; }
 .doc-paper .totals tr.grand td { border-top: 1px solid var(--text); border-bottom: 1px solid var(--text); padding-top: 6px; padding-bottom: 6px; font-weight: 600; }
+
+/* ===== Keyboard control ===================================================
+   The row cursor is an ATTRIBUTE, not a class: React rewrites className when a
+   row re-renders and would wipe the highlight mid-list. It leaves alone the
+   attributes it never set. */
+table.t tbody tr[data-kbd-cursor] {
+  background: var(--accent-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+table.t tbody tr[data-kbd-cursor]:hover { background: var(--accent-bg); }
+
+/* Somebody driving by keyboard has to SEE where they are. The browser default
+   outline is invisible against several of our surfaces. */
+.nav-item:focus-visible,
+.btn:focus-visible,
+[tabindex]:focus-visible,
+table.t tbody tr:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+.input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline: none; }
+
+.kbd-key {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 1px 5px;
+  margin: 0 2px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+/* ---- Command palette ---- */
+.kbd-palette-backdrop { align-items: flex-start; }
+.kbd-palette {
+  width: min(720px, 94vw);
+  margin-top: 12vh;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: 70vh;
+}
+.kbd-palette-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+.kbd-palette-input .input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  height: 26px;
+  font-size: 13.5px;
+  padding: 0;
+}
+.kbd-palette-input .input:focus { outline: none; box-shadow: none; }
+.kbd-palette-list { overflow: auto; flex: 1; padding: 4px; }
+.kbd-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-3);
+}
+.kbd-palette-row.sel { background: var(--accent-bg); color: var(--text); }
+.kbd-palette-row.sel .kbd-palette-label { color: var(--text); }
+.kbd-palette-label {
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46%;
+}
+.kbd-palette-row .trunc { max-width: 34%; }
+.kbd-palette-kind { margin-left: auto; white-space: nowrap; }
+.kbd-palette-foot {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 7px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+/* ---- Shortcut sheet ---- */
+.kbd-sheet {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 18px;
+}
+.kbd-sheet-title {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.kbd-sheet-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+}
+.kbd-sheet-row .kbd-key { flex-shrink: 0; min-width: 74px; text-align: center; }
+.kbd-goto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.kbd-goto-grid .kbd-key { min-width: 40px; }

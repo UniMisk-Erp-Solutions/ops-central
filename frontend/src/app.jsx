@@ -111,6 +111,8 @@ function App() {
         <SyncErrorBanner/>
         {Content}
       </main>
+      {/* Drives the whole app from the keyboard. Renders nothing until asked. */}
+      {typeof KeyboardLayer !== 'undefined' && <KeyboardLayer/>}
       <OpcTweaks t={t} setTweak={setTweak}/>
     </div>
   );
