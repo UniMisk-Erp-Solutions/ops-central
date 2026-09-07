@@ -28,14 +28,15 @@ touches browser history.
 | `Ctrl + Enter` | save the open dialog from any field, without walking to the end |
 | `Enter` in a dialog field | next field — and on the last one, save |
 
-The list on the page:
+The rows on the page — any row you can **act** on, whether it opens a record or
+merely holds a tick box or a quantity to type:
 
 | Key | What it does |
 |---|---|
 | `↓` `↑` | next row / previous row |
 | `PgDn` `PgUp` | ten rows at a time *(once a row is selected)* |
 | `Home` `End` | first / last row *(once a row is selected)* |
-| `→` or `Enter` | open the selected row |
+| `→` or `Enter` | open the row — or, if it opens nothing, step **into** its first field |
 | `Space` | tick the box on it |
 | `Tab` | onto a particular list — the whole list is one stop |
 
@@ -123,6 +124,31 @@ otherwise take a hundred presses to get past — and then the arrows are scoped 
 *that* list. A screen holds several: an order has its vendor POs, its BOQs, its
 documents. With nothing focused the arrows walk them in order down the page; Tab
 onto one to stay inside it.
+
+### What counts as a row
+
+Most tables in this app are not lists of records at all. They are the bill of
+materials, the receive lines, the tax lines, the allocation grid — rows that open
+nothing, but that hold the tick boxes and quantities the work actually happens
+in.
+
+The first version only counted rows that **open** something, marked by the app's
+own inline `cursor: pointer`. That meant `↑` `↓` did nothing on most of the
+screens where they help most — the Virtual Godown detail, a GRN, the BOM. Which
+is exactly what came back as "up and down aren't working".
+
+A row counts when you can **do** something on it:
+
+- it opens a record — the pointer cursor, as before, **or**
+- it holds an enabled control — a tick box, a quantity, a button
+
+A totals row has neither and is skipped: stopping the cursor on *Grand total*
+helps nobody. A row whose only control is disabled is skipped too. `data-kbd-skip`
+still opts one out by hand.
+
+`→` follows from that. On a row that opens a record it clicks it, as before. On a
+row that only holds controls it hands focus to the **first of them** — which is
+what somebody working down a receive sheet wants next.
 
 ### Everything you can click
 
@@ -328,6 +354,7 @@ without matching half the list.
 | `kbdResolve` — what a keystroke means | `frontend/src/keyboard.jsx` |
 | `kbdIsTyping`, `kbdIsControl` — the two guards | `frontend/src/keyboard.jsx` |
 | `kbdRows`, `kbdMove`, `kbdOpenRow`, `kbdTickRow` — the cursor | `frontend/src/keyboard.jsx` |
+| `kbdRowUsable`, `kbdRowOpens` — what counts as a row | `frontend/src/keyboard.jsx` |
 | `kbdIsClickable`, `kbdEnhance`, `kbdActivate` — the clickable divs | `frontend/src/keyboard.jsx` |
 | `kbdLists`, `kbdIsInList` — a list as one tab stop | `frontend/src/keyboard.jsx` |
 | `kbdPaneOf`, `kbdFocusSidebar`, `kbdFocusMain` — crossing the screen | `frontend/src/keyboard.jsx` |
@@ -343,7 +370,8 @@ without matching half the list.
 | Focus trap, autofocus, focus restore, `Esc` | `Modal` in `frontend/src/utils.jsx` |
 | The one nav list | `opcNavGroups` in `frontend/src/shell.jsx` |
 | Styles — selected row, focus ring, palette, key caps | `frontend/src/styles.css` |
-| Checks | `scripts/uitest/keyboard-check.js` |
+| Checks — the engine | `scripts/uitest/keyboard-check.js` |
+| Checks — every real screen | `scripts/uitest/reach-check.js` |
 
 ## Traps
 
@@ -362,6 +390,12 @@ without matching half the list.
   goes back and `Home`/`End` mean top and bottom. Taking those made a working
   feature feel broken. A key is only free when nothing else wanted it *in that
   context*.
+- **Test the engine AND the screens.** Every rule here was right in isolation
+  for two rounds while the arrows did nothing on half the app, because no test
+  ever pointed the engine at a real screen. `reach-check` renders all 31 with an
+  order, POs, a GRN, an invoice and a BOQ in the tenant, and presses Down on
+  each. It found two crashes on its first run that had nothing to do with the
+  keyboard — see [testing.md](./testing.md).
 - **Count the presses, not the possibilities.** Every control was reachable by
   Tab for two rounds of this, and it still felt broken, because reaching the page
   cost thirty presses. A group that belongs together is one stop.
