@@ -205,6 +205,21 @@ of thirty.
 `←` out of the sidebar lands on the **first** control on the page in reading
 order, not on the list — the buttons above it are where the actions are.
 
+### A dialog owns the screen
+
+While one is open — a `Modal`, or the notifications drawer — it is the only
+thing that can be operated. `←` does not cross to the sidebar behind it, `]`
+does not switch a tab it is covering, `g` cannot navigate out from under it, and
+`/` does not hunt for a search box on the page beneath. Leaving an editing dialog
+open over a page that has moved on is how somebody saves an edit onto the wrong
+record.
+
+Inside it, everything still works: the arrows drive its own rows, `Enter` opens
+one, `Ctrl+Enter` saves, `Esc` closes.
+
+The drawer is the one overlay in the app that is not a `Modal`, so it says all of
+this for itself — stack, Escape, focus in, focus back, Tab trapped.
+
 ### Filling in a dialog
 
 `Enter` moves to the next field, and on the last one presses the primary button.
@@ -408,6 +423,15 @@ without matching half the list.
   never has.
 - **A fixture that is tidier than reality proves nothing.** Write the awkward
   shape the app actually renders.
+- **Whatever has focus wins its own keys.** A row being selected somewhere on
+  the page must never stop the button under your finger from being pressed. For
+  a while `Enter` meant "open the selected row" everywhere, so tabbing to
+  *New Sales Order* and pressing `Enter` opened a row instead and the button
+  visibly did nothing — the worst thing a key can do.
+- **Guard the key, not the branch.** The fix above was first written as a bare
+  `if (control) return null` before the arrow handling, which swallowed `Enter`
+  before the line that handles it and killed every button on the page. Scope a
+  guard to the keys it is about.
 - **One owner per key.** `Ctrl+Enter` is the keyboard layer's; if the dialog
   handled it too, a single press would submit twice. The check asserts the
   dialog leaves it alone.

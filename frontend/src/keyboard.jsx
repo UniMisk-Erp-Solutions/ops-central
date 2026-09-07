@@ -72,8 +72,10 @@ function kbdIsControl(el) {
 //                page itself. The arrows mean something different in each, and
 //                left and right cross between the first and the last
 //       inList   focus is inside a data list
-//       onRow    a row is already selected, so the bulk keys join in and Enter
-//                opens the row rather than pressing whatever else has focus
+//       onRow    a row is already selected, so the bulk keys join in
+//       dialog   a dialog is open. It is the only thing on screen that can be
+//                operated: the page behind it must not scroll, switch tab,
+//                navigate, or hand focus to the sidebar
 //       pending  the previous keystroke was "g", so this one names a screen
 //
 // Returns null for anything the app should keep its hands off — which is most
@@ -88,6 +90,7 @@ function kbdResolve(e, ctx) {
   const pane = (ctx && ctx.pane) || 'main';        // 'sidebar' | 'tabs' | 'main'
   const inList = !!(ctx && ctx.inList);
   const onRow = !!(ctx && ctx.onRow);              // a row is already selected
+  const dialog = !!(ctx && ctx.dialog);            // a dialog is open over the page
   const pending = ctx && ctx.pending;
 
   // Ctrl+K opens the palette from anywhere at all, mid-word included: it is the
@@ -111,11 +114,13 @@ function kbdResolve(e, ctx) {
   if (overlay) return null;
 
   // "g" then a letter, for people who would rather not reach for the palette.
+  // Never out from under a dialog: leaving one open over a page that has moved
+  // on is how somebody saves an edit onto the wrong record.
   if (pending === 'g') {
-    const dest = KBD_GOTO[String(key).toLowerCase()];
+    const dest = dialog ? null : KBD_GOTO[String(key).toLowerCase()];
     return dest ? { action: 'goto', route: dest } : { action: 'clear-pending' };
   }
-  if (key === 'g') return { action: 'pending', pending: 'g' };
+  if (key === 'g' && !dialog) return { action: 'pending', pending: 'g' };
 
   // ---- A strip of tabs: left and right move along it -----------------------
   if (pane === 'tabs') {
@@ -128,7 +133,8 @@ function kbdResolve(e, ctx) {
   // Without that last one focus goes into the sidebar and cannot get out again
   // except by tabbing through the whole of it. Left is deliberately nothing:
   // there is nothing to the left of the sidebar.
-  if (pane === 'sidebar') {
+  // Never the sidebar behind a dialog.
+  if (pane === 'sidebar' && !dialog) {
     if (key === 'ArrowDown') return { action: 'group-move', delta: 1 };
     if (key === 'ArrowUp') return { action: 'group-move', delta: -1 };
     if (key === 'ArrowRight') return { action: 'pane-main' };
@@ -158,25 +164,42 @@ function kbdResolve(e, ctx) {
 
   // Left goes to the sidebar, right comes back — the two panes of the screen.
   // Neither one touches browser history.
-  if (key === 'ArrowLeft') return { action: 'pane-sidebar' };
-  if (key === 'ArrowRight') return onRow ? { action: 'row-open' } : { action: 'pane-main' };
+  // Left and right cross between the sidebar and the page — but not from a
+  // control, which may want them for itself. Scoped to those two keys: a bare
+  // `if (control) return null` here swallows Enter before the line below ever
+  // sees it, and every button on the page goes dead.
+  if (control && (key === 'ArrowLeft' || key === 'ArrowRight')) return null;
+  // Crossing panes reaches past a dialog to the page it is covering.
+  if (key === 'ArrowLeft') return dialog ? null : { action: 'pane-sidebar' };
+  if (key === 'ArrowRight') {
+    if (onRow) return { action: 'row-open' };
+    return dialog ? null : { action: 'pane-main' };
+  }
 
-  if (key === 'Enter') return onRow ? { action: 'row-open' }
-                                    : (control ? { action: 'activate' } : null);
-  if (key === ' ') return onRow ? { action: 'row-tick' }
-                                : (control ? { action: 'activate' } : null);
+  // WHATEVER HAS FOCUS WINS. A row being selected somewhere on the page must
+  // never stop the button under your finger from being pressed — that is a
+  // button that visibly does nothing, which is the worst thing a key can do.
+  // (The handler routes this back to the row when what is focused IS the list.)
+  if (key === 'Enter') return control ? { action: 'activate' }
+                                      : (onRow ? { action: 'row-open' } : null);
+  if (key === ' ') return control ? { action: 'activate' }
+                                  : (onRow ? { action: 'row-tick' } : null);
 
   if (['PageDown', 'PageUp', 'Home', 'End'].includes(key)) return null;
 
   // The tabs across a record, from anywhere on the page. Bracket keys sit next
   // to each other and are on every layout; the digits go straight to one, which
   // is how somebody who works on these records all day will actually use them.
-  if (key === ']') return { action: 'tab-step', to: 'next' };
-  if (key === '[') return { action: 'tab-step', to: 'prev' };
-  if (/^[1-9]$/.test(key)) return { action: 'tab-step', to: Number(key) };
+  // Not from under a dialog — the strip it would switch is behind it.
+  if (!dialog) {
+    if (key === ']') return { action: 'tab-step', to: 'next' };
+    if (key === '[') return { action: 'tab-step', to: 'prev' };
+    if (/^[1-9]$/.test(key)) return { action: 'tab-step', to: Number(key) };
+  }
 
   switch (key) {
-    case '/':          return { action: 'search' };
+    // The search box this would look for is on the page behind the dialog.
+    case '/':          return dialog ? null : { action: 'search' };
     case '?':          return { action: 'help' };
     default:           return null;
   }
@@ -792,11 +815,15 @@ function KeyboardLayer() {
       const overlayOpen = palette || help;
       const focused = e.target || document.activeElement;
       const inList = !overlayOpen && kbdIsInList(focused);
+      // Any dialog, whoever opened it. Read from the page rather than tracked
+      // here: dialogs are opened by forty screens that know nothing about this.
+      const dialog = !!document.querySelector('.modal, .drawer');
       const act = kbdResolve(e, {
         typing: kbdIsTyping(focused),
         control: kbdIsControl(focused),
         pane: overlayOpen ? 'main' : kbdPaneOf(focused),
         inList,
+        dialog,
         onRow: !overlayOpen && !!kbdCurrentRow(null, focused),
         overlay: overlayOpen,
         pending,
