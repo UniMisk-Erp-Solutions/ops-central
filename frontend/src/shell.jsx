@@ -76,19 +76,31 @@ function Sidebar() {
   const realIsAdmin = (getUser(realUserId) || {}).role === 'Org Admin';
   const filteredGroups = opcNavGroups(state, u.role);
 
+  // The sidebar is ONE tab stop. Twenty-two links meant twenty-two presses
+  // before Tab reached the page at all, which is the same as unreachable.
+  // The link for the screen you are on holds the stop; the arrows move between
+  // them once you are there. (The standard roving tabindex, and the same shape
+  // as a list of rows or a strip of tabs.)
+  const anyActive = filteredGroups.some(g => g.items.some(
+    it => route === it.id || route.startsWith(it.id + '/')));
+
   return (
     <aside className="sidebar">
       <div style={{ padding: '4px 14px 10px', fontSize: 11, color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between' }}>
         <span>Logged in as <strong style={{ color: 'var(--text-2)' }}>{u.role}</strong></span>
       </div>
-      {filteredGroups.map(g => (
+      {filteredGroups.map((g, gi) => (
         <div key={g.label} className="nav-group">
           <div className="nav-group-label">{g.label}</div>
-          {g.items.map(it => {
+          {g.items.map((it, ii) => {
             const active = route === it.id || route.startsWith(it.id + '/');
+            // On a route that matches no link, the first one holds the stop —
+            // otherwise the sidebar would have no way in at all.
+            const holdsStop = active || (!anyActive && gi === 0 && ii === 0);
             return (
               <div key={it.id} className={`nav-item ${active ? 'active' : ''}`}
-                   role="link" tabIndex={0} aria-current={active ? 'page' : undefined}
+                   role="link" tabIndex={holdsStop ? 0 : -1}
+                   aria-current={active ? 'page' : undefined}
                    onClick={() => navigate(it.id)}
                    onKeyDown={e => {
                      // A div is not a button: nothing makes it operable but this.

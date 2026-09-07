@@ -25,7 +25,8 @@ touches browser history.
 | `g` then a key | go straight to a screen (`g s` sales orders, `g p` vendor POs, …) |
 | `?` | the full list, on screen |
 | `Esc` | close what is on top; from a field, leave the field |
-| `Ctrl + Enter` | the primary button of the open dialog: save, create, confirm |
+| `Ctrl + Enter` | save the open dialog from any field, without walking to the end |
+| `Enter` in a dialog field | next field — and on the last one, save |
 
 The list on the page:
 
@@ -158,6 +159,40 @@ stop, and the arrows move within it.
 A check walks the source and fails if a clickable element is ever written without
 a pointer cursor — it would be invisible to this pass, and to the mouse user too,
 who would get no hand cursor.
+
+### Tab reaches the page in a few presses, not thirty
+
+Everything was reachable long before it was *usable*. Tab walked all **22**
+sidebar links before it got to the page at all, and then all nine tabs on a
+record. Reachable but nobody would, which is the same as unreachable.
+
+Groups that belong together are now **one tab stop each** — the sidebar, a strip
+of tabs, the role switcher, a list of rows. The one that is *active* holds the
+stop, and the arrows move between them once you are there. (A roving tabindex,
+the standard shape for a composite widget, and the same shape a list of rows
+already had.)
+
+So the order across a screen is roughly: topbar buttons → sidebar → the tabs →
+the buttons on the record → its list. Half a dozen presses to anything, instead
+of thirty.
+
+`←` out of the sidebar lands on the **first** control on the page in reading
+order, not on the list — the buttons above it are where the actions are.
+
+### Filling in a dialog
+
+`Enter` moves to the next field, and on the last one presses the primary button.
+Filling a dialog is the slowest thing anybody does in this app, and reaching for
+Tab between every field is why; every accounting package this replaces has
+worked this way for thirty years.
+
+Only from a single-line input. A textarea keeps `Enter` for its newline, a
+select and a button already do something with it, and any field can opt out with
+`data-kbd-enter="ignore"`.
+
+`Ctrl+Enter` still saves from anywhere without walking to the end. It is handled
+in **one** place — the keyboard layer, not the dialog. If the dialog pressed the
+button as well, one `Ctrl+Enter` would submit twice.
 
 ### The tabs on a record
 
@@ -297,6 +332,9 @@ without matching half the list.
 | `kbdLists`, `kbdIsInList` — a list as one tab stop | `frontend/src/keyboard.jsx` |
 | `kbdPaneOf`, `kbdFocusSidebar`, `kbdFocusMain` — crossing the screen | `frontend/src/keyboard.jsx` |
 | `kbdTabStrip`, `kbdTabButtons`, `kbdTabTo` — the tabs on a record | `frontend/src/keyboard.jsx` |
+| `kbdRoving` — a group of buttons as one tab stop | `frontend/src/keyboard.jsx` |
+| Roving stop for the sidebar | `Sidebar` in `frontend/src/shell.jsx` |
+| `Enter` walking the fields | `Modal` in `frontend/src/utils.jsx` |
 | `kbdGroupOf`, `kbdGroupMove`, `kbdVisible` — tabs and the sidebar | `frontend/src/keyboard.jsx` |
 | `KeyboardLayer` — the one listener | `frontend/src/keyboard.jsx` |
 | `CommandPalette`, `ShortcutHelp` | `frontend/src/keyboard.jsx` |
@@ -324,6 +362,12 @@ without matching half the list.
   goes back and `Home`/`End` mean top and bottom. Taking those made a working
   feature feel broken. A key is only free when nothing else wanted it *in that
   context*.
+- **Count the presses, not the possibilities.** Every control was reachable by
+  Tab for two rounds of this, and it still felt broken, because reaching the page
+  cost thirty presses. A group that belongs together is one stop.
+- **One owner per key.** `Ctrl+Enter` is the keyboard layer's; if the dialog
+  handled it too, a single press would submit twice. The check asserts the
+  dialog leaves it alone.
 - **A shortcut nobody can reach is not a feature.** The side arrows moved along
   the record tabs from the day they were written, and it did not count, because
   getting focus onto a tab took several presses. Ask how somebody arrives at a
@@ -342,7 +386,9 @@ without matching half the list.
   not picked up.
 - **`offsetParent` is null for everything in a test**, which has no layout, and
   for anything positioned `fixed` in a real browser. `kbdVisible` uses it as a
-  fast path and falls back to the computed `display`.
+  fast path and falls back to the computed `display`. The dialog's own field
+  walking and focus trap were written with the raw check and had to be moved
+  onto the helper — the same trap, caught twice.
 - **A JSX tag cannot be matched with a regex.** `onClick={e => …}` contains a
   `>` that does not end the tag; the source scan walks to the `>` at brace depth
   zero instead. The first version of that scan silently reported ten false

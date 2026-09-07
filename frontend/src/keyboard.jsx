@@ -366,6 +366,28 @@ function kbdIsInList(el) {
   return !!(el && el.closest && el.closest('[data-kbd-list]'));
 }
 
+// One tab stop for a group of buttons that belong together: the strip of tabs
+// on a record, the role switcher in the topbar. The one that is active holds
+// the stop and the arrows move between them, so a nine-tab record costs one
+// press to reach rather than nine to get past.
+//
+// Re-run on every pass rather than marked done once, because which one is
+// active changes as the user works.
+function kbdRoving(container) {
+  if (!container || !container.querySelectorAll) return 0;
+  const items = Array.from(container.querySelectorAll(
+    'button:not([disabled]), a[href], [data-kbd-click]')).filter(kbdVisible);
+  if (items.length < 2) return 0;
+  let at = items.findIndex(x => x.className && /\bactive\b/.test(String(x.className)));
+  if (at < 0) at = items.findIndex(x => x === (container.ownerDocument || {}).activeElement);
+  if (at < 0) at = 0;
+  items.forEach((x, i) => {
+    const want = i === at ? '0' : '-1';
+    if (x.getAttribute('tabindex') !== want) x.setAttribute('tabindex', want);
+  });
+  return items.length;
+}
+
 // Put them in the tab order. Idempotent, so it can run as often as it likes.
 function kbdEnhance(doc) {
   const d = doc || (typeof document !== 'undefined' ? document : null);
@@ -379,6 +401,8 @@ function kbdEnhance(doc) {
     if (!el.getAttribute('role')) el.setAttribute('role', 'button');
     n++;
   });
+  // A strip of tabs, and the role switcher, become one stop each.
+  d.querySelectorAll('.tabs, .role-switcher').forEach(kbdRoving);
   // Each list of rows becomes ONE tab stop.
   kbdLists(d).forEach(t => {
     if (t.getAttribute('data-kbd-list') != null) return;
@@ -461,6 +485,7 @@ function kbdTabTo(where, doc) {
   if (idx < 0 || idx >= tabs.length) return null;
   const tab = tabs[idx];
   if (tab.focus) { try { tab.focus(); } catch (e) {} }
+  tabs.forEach(x => x.setAttribute('tabindex', x === tab ? '0' : '-1'));
   // Switching tab replaces the panel under it, so the row selection down there
   // belongs to a table that is about to be gone.
   kbdClearCursor(doc);
@@ -496,8 +521,14 @@ function kbdFocusMain(doc) {
   if (!d || !d.querySelector) return null;
   const main = d.querySelector('.main');
   if (!main) return null;
-  const target = main.querySelector('[data-kbd-list]')
-    || main.querySelector('button:not([disabled]), a[href], [data-kbd-click], input:not([disabled])');
+  // The FIRST control on the page, in reading order — the tabs across a record,
+  // or the buttons above it. Jumping straight to the list skipped everything
+  // above it, which is where the actions are.
+  const target = Array.from(main.querySelectorAll(
+    'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]),'
+    + ' textarea:not([disabled]), [data-kbd-click], [data-kbd-list]'))
+    .filter(x => x.getAttribute('tabindex') !== '-1')
+    .filter(kbdVisible)[0];
   if (!target || !target.focus) return null;
   try { target.focus(); } catch (e) {}
   return target;
@@ -514,6 +545,9 @@ function kbdGroupMove(el, delta) {
   const next = items[Math.min(items.length - 1, Math.max(0, (at < 0 ? 0 : at) + delta))];
   if (!next) return null;
   if (next.focus) { try { next.focus(); } catch (e) {} }
+  // Carry the tab stop to where focus went, or Tab would put it back at the one
+  // marked active and the group would feel like it snapped backwards.
+  items.forEach(x => x.setAttribute('tabindex', x === next ? '0' : '-1'));
   if (g.activate && next !== el && typeof next.click === 'function') next.click();
   return next;
 }
@@ -605,6 +639,7 @@ window.kbdIsClickable = kbdIsClickable;
 window.kbdLists = kbdLists;
 window.kbdIsInList = kbdIsInList;
 window.kbdEnhance = kbdEnhance;
+window.kbdRoving = kbdRoving;
 window.kbdActivate = kbdActivate;
 window.kbdVisible = kbdVisible;
 window.kbdTabStrip = kbdTabStrip;
@@ -966,10 +1001,12 @@ const KBD_SHEET = [
   { group: 'Anything on the page', keys: [
     ['Tab / Shift + Tab', 'every button, tab, card, chip and field, in order'],
     ['Enter or Space', 'press whatever is focused'],
+    ['one Tab each', 'the sidebar, the tabs and a list are one stop each'],
   ]},
-  { group: 'In a dialog or form', keys: [
+  { group: 'Filling in a dialog', keys: [
+    ['Enter', 'next field — and on the last one, save'],
     ['Tab / Shift + Tab', 'between fields, staying inside the dialog'],
-    ['Ctrl + Enter', 'the primary button — save, create, confirm'],
+    ['Ctrl + Enter', 'save from any field, without walking to the end'],
     ['Esc', 'close it (only the top one)'],
   ]},
 ];

@@ -87,6 +87,9 @@ const act = (key, ctx, o) => {
   const r = sandbox.kbdResolve(K(key, o), ctx || {});
   return r ? r.action : null;
 };
+// Section 16 shadows `act` with React's act(), so the resolver keeps a second
+// name for use down there.
+const act2 = act;
 
 // Every bare key this layer claims. If one of these ever fires while typing,
 // somebody loses work.
@@ -377,9 +380,11 @@ check('and so does nothing in particular', sandbox.kbdPaneOf(DP.body), 'main');
 check('crossing left lands on the screen you are actually on',
   (sandbox.kbdFocusSidebar() || {}).id, 'nav2');
 check('and focus really moved there', DP.activeElement.id, 'nav2');
-check('crossing back right lands on the list, which the arrows then drive',
-  (sandbox.kbdFocusMain() || {}).id, 'mainlist');
-check('and focus really moved back', DP.activeElement.id, 'mainlist');
+// The FIRST control on the page, in reading order. Landing on the list skipped
+// the tabs and the buttons above it, which is where the actions are.
+check('crossing back right lands at the start of the page',
+  (sandbox.kbdFocusMain() || {}).id, 'firstbtn');
+check('and focus really moved back', DP.activeElement.id, 'firstbtn');
 check('so the sidebar is never a dead end', sandbox.kbdPaneOf(DP.activeElement), 'main');
 
 // With no list on the screen, coming back out still has to land somewhere.
@@ -469,6 +474,54 @@ sandbox.getComputedStyle = domN.window.getComputedStyle.bind(domN.window);
 check('with no tab strip, there is nothing to find', sandbox.kbdTabStrip(), null);
 check('and nothing happens', sandbox.kbdTabTo('next'), null);
 check('so the key is left to the page', sandbox.kbdTabTo(2), null);
+
+// Hand the document back to the one the sections below were written against.
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
+console.log('\n[6e] a group of buttons is one tab stop, not one each');
+// Tab used to walk all twenty-two sidebar links, and all nine tabs on an order,
+// before reaching anything on the page. Reachable, but nobody would — which is
+// the same as unreachable.
+const domR = new JSDOM(`<!doctype html><html><body><div class="app">
+  <main class="main">
+    <div class="tabs">
+      <button class="tab" id="R1">Overview</button>
+      <button class="tab active" id="R2">Line Items</button>
+      <button class="tab" id="R3">Procurement</button>
+      <button class="tab" id="R4">Vendor POs</button>
+    </div>
+    <div class="role-switcher">
+      <button id="U1">DE</button><button class="active" id="U2">JI</button><button id="U3">ST</button>
+    </div>
+    <button id="loose">Edit items</button>
+  </main>
+</div></body></html>`);
+const DR = domR.window.document;
+sandbox.document = DR;
+sandbox.getComputedStyle = domR.window.getComputedStyle.bind(domR.window);
+sandbox.kbdEnhance();
+
+const stops = (sel) => Array.from(DR.querySelectorAll(sel))
+  .filter(x => x.getAttribute('tabindex') !== '-1').map(x => x.id);
+check('four tabs, but only one tab stop', stops('.tabs button'), ['R2']);
+check('and it is the tab you are actually on', DR.getElementById('R2').getAttribute('tabindex'), '0');
+check('the role switcher is one stop too', stops('.role-switcher button'), ['U2']);
+check('a button on its own is untouched', DR.getElementById('loose').getAttribute('tabindex'), null);
+
+// Moving within the group has to carry the stop, or Tab would snap back to the
+// one marked active and the group would feel like it jumped.
+sandbox.kbdGroupMove(DR.getElementById('R2'), 1);
+check('moving along the tabs carries the tab stop with it', stops('.tabs button'), ['R3']);
+sandbox.kbdTabTo(1);
+check('and so does jumping straight to one', stops('.tabs button'), ['R1']);
+
+// A group of one is not a group.
+const domS = new JSDOM('<!doctype html><html><body><div class="tabs"><button id="only">Solo</button></div></body></html>');
+check('a strip with a single button is left alone',
+  sandbox.kbdRoving(domS.window.document.querySelector('.tabs')), 0);
+check('so it keeps its natural tab stop',
+  domS.window.document.getElementById('only').getAttribute('tabindex'), null);
 
 // Hand the document back to the one the sections below were written against.
 sandbox.document = D;
@@ -796,7 +849,10 @@ check('and it is taken off again when the dialog closes',
 check('the handler is read through a ref, so the stack order holds',
   /onCloseRef/.test(utilsJsx), true);
 const shellJsx = fs.readFileSync(path.join(dir, 'src', 'shell.jsx'), 'utf8');
-check('sidebar links can be reached by Tab', /tabIndex=\{0\}/.test(shellJsx), true);
+check('the sidebar is ONE tab stop, held by the screen you are on',
+  /tabIndex=\{holdsStop \? 0 : -1\}/.test(shellJsx), true);
+check('and it still has a way in when no link matches the route',
+  /!anyActive && gi === 0 && ii === 0/.test(shellJsx), true);
 check('and opened with Enter', /onKeyDown/.test(shellJsx), true);
 check('the sidebar and the palette read ONE nav list',
   /window\.opcNavGroups = opcNavGroups/.test(shellJsx), true);
@@ -917,7 +973,58 @@ check('and so is whatever has focus', /:focus-visible/.test(css), true);
       check('closing takes it off the stack', w.opcOverlayTop(), null);
       check('and puts focus back where it came from', w.document.activeElement.id, 'opener');
 
+      // ---- Enter walks the form ----------------------------------------
+      // Filling a dialog is the slowest thing anybody does in here, and
+      // reaching for Tab between every field is why.
+      let saved = 0;
+      // The first dialog was unmounted above; this needs a root of its own.
+      const root2 = ReactDOMClient.createRoot(w.document.getElementById('root'));
+      act(() => {
+        root2.render(h(Modal, { title: 'Receive items', onClose: () => closes++,
+          footer: h('button', { className: 'btn btn-primary', onClick: () => saved++ }, 'Confirm') },
+          h('input', { className: 'input', id: 'f1', type: 'number' }),
+          h('input', { className: 'input', id: 'f2', type: 'text' }),
+          h('textarea', { className: 'textarea', id: 'f3' }),
+          h('input', { className: 'input', id: 'f4', type: 'text', 'data-kbd-enter': 'ignore' })));
+      });
+      await new Promise(r => setTimeout(r, 20));
+      act(() => { w.document.body.offsetHeight; });
+
+      const press = (key, extra) => act(() => {
+        w.document.activeElement.dispatchEvent(new w.KeyboardEvent('keydown',
+          Object.assign({ key, bubbles: true }, extra || {})));
+      });
+
+      check('the first field has focus', w.document.activeElement.id, 'f1');
+      press('Enter');
+      check('Enter moves to the next field', w.document.activeElement.id, 'f2');
+      press('Enter');
+      check('and on to the one after', w.document.activeElement.id, 'f3');
+      check('nothing was submitted on the way', saved, 0);
+
+      // A textarea needs its Enter for a newline.
+      press('Enter');
+      check('Enter in a textarea is left alone', w.document.activeElement.id, 'f3');
+
+      // A field can opt out, and the last one does the thing the dialog is for.
+      w.document.getElementById('f4').focus();
+      press('Enter');
+      check('a field marked to ignore Enter keeps it', saved, 0);
+      check('and focus stays put', w.document.activeElement.id, 'f4');
+
+      // Ctrl+Enter belongs to the KeyboardLayer, which is not mounted here.
+      // Deliberately ONE owner: if the dialog pressed the button as well, a
+      // single Ctrl+Enter would submit twice.
+      saved = 0;
+      w.document.getElementById('f2').focus();
+      press('Enter', { ctrlKey: true });
+      check('the dialog leaves Ctrl+Enter to the one thing that owns it', saved, 0);
+      check('and that thing routes it to the primary button',
+        act2('Enter', { typing: true }, { ctrlKey: true }), 'primary');
+
       closes = 0;
+      act(() => { root2.unmount(); });
+      await new Promise(r => setTimeout(r, 10));
       w.document.body.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       check('a closed dialog no longer listens for anything', closes, 0);
 

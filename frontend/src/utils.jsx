@@ -323,11 +323,48 @@ function Modal({ title, children, onClose, footer, size }) {
   }, []);
 
   const onKeyDown = (e) => {
+    // ---- Enter walks the form -------------------------------------------
+    // Filling a dialog is the slowest thing anybody does in here, and reaching
+    // for Tab between every field is why. Enter goes to the next field and, on
+    // the last one, presses the primary button — which is how every accounting
+    // package this replaces has worked for thirty years.
+    //
+    // ONLY from a single-line input. A textarea needs its newline, a select
+    // and a button already do something with Enter, and a field can opt out
+    // with data-kbd-enter="ignore".
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && ref.current) {
+      const el = document.activeElement;
+      const tag = el && String(el.tagName || '').toUpperCase();
+      const type = el ? String(el.type || 'text').toLowerCase() : '';
+      const plain = tag === 'INPUT'
+        && !['checkbox', 'radio', 'button', 'submit', 'reset', 'file'].includes(type)
+        && el.getAttribute('data-kbd-enter') !== 'ignore';
+      if (plain) {
+        const fields = Array.from(ref.current.querySelectorAll(
+          '.modal-body input:not([type="checkbox"]):not([type="radio"]):not([type="button"])'
+          + ':not([type="submit"]):not([type="file"]):not([disabled]):not([readonly]),'
+          + ' .modal-body select:not([disabled]), .modal-body textarea:not([disabled])'))
+          .filter(x => x === el || (window.kbdVisible ? window.kbdVisible(x) : x.offsetParent !== null));
+        const at = fields.indexOf(el);
+        const next = at >= 0 ? fields[at + 1] : null;
+        if (next) {
+          e.preventDefault();
+          try { next.focus(); if (next.select) next.select(); } catch (err) {}
+          return;
+        }
+        // Last field: do what the dialog is for.
+        const btn = ref.current.querySelector('.modal-footer .btn-primary:not([disabled])');
+        if (btn) { e.preventDefault(); btn.click(); }
+        return;
+      }
+    }
+
     if (e.key !== 'Tab' || !ref.current) return;
     const focusable = Array.from(ref.current.querySelectorAll(
       'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
       ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
-      .filter(el => el.offsetParent !== null || el === document.activeElement);
+      .filter(el => el === document.activeElement
+                 || (window.kbdVisible ? window.kbdVisible(el) : el.offsetParent !== null));
     if (!focusable.length) return;
     const first = focusable[0], last = focusable[focusable.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
