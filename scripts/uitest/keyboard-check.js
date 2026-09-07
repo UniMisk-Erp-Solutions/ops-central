@@ -241,6 +241,25 @@ check('tabindex="-1" is not in the tab order, so not a control',
   sandbox.kbdIsControl(ctl('DIV', { tabindex: '-1' })), false);
 check('nothing focused is not a control', sandbox.kbdIsControl(null), false);
 
+console.log('\n[5d] the tabs on a record answer from anywhere on the page');
+// An order has nine tabs across it and they are the main way around the record.
+// The side arrows move along them once one has focus — but getting focus there
+// is several presses in, so these answer from anywhere.
+check('] is the next tab', sandbox.kbdResolve(K(']'), {}), { action: 'tab-step', to: 'next' });
+check('[ is the previous one', sandbox.kbdResolve(K('['), {}), { action: 'tab-step', to: 'prev' });
+check('3 goes straight to the third', sandbox.kbdResolve(K('3'), {}), { action: 'tab-step', to: 3 });
+check('and 9 to the ninth', sandbox.kbdResolve(K('9'), {}), { action: 'tab-step', to: 9 });
+check('0 is not a tab — there is no zeroth', act('0', {}), null);
+check('none of them fire while typing',
+  [']', '[', '1', '5', '9'].filter(k => act(k, { typing: true }) !== null), []);
+check('nor behind the palette',
+  [']', '[', '1', '9'].filter(k => act(k, { overlay: true }) !== null), []);
+check('nor as part of a browser combination',
+  [']', '3'].filter(k => act(k, {}, { ctrlKey: true }) !== null), []);
+// A digit after g is a jump that does not exist, not a tab.
+check('a digit mid-way through a g jump just forgets the jump',
+  act('3', { pending: 'g' }), 'clear-pending');
+
 console.log('\n[5c] a strip of tabs moves under the side arrows');
 check('right moves along the tabs',
   sandbox.kbdResolve(K('ArrowRight'), { control: true, pane: 'tabs' }),
@@ -386,6 +405,71 @@ sandbox.document = domQ.window.document;
 sandbox.getComputedStyle = domQ.window.getComputedStyle.bind(domQ.window);
 check('on a screen with no list, it moves nothing and the page scrolls',
   sandbox.kbdMove(1, null, domQ.window.document.body), null);
+// Hand the document back to the one the sections below were written against.
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
+console.log('\n[6d] and they actually switch');
+const domT = new JSDOM(`<!doctype html><html><body><div class="app">
+  <aside class="sidebar"><div class="nav-item active" tabindex="0">Sales Orders</div></aside>
+  <main class="main">
+    <div class="tabs mb-2">
+      <button class="tab active" id="T1">Overview</button>
+      <button class="tab" id="T2">Line Items + BOM</button>
+      <button class="tab" id="T3">Procurement</button>
+      <button class="tab" id="T4">Vendor POs</button>
+      <button class="tab" id="T5">GRN</button>
+    </div>
+    <table class="t"><tbody>
+      <tr id="tr1" style="cursor: pointer"><td>VPO/FY26/0044</td></tr>
+    </tbody></table>
+  </main>
+</div></body></html>`);
+const DT = domT.window.document;
+sandbox.document = DT;
+sandbox.getComputedStyle = domT.window.getComputedStyle.bind(domT.window);
+sandbox.kbdEnhance();
+
+let switches = [];
+['T1', 'T2', 'T3', 'T4', 'T5'].forEach(id =>
+  DT.getElementById(id).addEventListener('click', () => switches.push(id)));
+
+check('the strip is found on the page', !!sandbox.kbdTabStrip(), true);
+check('all five tabs are in it', sandbox.kbdTabButtons(sandbox.kbdTabStrip()).length, 5);
+check('] moves off the active tab to the next', (sandbox.kbdTabTo('next') || {}).id, 'T2');
+check('and actually presses it, so the panel changes', switches, ['T2']);
+check('focus follows it, so the side arrows carry on from there', DT.activeElement.id, 'T2');
+
+// It reads the active tab from the page, not from a counter of its own — the
+// user may have clicked one with the mouse in between.
+// Exactly one tab is ever active, the way React renders the strip.
+const setActive = (id) => ['T1', 'T2', 'T3', 'T4', 'T5'].forEach(x =>
+  DT.getElementById(x).className = 'tab' + (x === id ? ' active' : ''));
+setActive('T4');
+check('it steps from whichever tab is really active', (sandbox.kbdTabTo('next') || {}).id, 'T5');
+check('and stops at the last rather than wrapping', (sandbox.kbdTabTo('next') || {}).id, 'T5');
+
+setActive('T1');
+check('[ stops at the first', (sandbox.kbdTabTo('prev') || {}).id, 'T1');
+check('a digit goes straight to that tab', (sandbox.kbdTabTo(3) || {}).id, 'T3');
+check('and to the last one', (sandbox.kbdTabTo(5) || {}).id, 'T5');
+check('a digit past the end does nothing at all', sandbox.kbdTabTo(9), null);
+
+// The panel under the tabs is about to be replaced, so a row selected in it is
+// pointing at a table that will not be there.
+sandbox.kbdMove(1, null, DT.body);
+check('a row was selected', !!sandbox.kbdCurrentRow(null, DT.body), true);
+sandbox.kbdTabTo(2);
+check('switching tab drops it', DT.querySelectorAll('[data-kbd-cursor]').length, 0);
+
+// A screen with no tabs must leave the keys alone — a digit is then just a digit.
+const domN = new JSDOM('<!doctype html><html><body><main class="main"><p>no tabs here</p></main></body></html>');
+sandbox.document = domN.window.document;
+sandbox.getComputedStyle = domN.window.getComputedStyle.bind(domN.window);
+check('with no tab strip, there is nothing to find', sandbox.kbdTabStrip(), null);
+check('and nothing happens', sandbox.kbdTabTo('next'), null);
+check('so the key is left to the page', sandbox.kbdTabTo(2), null);
+
 // Hand the document back to the one the sections below were written against.
 sandbox.document = D;
 sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
@@ -728,6 +812,8 @@ check('and a list says when it has focus',
 const kbSrc = fs.readFileSync(path.join(dir, 'src', 'keyboard.jsx'), 'utf8');
 check('nothing in the keyboard layer touches history any more',
   /history\.back|history\.forward|history\.go/.test(kbSrc), false);
+check('the tab keys are on the shortcut sheet, or nobody will find them',
+  /\] \/ \[/.test(kbSrc) && /1 \u2026 9|1 … 9/.test(kbSrc), true);
 check('and so is whatever has focus', /:focus-visible/.test(css), true);
 
 // ---------------------------------------------------------------------------
