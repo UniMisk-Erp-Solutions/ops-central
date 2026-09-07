@@ -25,7 +25,10 @@ one. Every screen can now be driven without touching it.
 | `g` then a key | go straight to a screen (`g s` sales orders, `g p` vendor POs, …) |
 | `?` | the full list, on screen |
 | `Esc` | close what is on top; from a field, leave the field |
-| `Tab` / `Shift+Tab` | move between fields — inside a dialog, stays inside it |
+| `Tab` / `Shift+Tab` | every button, tab, card, chip, swatch and field, in order |
+| `Enter` / `Space` | press whatever is focused |
+| `←` `→` on a tab | along the row of tabs, switching as it goes |
+| `↑` `↓` in the sidebar | down the sidebar (`Enter` opens) |
 | `Ctrl + Enter` | the primary button of the open dialog: save, create, confirm |
 
 The selected row is marked down the left in the accent colour. `?` shows the
@@ -59,6 +62,55 @@ Two more rules fall out of the same principle:
   them. Without this, one press of `Enter` on a *Create* button would press the
   button *and* open whatever row the cursor was on — two things from one
   keystroke, the second one invisible.
+
+### Everything you can click
+
+Half the controls in this app are a `div` with an `onClick` — the tabs across an
+order, the document cards, the colour swatches, the vendor chips, an order
+number rendered as text. **A `div` is invisible to `Tab`**, so none of them could
+be reached without a mouse however many shortcuts existed.
+
+Rather than edit seventy of them by hand, they are found and fixed at runtime
+through the signal the app already uses to mean *you can click this*: the pointer
+cursor. Anything carrying one gets `tabindex="0"`, `role="button"` and an
+`Enter`/`Space` that presses it.
+
+The pass runs on a `MutationObserver`, batched to one pass per animation frame.
+Screens re-render constantly as data syncs and filters change, and a control that
+appeared a moment ago has to be reachable too — but doing the work on every
+mutation would make typing stutter on a long screen. The observer watches
+`childList` only, never attributes, so the attributes it sets cannot re-trigger
+it.
+
+> **The trap: `cursor` inherits.** Every `div` inside a clickable row *computes*
+> as `pointer`, so `getComputedStyle` would put half the page in the tab order.
+> What is read is the element's **own inline style**, which React has already
+> resolved — so `cursor: x ? 'pointer' : 'default'` reads as exactly one of them,
+> and a disabled chip is correctly left out.
+
+Rows are deliberately **not** in the tab order: a hundred-row list would take a
+hundred presses to get past. They have the arrow cursor instead.
+
+A check walks the source and fails if a clickable element is ever written without
+a pointer cursor — it would be invisible to this pass, and to the mouse user too,
+who would get no hand cursor.
+
+### Tabs and the sidebar
+
+Once focus is on a tab, `←` and `→` move along the tabs rather than meaning what
+they mean everywhere else. In the sidebar, `↑` and `↓` move down it.
+
+The two behave differently on purpose:
+
+- **a tab switches as focus lands on it.** It only swaps a panel that is already
+  on the page — cheap, reversible, and needing a second key for it would be
+  tedious.
+- **the sidebar moves without opening.** Navigating leaves the page, and an
+  arrow key must never do that on its own. `Enter` opens.
+
+With anything focused, `←` and `→` no longer go back or open a row. Going back in
+history because somebody pressed left on a button is the kind of surprise that
+loses work.
 
 ### The row cursor
 
@@ -147,6 +199,8 @@ without matching half the list.
 | `kbdResolve` — what a keystroke means | `frontend/src/keyboard.jsx` |
 | `kbdIsTyping`, `kbdIsControl` — the two guards | `frontend/src/keyboard.jsx` |
 | `kbdRows`, `kbdMove`, `kbdOpenRow`, `kbdTickRow` — the cursor | `frontend/src/keyboard.jsx` |
+| `kbdIsClickable`, `kbdEnhance`, `kbdActivate` — the clickable divs | `frontend/src/keyboard.jsx` |
+| `kbdGroupOf`, `kbdGroupMove`, `kbdVisible` — tabs and the sidebar | `frontend/src/keyboard.jsx` |
 | `KeyboardLayer` — the one listener | `frontend/src/keyboard.jsx` |
 | `CommandPalette`, `ShortcutHelp` | `frontend/src/keyboard.jsx` |
 | `kbdCommands`, `kbdFilter` — what the palette offers | `frontend/src/keyboard.jsx` |
@@ -169,6 +223,20 @@ without matching half the list.
   console — no process-level handler sees it. The check traps `jsdomError`, and
   tests that the trap fires, or a crash inside a keystroke would print a stack
   and still report PASS.
+- **`cursor` inherits — never read the computed one** when deciding whether
+  something is a control. `kbdIsClickable` reads the element's own inline style
+  for exactly this reason, and the check asserts a div inside a clickable row is
+  not picked up.
+- **`offsetParent` is null for everything in a test**, which has no layout, and
+  for anything positioned `fixed` in a real browser. `kbdVisible` uses it as a
+  fast path and falls back to the computed `display`.
+- **A JSX tag cannot be matched with a regex.** `onClick={e => …}` contains a
+  `>` that does not end the tag; the source scan walks to the `>` at brace depth
+  zero instead. The first version of that scan silently reported ten false
+  positives.
+- **Writing a new clickable?** Give it `cursor: pointer`. The mouse user needs
+  the hand cursor and the keyboard user needs the tab stop, and both come from
+  that one declaration. The check enforces it.
 - **Adding a screen?** Add it to `opcNavGroups` and both the sidebar and the
   palette pick it up. Adding it to `KBD_GOTO` is optional and never grants
   access on its own.

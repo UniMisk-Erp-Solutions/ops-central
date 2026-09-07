@@ -64,6 +64,8 @@ function kbdIsControl(el) {
 //       overlay  the command palette or the help sheet is open, and owns the keys
 //       control  focus is on a button, link or checkbox — it answers Enter and
 //                Space itself, and this layer must not answer them as well
+//       group    focus is inside a strip of tabs ('horizontal') or the sidebar
+//                ('vertical'), where the arrows should move along it
 //       pending  the previous keystroke was "g", so this one names a screen
 //
 // Returns null for anything the app should keep its hands off — which is most
@@ -75,6 +77,7 @@ function kbdResolve(e, ctx) {
   const typing = !!(ctx && ctx.typing);
   const overlay = !!(ctx && ctx.overlay);
   const control = !!(ctx && ctx.control);
+  const group = ctx && ctx.group;                  // 'horizontal' | 'vertical' | null
   const pending = ctx && ctx.pending;
 
   // Ctrl+K opens the palette from anywhere at all, mid-word included: it is the
@@ -104,8 +107,21 @@ function kbdResolve(e, ctx) {
   }
   if (key === 'g') return { action: 'pending', pending: 'g' };
 
-  // Enter and Space belong to whatever is focused, if anything is.
-  if (control && (key === 'Enter' || key === ' ')) return null;
+  // Enter and Space belong to whatever is focused, if anything is. A div that
+  // was put in the tab order has no built-in Enter, so it is pressed here; a
+  // real button has one, and the handler checks before pressing it twice.
+  if (control && (key === 'Enter' || key === ' ')) return { action: 'activate' };
+
+  // Inside a strip of tabs or the sidebar, the arrows move along it.
+  if (group === 'horizontal' && key === 'ArrowRight') return { action: 'group-move', delta: 1 };
+  if (group === 'horizontal' && key === 'ArrowLeft') return { action: 'group-move', delta: -1 };
+  if (group === 'vertical' && key === 'ArrowDown') return { action: 'group-move', delta: 1 };
+  if (group === 'vertical' && key === 'ArrowUp') return { action: 'group-move', delta: -1 };
+
+  // With something focused, left and right belong to it. Going back in history
+  // because somebody pressed left on a button is the kind of surprise that
+  // loses work.
+  if (control && (key === 'ArrowLeft' || key === 'ArrowRight')) return null;
 
   switch (key) {
     case 'ArrowDown':  return { action: 'row-move', delta: 1 };
@@ -241,6 +257,114 @@ function kbdClearCursor(doc) {
 }
 
 // ============================================================================
+// Everything else you can click
+// ============================================================================
+// Half the controls in this app are a div with an onClick — tabs, cards, the
+// colour swatches, the vendor chips, a document in a list, an order number
+// rendered as text. A div is invisible to Tab, so none of them could be reached
+// without a mouse, however many shortcuts existed.
+//
+// Rather than edit seventy of them by hand, they are found and fixed at runtime
+// through the signal the app already uses to mean "you can click this": the
+// pointer cursor.
+//
+// THE TRAP: `cursor` INHERITS. Every div inside a clickable row computes as
+// pointer too, so getComputedStyle would put half the page in the tab order.
+// What is read here is the element's OWN inline style — which React has already
+// resolved, so `cursor: x ? 'pointer' : 'default'` reads as exactly one of them
+// and a disabled control is correctly left out.
+const KBD_CLICK_CLASSES = '.nav-item, .queue-item, .radio-card, .toggle, .kbd-palette-row';
+
+function kbdIsClickable(el) {
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toUpperCase();
+  // Already reachable, or not a control at all.
+  if (['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'LABEL', 'SUMMARY'].includes(tag)) return false;
+  // Rows are driven by the arrow cursor, not by Tab — a hundred-row list would
+  // otherwise take a hundred presses to get past. Cells go with them.
+  if (['TR', 'TD', 'TH'].includes(tag)) return false;
+  if (el.getAttribute('tabindex') != null) return false;         // already placed by hand
+  // A dialog box and its backdrop take a click only to stop it propagating.
+  // That is not something anybody wants to focus.
+  if (el.classList && (el.classList.contains('modal') || el.classList.contains('modal-backdrop')
+      || el.classList.contains('kbd-palette'))) return false;
+  const own = !!(el.style && el.style.cursor === 'pointer');
+  const byClass = el.matches ? el.matches(KBD_CLICK_CLASSES) : false;
+  return own || byClass;
+}
+
+// Put them in the tab order. Idempotent, so it can run as often as it likes.
+function kbdEnhance(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || !d.querySelectorAll) return 0;
+  let n = 0;
+  d.querySelectorAll('[style*="cursor"], ' + KBD_CLICK_CLASSES).forEach(el => {
+    if (el.getAttribute('data-kbd-click') != null) return;
+    if (!kbdIsClickable(el)) return;
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('data-kbd-click', '1');
+    if (!el.getAttribute('role')) el.setAttribute('role', 'button');
+    n++;
+  });
+  return n;
+}
+
+// Enter and Space press one, exactly as a click would.
+function kbdActivate(el) {
+  if (!el || !el.getAttribute || el.getAttribute('data-kbd-click') == null) return false;
+  if (typeof el.click !== 'function') return false;
+  el.click();
+  return true;
+}
+
+// ============================================================================
+// Groups — the sidebar, and a strip of tabs
+// ============================================================================
+// Once focus is on a tab, left and right should move along the tabs, not go
+// back in history the way they mean everywhere else. Same for the sidebar with
+// up and down.
+function kbdGroupOf(el) {
+  if (!el || !el.closest) return null;
+  const tabs = el.closest('.tabs, .role-switcher');
+  if (tabs) return { el: tabs, orientation: 'horizontal', activate: true };
+  const side = el.closest('.sidebar');
+  // The sidebar MOVES but does not open: navigating leaves the page, and an
+  // arrow key must never do that on its own. A tab only swaps a panel that is
+  // already here, so it is safe to switch as focus lands on it.
+  if (side) return { el: side, orientation: 'vertical', activate: false };
+  return null;
+}
+
+// Is it on screen? offsetParent is the quick answer in a browser, but it is
+// null for anything positioned fixed — and null for EVERYTHING in a test, which
+// has no layout at all. So it is a fast path, not the whole answer.
+function kbdVisible(el) {
+  if (!el) return false;
+  if (el.hidden) return false;
+  if (el.offsetParent) return true;
+  try {
+    const cs = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null;
+    if (!cs) return true;
+    return cs.display !== 'none' && cs.visibility !== 'hidden';
+  } catch (e) { return true; }
+}
+
+function kbdGroupMove(el, delta) {
+  const g = kbdGroupOf(el);
+  if (!g) return null;
+  const items = Array.from(g.el.querySelectorAll(
+    'button:not([disabled]), a[href], [data-kbd-click], [tabindex]:not([tabindex="-1"])'))
+    .filter(x => x === el || kbdVisible(x));
+  if (!items.length) return null;
+  const at = items.indexOf(el);
+  const next = items[Math.min(items.length - 1, Math.max(0, (at < 0 ? 0 : at) + delta))];
+  if (!next) return null;
+  if (next.focus) { try { next.focus(); } catch (e) {} }
+  if (g.activate && next !== el && typeof next.click === 'function') next.click();
+  return next;
+}
+
+// ============================================================================
 // The command palette
 // ============================================================================
 
@@ -323,6 +447,13 @@ function kbdFilter(items, q) {
 
 window.kbdIsTyping = kbdIsTyping;
 window.kbdIsControl = kbdIsControl;
+window.kbdIsClickable = kbdIsClickable;
+window.kbdEnhance = kbdEnhance;
+window.kbdActivate = kbdActivate;
+window.kbdVisible = kbdVisible;
+window.kbdGroupOf = kbdGroupOf;
+window.kbdGroupMove = kbdGroupMove;
+window.KBD_CLICK_CLASSES = KBD_CLICK_CLASSES;
 window.kbdResolve = kbdResolve;
 window.KBD_GOTO = KBD_GOTO;
 window.kbdRows = kbdRows;
@@ -372,6 +503,27 @@ function KeyboardLayer() {
   // The cursor belongs to the list on screen. A new screen is a new list.
   React.useEffect(() => { kbdClearCursor(); }, [route]);
 
+  // Put every clickable div in the tab order, and keep doing it — screens
+  // re-render constantly as data syncs and filters change, and a control that
+  // appeared a moment ago has to be reachable too.
+  //
+  // Watched rather than polled, and batched into one pass per frame: the
+  // observer fires for every keystroke in a field, and doing the work on each
+  // one would make typing stutter on a long screen.
+  React.useEffect(() => {
+    if (typeof MutationObserver === 'undefined') { kbdEnhance(); return; }
+    let queued = false;
+    const run = () => { queued = false; kbdEnhance(); };
+    const obs = new MutationObserver(() => {
+      if (queued) return;
+      queued = true;
+      (window.requestAnimationFrame || window.setTimeout)(run, 0);
+    });
+    kbdEnhance();
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
+  }, []);
+
   // "g" on its own means nothing after a moment — otherwise a g typed and
   // abandoned would silently eat the next letter pressed, minutes later.
   React.useEffect(() => {
@@ -395,9 +547,11 @@ function KeyboardLayer() {
     const onKey = (e) => {
       const overlayOpen = palette || help;
       const focused = e.target || document.activeElement;
+      const grp = overlayOpen ? null : kbdGroupOf(focused);
       const act = kbdResolve(e, {
         typing: kbdIsTyping(focused),
         control: kbdIsControl(focused),
+        group: grp ? grp.orientation : null,
         overlay: overlayOpen,
         pending,
       });
@@ -434,6 +588,16 @@ function KeyboardLayer() {
           if (btn) { e.preventDefault(); btn.click(); }
           return;
         }
+
+        case 'activate':
+          // Only for a div that was made focusable. A real button already acts
+          // on Enter by itself, and pressing it here too would fire it twice.
+          if (kbdActivate(focused)) e.preventDefault();
+          return;
+
+        case 'group-move':
+          if (kbdGroupMove(focused, act.delta)) e.preventDefault();
+          return;
 
         case 'pending':      setPending(act.pending); return;
         case 'clear-pending': setPending(null); return;
@@ -580,8 +744,14 @@ const KBD_SHEET = [
     ['g then a key', 'go straight to a screen (see below)'],
     ['?', 'this list'],
   ]},
-  { group: 'In a dialog', keys: [
-    ['Tab / Shift + Tab', 'move between fields, staying inside the dialog'],
+  { group: 'Anything on the page', keys: [
+    ['Tab / Shift + Tab', 'every button, tab, card, chip and field, in order'],
+    ['Enter or Space', 'press whatever is focused'],
+    ['← / →', 'along a row of tabs'],
+    ['↑ / ↓', 'down the sidebar (Enter opens)'],
+  ]},
+  { group: 'In a dialog or form', keys: [
+    ['Tab / Shift + Tab', 'between fields, staying inside the dialog'],
     ['Ctrl + Enter', 'the primary button — save, create, confirm'],
     ['Esc', 'close it (only the top one)'],
   ]},
