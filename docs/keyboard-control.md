@@ -12,8 +12,9 @@ The people who use this software are accountants. They are faster and more
 accurate on a keyboard than on a mouse, and they resent being made to reach for
 one. Every screen can now be driven without touching it.
 
-**The arrows always belong to whatever has focus.** On the page itself they
-scroll it, exactly as they always did.
+**`↑` and `↓` move through the list on the page** — no ceremony, just press
+them. **`←` and `→` cross between the sidebar and the page.** Nothing here ever
+touches browser history.
 
 | Key | What it does |
 |---|---|
@@ -26,19 +27,25 @@ scroll it, exactly as they always did.
 | `Esc` | close what is on top; from a field, leave the field |
 | `Ctrl + Enter` | the primary button of the open dialog: save, create, confirm |
 
-**Tab onto a list**, and then:
+The list on the page:
 
 | Key | What it does |
 |---|---|
 | `↓` `↑` | next row / previous row |
-| `PgDn` `PgUp` | ten rows at a time |
-| `Home` `End` | first row / last row |
+| `PgDn` `PgUp` | ten rows at a time *(once a row is selected)* |
+| `Home` `End` | first / last row *(once a row is selected)* |
 | `→` or `Enter` | open the selected row |
 | `Space` | tick the box on it |
-| `←` | step back out of the list |
+| `Tab` | onto a particular list — the whole list is one stop |
 
-**On a row of tabs**, `←` `→` move along them. **In the sidebar**, `↑` `↓` move
-down it and `Enter` opens.
+Across the screen:
+
+| Key | What it does |
+|---|---|
+| `←` | to the sidebar, landing on the screen you are on |
+| `→` | back out to the page, landing on its list |
+| `↑` `↓` in the sidebar | down the sidebar (`Enter` opens) |
+| `←` `→` on a tab | along the row of tabs, switching as it goes |
 
 The selected row is marked down the left in the accent colour. `?` shows the
 whole list without leaving the screen.
@@ -72,30 +79,41 @@ Two more rules fall out of the same principle:
   button *and* open whatever row the cursor was on — two things from one
   keystroke, the second one invisible.
 
-### The arrows belong to whatever has focus
+### What the arrows do, and the two wrong answers before it
 
-The first version of this took the arrow keys **globally**. It was wrong, in two
-ways that made the whole thing feel broken:
+This took three goes, and both wrong answers are worth keeping written down.
 
-- a page could no longer be **scrolled** with the arrow keys, because `↓` was
-  busy moving a row cursor on some table further down the screen
-- `←` went **back in history** from anywhere at all — one stray keypress away
-  from losing a half-filled form
+**First it was global.** `↓` moved a row cursor on whatever table was on screen,
+so a page could no longer be *scrolled* with the arrow keys, and `←` went **back
+in browser history** from anywhere at all — one stray keypress from losing a
+half-filled form.
 
-Scrolling a page with the arrow keys is older than this software and belongs to
-the person using it. So the arrows now do nothing unless focus is somewhere that
-has a use for them: a list, a row of tabs, or the sidebar. **Nothing in this
-layer touches browser history at all**, and the check asserts it.
+**Then it was confined to a list you had to `Tab` onto first.** That fixed the
+history, and made the arrows do nothing at all: on a screen that *is* a list of
+orders, pressing `↓` scrolled the page instead of moving through the orders.
+Correct, and useless.
 
-A list is **one tab stop**, not one per row — a hundred-row table would otherwise
-take a hundred presses to get past. Tab lands on the list and selects its first
-row, the arrows move inside it, `←` or Tab leaves. That is how a grid is meant to
-behave, and it is exactly what lets the arrows be given back to the page
-everywhere else.
+What it does now:
 
-A screen holds several lists — an order has its vendor POs, its BOQs, its
-documents. The arrows drive **the one that has focus**, not whichever is first on
-the page.
+- **`↑` `↓` drive the list on the page.** No ceremony. Moving the selection
+  scrolls it into view, so nothing is lost by it — and on a screen with **no**
+  list the handler swallows nothing and the page scrolls exactly as before.
+- **`←` `→` cross between the sidebar and the page.** `←` goes to the sidebar,
+  landing on the screen you are actually on; `→` comes back out, landing on the
+  list. Before this, focus that arrowed into the sidebar could only escape by
+  tabbing through every remaining link — on a wide screen, most of the app out of
+  reach.
+- **`Home`, `End`, `PgUp`, `PgDn` stay with the page** until a row is actually
+  selected. Until then they mean top and bottom, and people already use them
+  that way.
+- **Nothing touches browser history.** The check asserts the words are not even
+  in the file.
+
+A list is still **one tab stop** when you Tab to it — a hundred-row table would
+otherwise take a hundred presses to get past — and then the arrows are scoped to
+*that* list. A screen holds several: an order has its vendor POs, its BOQs, its
+documents. With nothing focused the arrows walk them in order down the page; Tab
+onto one to stay inside it.
 
 ### Everything you can click
 
@@ -247,6 +265,7 @@ without matching half the list.
 | `kbdRows`, `kbdMove`, `kbdOpenRow`, `kbdTickRow` — the cursor | `frontend/src/keyboard.jsx` |
 | `kbdIsClickable`, `kbdEnhance`, `kbdActivate` — the clickable divs | `frontend/src/keyboard.jsx` |
 | `kbdLists`, `kbdIsInList` — a list as one tab stop | `frontend/src/keyboard.jsx` |
+| `kbdPaneOf`, `kbdFocusSidebar`, `kbdFocusMain` — crossing the screen | `frontend/src/keyboard.jsx` |
 | `kbdGroupOf`, `kbdGroupMove`, `kbdVisible` — tabs and the sidebar | `frontend/src/keyboard.jsx` |
 | `KeyboardLayer` — the one listener | `frontend/src/keyboard.jsx` |
 | `CommandPalette`, `ShortcutHelp` | `frontend/src/keyboard.jsx` |
@@ -270,10 +289,13 @@ without matching half the list.
   console — no process-level handler sees it. The check traps `jsdomError`, and
   tests that the trap fires, or a crash inside a keystroke would print a stack
   and still report PASS.
-- **Never take a key globally that the browser already gives the user.** The
-  arrows scroll and `Alt+←` goes back. Both were taken once, and it made a
-  working feature feel broken. A shortcut is only free when nothing else wanted
-  the key *in that context*.
+- **Never take a key globally that the browser already gives the user.** `Alt+←`
+  goes back and `Home`/`End` mean top and bottom. Taking those made a working
+  feature feel broken. A key is only free when nothing else wanted it *in that
+  context*.
+- **A pane you can enter must be a pane you can leave.** `←` into the sidebar
+  without `→` back out is a trap, and it will not be obvious in a test that only
+  asks whether the key moved focus.
 - **A focus ring must be visible on the accent colour too.** A primary button is
   accent coloured, so an accent ring on it is invisible.
 - **`cursor` inherits — never read the computed one** when deciding whether
