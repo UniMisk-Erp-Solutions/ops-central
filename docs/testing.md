@@ -1,7 +1,7 @@
 # The check suite
 
 ```bash
-for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering boq; do
+for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering boq keyboard; do
   node scripts/uitest/$t-check.js frontend
 done
 ```
@@ -41,6 +41,7 @@ broken.
 | `dispatch-invoice-check` | customer wording, partial→final adding to the order value, no double billing, the over-dispatch cap | — |
 | `status-check` | every lifecycle transition, forward-only, manual states untouched, order numbering | orders sat on Draft with goods received against them |
 | `numbering-check` | every document number's format and uniqueness; quantity formatting; per-line tax including the TDS sign | two POs shared one e-Bill number; quantities read "1.0000" |
+| `keyboard-check` | that no shortcut fires while somebody is typing, that the browser keeps its own, row movement and its ends, and that the palette cannot offer a screen the sidebar hides | a stray key mid-entry loses an accountant's work, and a palette is a permissions hole if it is a second list |
 | `boq-check` | free quantity per billing group, oldest-first dispatch allocation, seven-of-ten raises nothing, one invoice per BOQ ever, the Final sweep, and that the expanded per-item figures sum to the summary row | a BOQ that bills twice, or one closed by goods belonging to an earlier BOQ, is money out of the door |
 
 ## How to write one

@@ -1,14 +1,16 @@
 // OP Central — Shell: sidebar, topbar, role switcher, notifications drawer
 
-function Sidebar() {
-  const { route, navigate, state, currentUser, realUserId, getUser } = useStore();
-  const u = getUser(currentUser);
-  const realIsAdmin = (getUser(realUserId) || {}).role === 'Org Admin';
-  const allowed = perm(u.role).nav;
+// The one definition of what is in the navigation.
+//
+// The sidebar renders it and the keyboard command palette searches it. Two
+// lists would drift, and a palette that offered a screen the sidebar hides
+// would be a way around the role's permissions rather than a convenience.
+function opcNavGroups(state, role) {
+  const allowed = perm(role).nav;
   const pendingTransfers = state.transfer_requests?.filter(t => t.status === 'Pending').length || 0;
-  const overdueCount = state.sales_orders.filter(s => (s.days_overdue || 0) > 0).length;
-  const pendingMatches = state.vendor_invoices.filter(v => v.status === 'Pending 3-Way Match').length;
-  const myTasks = window.tasksForRole ? window.tasksForRole(state, u.role, () => {}, () => {}, () => {}).length : 0;
+  const overdueCount = (state.sales_orders || []).filter(s => (s.days_overdue || 0) > 0).length;
+  const pendingMatches = (state.vendor_invoices || []).filter(v => v.status === 'Pending 3-Way Match').length;
+  const myTasks = window.tasksForRole ? window.tasksForRole(state, role, () => {}, () => {}, () => {}).length : 0;
 
   const navGroups = [
     { label: 'Overview', items: [
@@ -54,7 +56,7 @@ function Sidebar() {
   const filteredGroups = navGroups
     .map(g => ({ ...g, items: g.items.filter(it =>
       (allowed.includes(it.id) || (window.SCM_ROUTES_SET && window.SCM_ROUTES_SET[it.id] &&
-        window.canAccess && window.canAccess(u.role, it.id)))
+        window.canAccess && window.canAccess(role, it.id)))
       && !(window.featureBlocks && window.featureBlocks(it.id))) }))
     .filter(g => g.items.length > 0);
 
@@ -64,6 +66,15 @@ function Sidebar() {
       { id: 'platform', label: 'Organizations', icon: 'layers' },
     ] });
   }
+  return filteredGroups;
+}
+window.opcNavGroups = opcNavGroups;
+
+function Sidebar() {
+  const { route, navigate, state, currentUser, realUserId, getUser } = useStore();
+  const u = getUser(currentUser);
+  const realIsAdmin = (getUser(realUserId) || {}).role === 'Org Admin';
+  const filteredGroups = opcNavGroups(state, u.role);
 
   return (
     <aside className="sidebar">
@@ -76,7 +87,13 @@ function Sidebar() {
           {g.items.map(it => {
             const active = route === it.id || route.startsWith(it.id + '/');
             return (
-              <div key={it.id} className={`nav-item ${active ? 'active' : ''}`} onClick={() => navigate(it.id)}>
+              <div key={it.id} className={`nav-item ${active ? 'active' : ''}`}
+                   role="link" tabIndex={0} aria-current={active ? 'page' : undefined}
+                   onClick={() => navigate(it.id)}
+                   onKeyDown={e => {
+                     // A div is not a button: nothing makes it operable but this.
+                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(it.id); }
+                   }}>
                 <Icon name={it.icon} size={14}/>
                 <span>{it.label}</span>
                 {it.badge ? <span className="badge">{it.badge}</span> : null}

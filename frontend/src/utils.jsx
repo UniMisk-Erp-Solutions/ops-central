@@ -264,15 +264,82 @@ function ToastProvider({ children }) {
 const useToast = () => useContext(ToastCtx);
 
 /* Modal */
+// A dialog you can work without a mouse.
+//
+//   Esc          closes THIS one, and only if it is the top one. Every dialog
+//                used to listen on the window, so Escape closed all of them at
+//                once and a dialog opened from a dialog took its parent down.
+//   Tab          stays inside. Tabbing out of a dialog and into the page behind
+//                it is how somebody edits the wrong record.
+//   on open      the first field takes focus, so typing can start straight away
+//   on close     focus goes back where it came from, not to the top of the page
 function Modal({ title, children, onClose, footer, size }) {
+  const ref = React.useRef(null);
+  const openerRef = React.useRef(null);
+  const idRef = React.useRef('modal-' + Math.random().toString(36).slice(2));
+  // Read through a ref so the listener is installed once and still calls the
+  // caller's current handler — re-installing it on every render would reorder
+  // the stack and let a parent dialog close before its child.
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
-    const k = (e) => { if (e.key === 'Escape') onClose && onClose(); };
-    window.addEventListener('keydown', k);
-    return () => window.removeEventListener('keydown', k);
-  }, [onClose]);
+    openerRef.current = document.activeElement;
+    const pop = window.opcOverlayPush ? window.opcOverlayPush(idRef.current) : null;
+
+    // Focus the first thing worth typing into — but never a field the user has
+    // to scroll to find, and never a checkbox they might toggle by pressing
+    // space to scroll.
+    const t = setTimeout(() => {
+      const box = ref.current;
+      if (!box) return;
+      if (box.contains(document.activeElement)) return;
+      const first = box.querySelector(
+        '.modal-body input:not([type="checkbox"]):not([type="radio"]):not([disabled]),' +
+        '.modal-body textarea:not([disabled]), .modal-body select:not([disabled])');
+      if (first && first.focus) { try { first.focus(); if (first.select) first.select(); } catch (e) {} }
+      else if (box.focus) { try { box.focus(); } catch (e) {} }
+    }, 0);
+
+    // Escape listens on the window, not on the dialog. On the dialog it would
+    // only work while focus happened to be inside it, and the one key somebody
+    // presses to get out has to work every time.
+    const onEsc = (e) => {
+      if (e.key !== 'Escape') return;
+      if (window.opcOverlayTop && window.opcOverlayTop() !== idRef.current) return;  // not the top one
+      onCloseRef.current && onCloseRef.current();
+    };
+    window.addEventListener('keydown', onEsc);
+
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('keydown', onEsc);
+      if (pop) pop(); else if (window.opcOverlayPop) window.opcOverlayPop(idRef.current);
+      const back = openerRef.current;
+      if (back && typeof back.focus === 'function' && document.contains(back)) {
+        try { back.focus(); } catch (e) {}
+      }
+    };
+  }, []);
+
+  const onKeyDown = (e) => {
+    if (e.key !== 'Tab' || !ref.current) return;
+    const focusable = Array.from(ref.current.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
+      ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+      .filter(el => el.offsetParent !== null || el === document.activeElement);
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className={`modal ${size || ''}`} onClick={e => e.stopPropagation()}>
+      <div className={`modal ${size || ''}`} ref={ref} tabIndex={-1}
+           role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined}
+           onKeyDown={onKeyDown}
+           onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">{title}</h3>
           <button className="btn btn-ghost btn-sm" onClick={onClose}><Icon name="x" size={14}/></button>

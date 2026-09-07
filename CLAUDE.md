@@ -24,7 +24,7 @@ something was wrong in a way that was not obvious.
 ## Before deploying
 
 ```bash
-for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering boq; do
+for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering boq keyboard; do
   node scripts/uitest/$t-check.js frontend
 done
 ```

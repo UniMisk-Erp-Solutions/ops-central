@@ -1,0 +1,491 @@
+#!/usr/bin/env node
+/**
+ * OP Central — keyboard control check
+ * ---------------------------------------------------------------------------
+ * The people who use this software live on the keyboard, and a keyboard layer
+ * fails in exactly one way: it fires when it should not.
+ *
+ * An accountant halfway through typing a part number presses g, s, /, space and
+ * every arrow. If any of those jumps to another screen, their entry is gone and
+ * they will not trust the software again. So the rule is asserted, not hoped:
+ *
+ *   NEVER WHILE TYPING   every bare shortcut is dead in a text field. Only
+ *                        Escape, Ctrl+K and Ctrl+Enter reach through one.
+ *   NEVER OVER A COMBO   Ctrl+C, Ctrl+F, Ctrl+R, Alt+Left still belong to the
+ *                        browser. We take Ctrl+K and Ctrl+Enter, nothing else.
+ *   NEVER PAST A ROLE    a shortcut is a faster way somewhere you may already
+ *                        go, never a way into somewhere you may not.
+ *   THE CURSOR SURVIVES  it is an attribute, because React rewrites className
+ *                        on re-render and would wipe a class mid-list.
+ *
+ * Usage: node scripts/uitest/keyboard-check.js [path-to-frontend]
+ */
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+let Babel, React, JSDOM;
+try {
+  Babel = require('@babel/standalone');
+  React = require('react');
+  JSDOM = require('jsdom').JSDOM;
+} catch (e) {
+  console.error('Missing dev deps. Run:\n  npm i --no-save @babel/standalone@7.29.0 react@18.3.1 react-dom@18.3.1 jsdom');
+  process.exit(2);
+}
+
+const dir = process.argv[2] || path.join(__dirname, '..', '..', 'frontend');
+const html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
+const plain = [...html.matchAll(/<script src="(src\/[^"]+)"><\/script>/g)].map(m => m[1]);
+const jsx = [...html.matchAll(/type="text\/babel"\s+src="([^"]+)"/g)].map(m => m[1]);
+
+const sandbox = { console: { log() {}, warn() {}, error() {}, info() {} } };
+sandbox.window = sandbox; sandbox.globalThis = sandbox;
+const node = () => ({ style: { setProperty() {} }, setAttribute() {}, appendChild() {},
+  classList: { add() {}, remove() {} } });
+sandbox.document = { createElement: node, head: node(), body: node(),
+  documentElement: { style: { setProperty() {} } },
+  addEventListener() {}, removeEventListener() {}, querySelector: () => null,
+  querySelectorAll: () => [], getElementById: () => null };
+sandbox.location = { hostname: 'ml.ops-central.unimisk.com', href: '', pathname: '/', search: '', hash: '' };
+sandbox.navigator = { userAgent: 'node' };
+sandbox.localStorage = { getItem: () => null, setItem() {}, removeItem() {}, clear() {} };
+sandbox.sessionStorage = sandbox.localStorage;
+sandbox.addEventListener = () => {}; sandbox.removeEventListener = () => {};
+sandbox.fetch = () => new Promise(() => {});
+sandbox.setTimeout = () => 0; sandbox.clearTimeout = () => {};
+sandbox.setInterval = () => 0; sandbox.clearInterval = () => {};
+sandbox.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+sandbox.history = { pushState() {}, replaceState() {}, back() {} };
+sandbox.crypto = { randomUUID: () => 'x', getRandomValues: a => a };
+sandbox.React = React;
+sandbox.ReactDOM = { createRoot: () => ({ render() {} }) };
+sandbox.OPC_ENV = { APP_BASE_DOMAIN: 'ops-central.unimisk.com' };
+vm.createContext(sandbox);
+for (const f of [...plain, ...jsx]) {
+  vm.runInContext(Babel.transform(fs.readFileSync(path.join(dir, f), 'utf8'),
+    { presets: ['react'], filename: f }).code, sandbox, { filename: f });
+}
+
+let bad = 0;
+// An exception thrown inside a dispatched DOM event rejects nothing — node
+// reports it and the run carries on green. Anything uncaught is a failure.
+process.on('uncaughtException', (e) => {
+  bad++;
+  console.log('  X  uncaught: ' + (e && e.message));
+  console.log(String((e && e.stack) || '').split('\n').slice(1, 4).join('\n'));
+});
+const check = (label, got, want) => {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (!ok) { bad++; console.log(`  X  ${label}\n       got  ${JSON.stringify(got)}\n       want ${JSON.stringify(want)}`); }
+  else console.log(`  ok  ${label}`);
+};
+
+// A keystroke, as the resolver sees one.
+const K = (key, o) => Object.assign({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false }, o || {});
+const act = (key, ctx, o) => {
+  const r = sandbox.kbdResolve(K(key, o), ctx || {});
+  return r ? r.action : null;
+};
+
+// Every bare key this layer claims. If one of these ever fires while typing,
+// somebody loses work.
+const BARE = ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'PageDown', 'PageUp',
+  'Home', 'End', 'Enter', ' ', '/', '?', 'g', 'd', 's'];
+
+console.log('\n[1] nothing fires while somebody is typing');
+check('every bare shortcut is dead in a text field',
+  BARE.filter(k => act(k, { typing: true }) !== null), []);
+check('even mid-way through a "g" jump, a field wins',
+  act('s', { typing: true, pending: 'g' }), null);
+check('Escape still works from inside a field', act('Escape', { typing: true }), 'escape');
+check('Ctrl+K still works from inside a field',
+  act('k', { typing: true }, { ctrlKey: true }), 'palette');
+check('Ctrl+Enter still submits from inside a field',
+  act('Enter', { typing: true }, { ctrlKey: true }), 'primary');
+
+console.log('\n[2] what counts as typing');
+const el = (tag, type) => ({ tagName: tag, type });
+check('a text input is typing', sandbox.kbdIsTyping(el('INPUT', 'text')), true);
+check('a number input is typing', sandbox.kbdIsTyping(el('INPUT', 'number')), true);
+check('an input with no type at all is typing', sandbox.kbdIsTyping({ tagName: 'INPUT' }), true);
+check('a date input is typing', sandbox.kbdIsTyping(el('INPUT', 'date')), true);
+check('a textarea is typing', sandbox.kbdIsTyping(el('TEXTAREA')), true);
+check('a dropdown is typing — arrows belong to it', sandbox.kbdIsTyping(el('SELECT')), true);
+check('contenteditable is typing', sandbox.kbdIsTyping({ tagName: 'DIV', isContentEditable: true }), true);
+check('a CHECKBOX is not — space must still tick it', sandbox.kbdIsTyping(el('INPUT', 'checkbox')), false);
+check('a radio is not', sandbox.kbdIsTyping(el('INPUT', 'radio')), false);
+check('a button is not', sandbox.kbdIsTyping(el('BUTTON')), false);
+check('a table row is not', sandbox.kbdIsTyping(el('TR')), false);
+check('nothing focused is not', sandbox.kbdIsTyping(null), false);
+
+console.log('\n[3] the browser keeps its own shortcuts');
+[['c', { ctrlKey: true }], ['f', { ctrlKey: true }], ['r', { ctrlKey: true }],
+ ['a', { ctrlKey: true }], ['v', { ctrlKey: true }], ['p', { ctrlKey: true }],
+ ['t', { metaKey: true }], ['w', { metaKey: true }]].forEach(([k, o]) =>
+  check(`Ctrl/Cmd+${k} is left alone`, act(k, {}, o), null));
+check('Alt+Left stays browser back', act('ArrowLeft', {}, { altKey: true }), null);
+check('Ctrl+Down is left alone', act('ArrowDown', {}, { ctrlKey: true }), null);
+check('Ctrl+Alt+K is NOT our palette', act('k', {}, { ctrlKey: true, altKey: true }), null);
+check('but plain Ctrl+K is', act('k', {}, { ctrlKey: true }), 'palette');
+check('and so is Cmd+K on a Mac', act('k', {}, { metaKey: true }), 'palette');
+check('shift does not change a bare arrow', act('ArrowDown', {}, { shiftKey: true }), 'row-move');
+
+console.log('\n[4] the four movement keys, and the rest of the list');
+check('down moves one row', sandbox.kbdResolve(K('ArrowDown'), {}), { action: 'row-move', delta: 1 });
+check('up moves one row back', sandbox.kbdResolve(K('ArrowUp'), {}), { action: 'row-move', delta: -1 });
+check('page down moves ten', sandbox.kbdResolve(K('PageDown'), {}), { action: 'row-move', delta: 10 });
+check('page up moves ten back', sandbox.kbdResolve(K('PageUp'), {}), { action: 'row-move', delta: -10 });
+check('right opens the row', act('ArrowRight'), 'row-open');
+check('so does Enter', act('Enter'), 'row-open');
+check('left goes back', act('ArrowLeft'), 'back');
+check('Home jumps to the first row', act('Home'), 'row-first');
+check('End jumps to the last', act('End'), 'row-last');
+check('space ticks the row', act(' '), 'row-tick');
+check('slash goes to the search box', act('/'), 'search');
+check('question mark opens the shortcut list', act('?'), 'help');
+check('a letter on its own does nothing', act('z'), null);
+
+console.log('\n[5] "g" then a key jumps to a screen');
+check('g alone only arms the sequence',
+  sandbox.kbdResolve(K('g'), {}), { action: 'pending', pending: 'g' });
+check('g then s is sales orders',
+  sandbox.kbdResolve(K('s'), { pending: 'g' }), { action: 'goto', route: 'sales-orders' });
+check('g then p is vendor POs',
+  sandbox.kbdResolve(K('p'), { pending: 'g' }), { action: 'goto', route: 'vendor-pos' });
+check('g then a key that means nothing just forgets it',
+  act('9', { pending: 'g' }), 'clear-pending');
+check('every destination in the table is a real screen, spelled the same way',
+  Object.values(sandbox.KBD_GOTO).filter(r => !new RegExp(`['"]${r}['"]`).test(
+    fs.readFileSync(path.join(dir, 'src', 'app.jsx'), 'utf8'))), []);
+check('no two keys claim the same screen',
+  Object.values(sandbox.KBD_GOTO).length - new Set(Object.values(sandbox.KBD_GOTO)).size, 0);
+
+console.log('\n[5b] a focused button keeps its own Enter and Space');
+// One press of Enter on a "Create" button must do ONE thing. Before this guard
+// it pressed the button AND opened whatever row the cursor was sitting on —
+// two actions from one keystroke, the second one invisible.
+check('Enter on a focused button is the button, not the row',
+  act('Enter', { control: true }), null);
+check('and Space on it is the button', act(' ', { control: true }), null);
+check('but the arrows still move the list underneath',
+  act('ArrowDown', { control: true }), 'row-move');
+check('and Escape still works', act('Escape', { control: true }), 'escape');
+check('with nothing focused, Enter opens the row', act('Enter', {}), 'row-open');
+
+const ctl = (tag, attrs) => ({ tagName: tag, getAttribute: k => (attrs || {})[k] || null });
+check('a button is a control', sandbox.kbdIsControl(ctl('BUTTON')), true);
+check('a link is a control', sandbox.kbdIsControl(ctl('A')), true);
+check('a checkbox is a control', sandbox.kbdIsControl({ tagName: 'INPUT', type: 'checkbox', getAttribute: () => null }), true);
+check('a sidebar nav item is a control — it is in the tab order',
+  sandbox.kbdIsControl(ctl('DIV', { tabindex: '0', role: 'link' })), true);
+check('a plain div is not', sandbox.kbdIsControl(ctl('DIV')), false);
+check('and neither is a table row', sandbox.kbdIsControl(ctl('TR')), false);
+check('tabindex="-1" is not in the tab order, so not a control',
+  sandbox.kbdIsControl(ctl('DIV', { tabindex: '-1' })), false);
+check('nothing focused is not a control', sandbox.kbdIsControl(null), false);
+
+console.log('\n[6] an open palette owns the keyboard');
+check('the list behind it does not move',
+  BARE.filter(k => act(k, { overlay: true }) !== null), []);
+check('a jump cannot even be started behind it',
+  act('g', { overlay: true }), null);
+check('but Escape still closes it', act('Escape', { overlay: true }), 'escape');
+check('and Ctrl+K still reaches it', act('k', { overlay: true }, { ctrlKey: true }), 'palette');
+
+// ---------------------------------------------------------------------------
+// The row cursor, against a real DOM.
+// ---------------------------------------------------------------------------
+const dom = new JSDOM(`<!doctype html><html><body>
+  <main class="main">
+    <table class="t"><tbody>
+      <tr id="r1" style="cursor: pointer"><td><input type="checkbox" id="c1"></td><td>one</td></tr>
+      <tr id="r2" style="cursor: pointer"><td><input type="checkbox"></td><td>two</td></tr>
+      <tr id="r3" style="cursor:pointer"><td>three</td></tr>
+      <tr id="dead"><td>a total row nobody can click</td></tr>
+      <tr id="skip" style="cursor: pointer" data-kbd-skip><td>opted out</td></tr>
+    </tbody></table>
+  </main>
+</body></html>`);
+const D = dom.window.document;
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
+console.log('\n[7] only rows a person can actually act on');
+check('the three clickable rows, and no others',
+  sandbox.kbdRows().map(r => r.id), ['r1', 'r2', 'r3']);
+check('a total row with no handler is skipped', sandbox.kbdRows().some(r => r.id === 'dead'), false);
+check('and a row can opt out by hand', sandbox.kbdRows().some(r => r.id === 'skip'), false);
+
+console.log('\n[8] moving, and stopping at the ends');
+check('the first press lands on the first row', sandbox.kbdMove(1).id, 'r1');
+check('the next moves down one', sandbox.kbdMove(1).id, 'r2');
+check('and up one goes back', sandbox.kbdMove(-1).id, 'r1');
+check('up at the top stays put — it does not wrap', sandbox.kbdMove(-1).id, 'r1');
+check('a big jump clamps to the last row', sandbox.kbdMove(10).id, 'r3');
+check('down at the bottom stays put', sandbox.kbdMove(1).id, 'r3');
+check('Home goes to the first', sandbox.kbdJump('first').id, 'r1');
+check('End goes to the last', sandbox.kbdJump('last').id, 'r3');
+check('exactly one row is ever marked',
+  D.querySelectorAll('[data-kbd-cursor]').length, 1);
+sandbox.kbdClearCursor();
+check('clearing leaves none', D.querySelectorAll('[data-kbd-cursor]').length, 0);
+check('with the cursor gone, up starts at the LAST row', sandbox.kbdMove(-1).id, 'r3');
+
+console.log('\n[9] the cursor survives a re-render');
+// React rewrites className when a row re-renders. A highlight kept in a class
+// would vanish mid-list; an attribute React never set is left alone.
+sandbox.kbdJump('first');
+D.getElementById('r1').className = 'selected';           // what React does on update
+check('the mark is still on the row after className is rewritten',
+  D.getElementById('r1').getAttribute('data-kbd-cursor'), '1');
+check('and the engine still knows where it is', sandbox.kbdCurrentRow().id, 'r1');
+
+console.log('\n[10] opening and ticking go through the screen own handlers');
+let opened = 0, ticked = 0;
+D.getElementById('r1').addEventListener('click', () => opened++);
+D.getElementById('c1').addEventListener('click', () => ticked++);
+sandbox.kbdJump('first');
+check('Enter clicks the row, so its own handler runs', sandbox.kbdOpenRow(), true);
+check('exactly once', opened, 1);
+check('space clicks the checkbox on that row', sandbox.kbdTickRow(), true);
+check('exactly once', ticked, 1);
+sandbox.kbdJump('last');                                  // r3 has no checkbox
+check('a row with no checkbox is left alone', sandbox.kbdTickRow(), false);
+sandbox.kbdClearCursor();
+check('with nothing selected, opening does nothing', sandbox.kbdOpenRow(), false);
+check('and neither does ticking', sandbox.kbdTickRow(), false);
+
+console.log('\n[11] a dialog takes over the list keys');
+const dom2 = new JSDOM(`<!doctype html><html><body>
+  <main class="main"><table class="t"><tbody>
+    <tr id="behind" style="cursor: pointer"><td>a row on the page behind</td></tr>
+  </tbody></table></main>
+  <div class="modal-backdrop"><div class="modal"><div class="modal-body">
+    <table class="t"><tbody>
+      <tr id="inm1" style="cursor: pointer"><td>a row in the dialog</td></tr>
+      <tr id="inm2" style="cursor: pointer"><td>another</td></tr>
+    </tbody></table>
+  </div></div></div>
+</body></html>`);
+sandbox.document = dom2.window.document;
+sandbox.getComputedStyle = dom2.window.getComputedStyle.bind(dom2.window);
+check('the rows are the dialog rows, not the ones behind it',
+  sandbox.kbdRows().map(r => r.id), ['inm1', 'inm2']);
+check('so the page behind cannot be moved under an open dialog',
+  sandbox.kbdRows().some(r => r.id === 'behind'), false);
+
+console.log('\n[12] an empty screen is not a crash');
+const dom3 = new JSDOM('<!doctype html><html><body><main class="main"><div>Nothing here yet</div></main></body></html>');
+sandbox.document = dom3.window.document;
+sandbox.getComputedStyle = dom3.window.getComputedStyle.bind(dom3.window);
+check('no rows', sandbox.kbdRows(), []);
+check('moving does nothing at all', sandbox.kbdMove(1), null);
+check('so does jumping', sandbox.kbdJump('first'), null);
+check('so does opening', sandbox.kbdOpenRow(), false);
+check('and there is nothing under the cursor', sandbox.kbdCurrentRow(), null);
+
+console.log('\n[13] the palette cannot get past a role');
+sandbox.document = D;
+const STATE = {
+  sales_orders: [{ id: 'so1', so_no: 'SO/FY26/0001', customer_id: 'c1', status: 'Approved',
+                   lines: [{ id: 'l1', bundle_qty: 1, unit_price: 100000, components: [] }], invoices: [] }],
+  vendor_pos: [{ id: 'po1', po_no: 'PO202609001', vendor_id: 'v1', status: 'Sent' }],
+  grns: [{ id: 'g1', grn_no: 'GRN/0001', status: 'Accepted' }],
+  customers: [{ id: 'c1', name: 'ABG Shipyard', code: 'ABG' }],
+  vendors: [{ id: 'v1', name: 'Ingram Micro', code: 'IM' }],
+  products: [{ id: 'p1', name: 'Catalyst 9300', code: 'C9300' }],
+  // Every collection the task builder reads. A missing one is not this
+  // feature's bug, but it would stop the check before it asserted anything.
+  transfer_requests: [], vendor_invoices: [], users: [], notifications: [],
+  rfqs: [], sourcings: [], dismissed_writeoff: [], config: {}, audit: [],
+};
+const adminCmds = sandbox.kbdCommands(STATE, 'Org Admin', {});
+check('an admin is offered screens', adminCmds.some(c => c.kind === 'screen'), true);
+check('and records', adminCmds.some(c => c.kind === 'Sales order'), true);
+check('a record carries the route that opens it',
+  (adminCmds.find(c => c.kind === 'Sales order') || {}).route, 'sales-orders/so1');
+
+// Whatever the sidebar hides, the palette must hide. Same list, same filter.
+const ROLES = ['Org Admin', 'Purchase', 'Stores', 'Sales', 'Billing'];
+const leaks = [];
+ROLES.forEach(r => {
+  const allowed = new Set([]);
+  (sandbox.opcNavGroups(STATE, r) || []).forEach(g => (g.items || []).forEach(it => allowed.add(it.id)));
+  sandbox.kbdCommands(STATE, r, {}).forEach(c => {
+    const head = String(c.route).split('/')[0];
+    if (!allowed.has(head)) leaks.push(r + ' -> ' + c.route);
+  });
+});
+check('no role is offered anything its sidebar does not show', leaks, []);
+check('every role gets a usable palette',
+  ROLES.filter(r => sandbox.kbdCommands(STATE, r, {}).length === 0), []);
+
+console.log('\n[14] the palette finds what you typed');
+const items = [
+  { kind: 'screen', label: 'Vendor POs', hint: 'Procurement', route: 'vendor-pos' },
+  { kind: 'screen', label: 'Sales Orders', hint: 'Sales', route: 'sales-orders' },
+  { kind: 'Sales order', label: 'SO/FY26/0001', hint: 'ABG Shipyard', route: 'sales-orders/so1' },
+  { kind: 'Vendor PO', label: 'PO202609001', hint: 'Ingram Micro', route: 'vendor-pos/po1' },
+];
+check('an exact prefix wins', sandbox.kbdFilter(items, 'vendor')[0].label, 'Vendor POs');
+check('a document number finds its record',
+  sandbox.kbdFilter(items, 'PO2026')[0].label, 'PO202609001');
+check('the customer name finds their order',
+  sandbox.kbdFilter(items, 'abg')[0].label, 'SO/FY26/0001');
+check('letters in order still match', sandbox.kbdFilter(items, 'vpo').length > 0, true);
+check('nonsense matches nothing', sandbox.kbdFilter(items, 'zzqq'), []);
+check('an empty box shows everything', sandbox.kbdFilter(items, '').length, items.length);
+check('and whitespace is not a search', sandbox.kbdFilter(items, '   ').length, items.length);
+
+console.log('\n[15] it is actually wired in');
+const idx = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
+check('keyboard.jsx is loaded by the page', /src\/keyboard\.jsx/.test(idx), true);
+check('and before app.jsx, which mounts it',
+  idx.indexOf('src/keyboard.jsx') < idx.indexOf('src/app.jsx'), true);
+const appJsx = fs.readFileSync(path.join(dir, 'src', 'app.jsx'), 'utf8');
+check('the layer is mounted in the shell', /<KeyboardLayer\s*\/>/.test(appJsx), true);
+const utilsJsx = fs.readFileSync(path.join(dir, 'src', 'utils.jsx'), 'utf8');
+check('dialogs trap Tab', /e\.key !== 'Tab'/.test(utilsJsx), true);
+check('dialogs give focus back when they close', /openerRef/.test(utilsJsx), true);
+check('and only the top dialog answers Escape', /opcOverlayTop/.test(utilsJsx), true);
+// Escape has to work wherever focus is. On the dialog element it would only
+// work while focus happened to be inside it.
+check('Escape is heard on the window, not just inside the dialog',
+  /window\.addEventListener\('keydown', onEsc\)/.test(utilsJsx), true);
+check('and it is taken off again when the dialog closes',
+  /window\.removeEventListener\('keydown', onEsc\)/.test(utilsJsx), true);
+check('the handler is read through a ref, so the stack order holds',
+  /onCloseRef/.test(utilsJsx), true);
+const shellJsx = fs.readFileSync(path.join(dir, 'src', 'shell.jsx'), 'utf8');
+check('sidebar links can be reached by Tab', /tabIndex=\{0\}/.test(shellJsx), true);
+check('and opened with Enter', /onKeyDown/.test(shellJsx), true);
+check('the sidebar and the palette read ONE nav list',
+  /window\.opcNavGroups = opcNavGroups/.test(shellJsx), true);
+const css = fs.readFileSync(path.join(dir, 'src', 'styles.css'), 'utf8');
+check('the selected row is visible',
+  /tbody tr\[data-kbd-cursor\]/.test(css), true);
+check('and so is whatever has focus', /:focus-visible/.test(css), true);
+
+// ---------------------------------------------------------------------------
+// [16] A REAL dialog, mounted, with its effects running.
+// ---------------------------------------------------------------------------
+// Everything above this line is logic. render-check renders every screen but
+// renders them on the SERVER, where no effect ever runs — so the focus trap,
+// the focus restore and the Escape listener are invisible to it. They live on
+// every dialog on every screen, so they are mounted here for real and driven by
+// keyboard, in a browser-shaped DOM.
+(async () => {
+  console.log('\n[16] a real dialog, driven by keyboard');
+
+  // The DOM globals have to exist BEFORE react-dom is required: it decides once,
+  // at load, whether it is running in a browser. Require it first and it decides
+  // it is not, falls back to an IE-era polyfill, and throws on the first focus —
+  // noise that would hide a real failure underneath it.
+  // jsdom catches whatever is thrown inside an event listener and reports it to
+  // its virtual console — no process-level handler ever sees it. Without this,
+  // a crash inside a keystroke prints a stack and the run still says PASS.
+  const vc = new (require('jsdom').VirtualConsole)();
+  let expectingThrow = false;
+  vc.on('jsdomError', (err) => {
+    if (expectingThrow) { expectingThrow = 'seen'; return; }   // the trap testing itself
+    bad++;
+    console.log('  X  a keystroke threw: ' + (err && err.message));
+  });
+  vc.on('error', (msg) => { bad++; console.log('  X  ' + msg); });
+
+  const live = new JSDOM(
+    '<!doctype html><html><body><div id="root"></div><button id="opener">open</button></body></html>',
+    { pretendToBeVisual: true, virtualConsole: vc });
+  const w = live.window;
+  global.window = w; global.document = w.document; global.navigator = w.navigator;
+  global.HTMLElement = w.HTMLElement; global.Element = w.Element; global.Node = w.Node;
+  global.getComputedStyle = w.getComputedStyle.bind(w);
+  global.requestAnimationFrame = cb => setTimeout(cb, 0);
+  global.cancelAnimationFrame = clearTimeout;
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+
+  let ReactDOMClient, act;
+  try { ReactDOMClient = require('react-dom/client'); act = require('react').act; }
+  catch (e) { ReactDOMClient = null; }
+
+  if (!ReactDOMClient || typeof act !== 'function') {
+    console.log('  --  skipped: needs react-dom 18.3+ (npm i --no-save react-dom@18.3.1)');
+  } else {
+
+    // The same two files the browser loads, in a scope shaped like the browser's.
+    w.React = React; w.useEffect = React.useEffect; w.useState = React.useState;
+    w.OPC_ENV = { APP_BASE_DOMAIN: 'x' }; w.console = { log() {}, warn() {}, error() {} };
+    vm.createContext(w);
+    ['src/keyboard.jsx', 'src/utils.jsx'].forEach(f => {
+      try {
+        vm.runInContext(Babel.transform(fs.readFileSync(path.join(dir, f), 'utf8'),
+          { presets: ['react'], filename: f }).code, w, { filename: f });
+      } catch (e) { /* a screen helper it cannot see here — Modal itself still loads */ }
+    });
+
+    const Modal = w.Modal;
+    const h = React.createElement;
+    if (typeof Modal !== 'function') {
+      check('the Modal component loaded', typeof Modal, 'function');
+    } else {
+      const root = ReactDOMClient.createRoot(w.document.getElementById('root'));
+      let closes = 0;
+
+      w.document.getElementById('opener').focus();
+      check('focus starts on whatever opened it', w.document.activeElement.id, 'opener');
+
+      act(() => {
+        root.render(h(Modal, { title: 'Receive items', onClose: () => closes++,
+          footer: h('button', { className: 'btn btn-primary' }, 'Confirm') },
+          h('input', { className: 'input', id: 'qty', type: 'number' }),
+          h('input', { className: 'input', id: 'note', type: 'text' })));
+      });
+      await new Promise(r => setTimeout(r, 20));
+      act(() => { w.document.body.offsetHeight; });
+
+      check('it rendered', !!w.document.querySelector('.modal'), true);
+      check('the first field took focus, so typing starts straight away',
+        w.document.activeElement && w.document.activeElement.id, 'qty');
+      check('a checkbox is never what gets focused',
+        (w.document.activeElement.type || ''), 'number');
+      check('it is on the overlay stack', w.opcOverlayTop() != null, true);
+
+      act(() => { w.document.activeElement.dispatchEvent(
+        new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+      check('Escape from inside a field closes it', closes, 1);
+
+      // The case that breaks when Escape listens on the dialog instead of the
+      // window: focus is somewhere else entirely and the key never arrives.
+      closes = 0;
+      w.document.body.focus();
+      act(() => { w.document.body.dispatchEvent(
+        new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+      check('and Escape from OUTSIDE it closes it too', closes, 1);
+
+      act(() => { root.unmount(); });
+      await new Promise(r => setTimeout(r, 10));
+      check('closing takes it off the stack', w.opcOverlayTop(), null);
+      check('and puts focus back where it came from', w.document.activeElement.id, 'opener');
+
+      closes = 0;
+      w.document.body.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      check('a closed dialog no longer listens for anything', closes, 0);
+
+      // The trap above only means something if it fires. Throw on purpose and
+      // confirm it was counted, then take the count back off.
+      expectingThrow = true;
+      const boom = () => { throw new Error('deliberate'); };
+      w.document.body.addEventListener('click', boom);
+      w.document.body.dispatchEvent(new w.window.Event('click', { bubbles: true }));
+      w.document.body.removeEventListener('click', boom);
+      const caught = expectingThrow === 'seen';
+      expectingThrow = false;
+      check('and a crash inside a keystroke would be caught, not printed and passed',
+        caught, true);
+    }
+  }
+
+  console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the whole app runs from the keyboard, and stays out of the way while typing');
+  process.exit(bad ? 1 : 0);
+})();
