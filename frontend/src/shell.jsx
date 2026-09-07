@@ -251,10 +251,60 @@ function Topbar({ onOpenTweaks }) {
 function NotificationsDrawer({ onClose, role }) {
   const { state, mutate, navigate, currentUser } = useStore();
   const items = state.notifications.filter(n => (!n.role && !n.user_id) || (n.role && n.role === role) || (n.user_id && n.user_id === currentUser));
+  const ref = React.useRef(null);
+  const openerRef = React.useRef(null);
+  const idRef = React.useRef('drawer-' + Math.random().toString(36).slice(2));
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // The same four things every dialog in this app does. This one is not a
+  // Modal, so it has to say so itself: Escape closes it and only it, focus
+  // moves in when it opens and back to the bell when it closes.
+  React.useEffect(() => {
+    openerRef.current = document.activeElement;
+    const pop = window.opcOverlayPush ? window.opcOverlayPush(idRef.current) : null;
+    const onEsc = (e) => {
+      if (e.key !== 'Escape') return;
+      if (window.opcOverlayTop && window.opcOverlayTop() !== idRef.current) return;
+      onCloseRef.current && onCloseRef.current();
+    };
+    window.addEventListener('keydown', onEsc);
+    const t = setTimeout(() => {
+      const box = ref.current;
+      if (!box || box.contains(document.activeElement)) return;
+      const first = box.querySelector('button, [data-kbd-click], [tabindex]:not([tabindex="-1"])');
+      if (first && first.focus) { try { first.focus(); } catch (e) {} }
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('keydown', onEsc);
+      if (pop) pop(); else if (window.opcOverlayPop) window.opcOverlayPop(idRef.current);
+      const back = openerRef.current;
+      if (back && typeof back.focus === 'function' && document.contains(back)) {
+        try { back.focus(); } catch (e) {}
+      }
+    };
+  }, []);
+
+  // Tab stays inside it, the same way it stays inside a dialog.
+  const onKeyDown = (e) => {
+    if (e.key !== 'Tab' || !ref.current) return;
+    const focusable = Array.from(ref.current.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),'
+      + ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+      .filter(el => el === document.activeElement
+                 || (window.kbdVisible ? window.kbdVisible(el) : el.offsetParent !== null));
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+
   return (
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: 80 }} onClick={onClose}/>
-      <div className="drawer">
+      <div className="drawer" ref={ref} role="dialog" aria-modal="true"
+           aria-label="Notifications" onKeyDown={onKeyDown}>
         <div className="drawer-header">
           <div>
             <strong style={{ fontSize: 13 }}>Notifications</strong>

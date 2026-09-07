@@ -263,6 +263,45 @@ check('nor as part of a browser combination',
 check('a digit mid-way through a g jump just forgets the jump',
   act('3', { pending: 'g' }), 'clear-pending');
 
+console.log('\n[5e] a focused button is pressed, even with a row selected');
+// The bug: once a row was selected, Enter meant "open the row" everywhere —
+// including while focus sat on a button. Tab to "New Sales Order", press Enter,
+// and the row opened instead. The button on screen never fired.
+check('Enter on a focused button presses the BUTTON, not the selected row',
+  act('Enter', { control: true, onRow: true }), 'activate');
+check('and Space presses it too, rather than ticking the row',
+  act(' ', { control: true, onRow: true }), 'activate');
+check('with nothing focused, Enter still opens the selected row',
+  act('Enter', { onRow: true }), 'row-open');
+check('and Space still ticks it', act(' ', { onRow: true }), 'row-tick');
+check('focus on the list itself still means the row — the handler routes it',
+  act('Enter', { control: true, inList: true, onRow: true }), 'activate');
+check('right on a focused button does not open the row either',
+  act('ArrowRight', { control: true, onRow: true }), null);
+
+console.log('\n[5f] an open dialog owns the screen');
+// A dialog is meant to be the only thing you can operate. Left crossed to the
+// sidebar behind it, "g" jumped to another screen, and "]" switched a tab the
+// dialog was covering — all of it leaving an editing dialog open over a page
+// that had moved on.
+const dlg = { dialog: true };
+check('left does not cross to the sidebar behind it',
+  act('ArrowLeft', dlg), null);
+check('right does not cross out to the page behind it',
+  act('ArrowRight', dlg), null);
+check('the record tabs behind it cannot be switched',
+  [']', '[', '3'].filter(k => act(k, dlg) !== null), []);
+check('and a g jump cannot navigate out from under it',
+  act('s', { dialog: true, pending: 'g' }), 'clear-pending');
+check('slash does not hunt for a search box on the page behind',
+  act('/', dlg), null);
+check('but the arrows still drive the rows INSIDE it',
+  sandbox.kbdResolve(K('ArrowDown'), dlg), { action: 'row-move', delta: 1 });
+check('Enter still opens a row in it', act('Enter', { dialog: true, onRow: true }), 'row-open');
+check('Escape still closes it', act('Escape', dlg), 'escape');
+check('Ctrl+Enter still saves it', act('Enter', dlg, { ctrlKey: true }), 'primary');
+check('and Ctrl+K still opens the palette', act('k', dlg, { ctrlKey: true }), 'palette');
+
 console.log('\n[5c] a strip of tabs moves under the side arrows');
 check('right moves along the tabs',
   sandbox.kbdResolve(K('ArrowRight'), { control: true, pane: 'tabs' }),
@@ -944,6 +983,16 @@ check('and it still has a way in when no link matches the route',
 check('and opened with Enter', /onKeyDown/.test(shellJsx), true);
 check('the sidebar and the palette read ONE nav list',
   /window\.opcNavGroups = opcNavGroups/.test(shellJsx), true);
+// The notifications drawer is the one overlay that is not a Modal, so it has to
+// say for itself what every dialog does.
+check('the drawer closes on Escape, and only when it is the top one',
+  /opcOverlayTop\(\) !== idRef\.current/.test(shellJsx), true);
+check('it takes focus when it opens and gives it back when it closes',
+  /openerRef/.test(shellJsx), true);
+check('and Tab stays inside it', /e\.key !== 'Tab'/.test(shellJsx), true);
+check('a drawer counts as a dialog, so nothing behind it moves',
+  /querySelector\('\.modal, \.drawer'\)/.test(
+    fs.readFileSync(path.join(dir, 'src', 'keyboard.jsx'), 'utf8')), true);
 const css = fs.readFileSync(path.join(dir, 'src', 'styles.css'), 'utf8');
 check('the selected row is visible',
   /tbody tr\[data-kbd-cursor\]/.test(css), true);
