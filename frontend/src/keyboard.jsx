@@ -566,6 +566,24 @@ function kbdTabTo(where, doc) {
   return tab;
 }
 
+// Move along the group — and if there is nowhere further LEFT to go, leave it.
+//
+// Sitting on the first tab of a strip was a dead end: left moved along the tabs,
+// found nothing to its left, and did nothing at all. So focus that had crossed
+// into the page and landed on the tabs could never get back to the sidebar.
+//
+// Only leftwards, and only off a horizontal strip. Clamping at the top of the
+// sidebar is right, and there is nothing to the right of the last tab.
+function kbdGroupMoveOrExit(el, delta) {
+  const moved = kbdGroupMove(el, delta);
+  if (moved && moved !== el) return { moved, exited: null };
+  if (delta < 0 && kbdPaneOf(el) === 'tabs' && !kbdIsInList(el)) {
+    kbdClearCursor();
+    return { moved: null, exited: kbdFocusSidebar() };
+  }
+  return { moved: moved || null, exited: null };
+}
+
 // Which part of the screen is being driven. Left and right cross between the
 // sidebar and the page, so this has to be right or focus gets stuck in one.
 function kbdPaneOf(el) {
@@ -728,6 +746,7 @@ window.kbdFocusSidebar = kbdFocusSidebar;
 window.kbdFocusMain = kbdFocusMain;
 window.kbdGroupOf = kbdGroupOf;
 window.kbdGroupMove = kbdGroupMove;
+window.kbdGroupMoveOrExit = kbdGroupMoveOrExit;
 window.KBD_CLICK_CLASSES = KBD_CLICK_CLASSES;
 window.kbdResolve = kbdResolve;
 window.KBD_GOTO = KBD_GOTO;
@@ -884,9 +903,11 @@ function KeyboardLayer() {
           if (kbdActivate(focused)) e.preventDefault();
           return;
 
-        case 'group-move':
-          if (kbdGroupMove(focused, act.delta)) e.preventDefault();
+        case 'group-move': {
+          const r = kbdGroupMoveOrExit(focused, act.delta);
+          if (r.moved || r.exited) e.preventDefault();
           return;
+        }
 
         case 'pending':      setPending(act.pending); return;
         case 'clear-pending': setPending(null); return;
