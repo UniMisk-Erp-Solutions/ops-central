@@ -577,8 +577,13 @@ function kbdFocusMain(doc) {
 function kbdGroupMove(el, delta) {
   const g = kbdGroupOf(el);
   if (!g) return null;
+  // tabindex="-1" MUST be included here. This is a roving group: exactly one
+  // member holds the tab stop and every other one is -1 on purpose. Excluding
+  // them left one item to move between, so the arrows did nothing at all —
+  // which is precisely what happened to the sidebar.
   const items = Array.from(g.el.querySelectorAll(
-    'button:not([disabled]), a[href], [data-kbd-click], [tabindex]:not([tabindex="-1"])'))
+    'button:not([disabled]), a[href], [data-kbd-click], [tabindex], .nav-item'))
+    .filter(x => x !== g.el)
     .filter(x => x === el || kbdVisible(x));
   if (!items.length) return null;
   const at = items.indexOf(el);
