@@ -12,24 +12,33 @@ The people who use this software are accountants. They are faster and more
 accurate on a keyboard than on a mouse, and they resent being made to reach for
 one. Every screen can now be driven without touching it.
 
+**The arrows always belong to whatever has focus.** On the page itself they
+scroll it, exactly as they always did.
+
+| Key | What it does |
+|---|---|
+| `Tab` / `Shift+Tab` | every button, tab, card, chip, swatch, list and field, in order |
+| `Enter` / `Space` | press whatever is focused |
+| `Ctrl + K` | the command palette — every screen and record, by name |
+| `/` | jump to the search box on this screen |
+| `g` then a key | go straight to a screen (`g s` sales orders, `g p` vendor POs, …) |
+| `?` | the full list, on screen |
+| `Esc` | close what is on top; from a field, leave the field |
+| `Ctrl + Enter` | the primary button of the open dialog: save, create, confirm |
+
+**Tab onto a list**, and then:
+
 | Key | What it does |
 |---|---|
 | `↓` `↑` | next row / previous row |
 | `PgDn` `PgUp` | ten rows at a time |
 | `Home` `End` | first row / last row |
 | `→` or `Enter` | open the selected row |
-| `←` | drop the selection, then go back |
-| `Space` | tick the box on the selected row |
-| `Ctrl + K` | the command palette — every screen and record, by name |
-| `/` | jump to the search box on this screen |
-| `g` then a key | go straight to a screen (`g s` sales orders, `g p` vendor POs, …) |
-| `?` | the full list, on screen |
-| `Esc` | close what is on top; from a field, leave the field |
-| `Tab` / `Shift+Tab` | every button, tab, card, chip, swatch and field, in order |
-| `Enter` / `Space` | press whatever is focused |
-| `←` `→` on a tab | along the row of tabs, switching as it goes |
-| `↑` `↓` in the sidebar | down the sidebar (`Enter` opens) |
-| `Ctrl + Enter` | the primary button of the open dialog: save, create, confirm |
+| `Space` | tick the box on it |
+| `←` | step back out of the list |
+
+**On a row of tabs**, `←` `→` move along them. **In the sidebar**, `↑` `↓` move
+down it and `Enter` opens.
 
 The selected row is marked down the left in the accent colour. `?` shows the
 whole list without leaving the screen.
@@ -63,6 +72,31 @@ Two more rules fall out of the same principle:
   button *and* open whatever row the cursor was on — two things from one
   keystroke, the second one invisible.
 
+### The arrows belong to whatever has focus
+
+The first version of this took the arrow keys **globally**. It was wrong, in two
+ways that made the whole thing feel broken:
+
+- a page could no longer be **scrolled** with the arrow keys, because `↓` was
+  busy moving a row cursor on some table further down the screen
+- `←` went **back in history** from anywhere at all — one stray keypress away
+  from losing a half-filled form
+
+Scrolling a page with the arrow keys is older than this software and belongs to
+the person using it. So the arrows now do nothing unless focus is somewhere that
+has a use for them: a list, a row of tabs, or the sidebar. **Nothing in this
+layer touches browser history at all**, and the check asserts it.
+
+A list is **one tab stop**, not one per row — a hundred-row table would otherwise
+take a hundred presses to get past. Tab lands on the list and selects its first
+row, the arrows move inside it, `←` or Tab leaves. That is how a grid is meant to
+behave, and it is exactly what lets the arrows be given back to the page
+everywhere else.
+
+A screen holds several lists — an order has its vendor POs, its BOQs, its
+documents. The arrows drive **the one that has focus**, not whichever is first on
+the page.
+
 ### Everything you can click
 
 Half the controls in this app are a `div` with an `onClick` — the tabs across an
@@ -88,17 +122,29 @@ it.
 > resolved — so `cursor: x ? 'pointer' : 'default'` reads as exactly one of them,
 > and a disabled chip is correctly left out.
 
-Rows are deliberately **not** in the tab order: a hundred-row list would take a
-hundred presses to get past. They have the arrow cursor instead.
+A wrapper that already holds a real control is **not** a second tab stop. Tab
+landing on a card and then again on the button inside it is noise, and the button
+is what somebody is aiming for.
+
+Rows are deliberately **not** in the tab order either — their list is the tab
+stop, and the arrows move within it.
 
 A check walks the source and fails if a clickable element is ever written without
 a pointer cursor — it would be invisible to this pass, and to the mouse user too,
 who would get no hand cursor.
 
+### Seeing where you are
+
+A single accent-coloured ring is **invisible on a primary button**, which is
+accent coloured itself — so the ring is two: a gap in the page colour, then the
+accent outside it. That reads on white, on grey, on blue, and on a card. Until
+this was fixed the buttons were perfectly focusable and simply looked like they
+were not, which is the same thing to the person using them.
+
 ### Tabs and the sidebar
 
-Once focus is on a tab, `←` and `→` move along the tabs rather than meaning what
-they mean everywhere else. In the sidebar, `↑` and `↓` move down it.
+Once focus is on a tab, `←` and `→` move along the tabs. In the sidebar, `↑` and
+`↓` move down it.
 
 The two behave differently on purpose:
 
@@ -200,6 +246,7 @@ without matching half the list.
 | `kbdIsTyping`, `kbdIsControl` — the two guards | `frontend/src/keyboard.jsx` |
 | `kbdRows`, `kbdMove`, `kbdOpenRow`, `kbdTickRow` — the cursor | `frontend/src/keyboard.jsx` |
 | `kbdIsClickable`, `kbdEnhance`, `kbdActivate` — the clickable divs | `frontend/src/keyboard.jsx` |
+| `kbdLists`, `kbdIsInList` — a list as one tab stop | `frontend/src/keyboard.jsx` |
 | `kbdGroupOf`, `kbdGroupMove`, `kbdVisible` — tabs and the sidebar | `frontend/src/keyboard.jsx` |
 | `KeyboardLayer` — the one listener | `frontend/src/keyboard.jsx` |
 | `CommandPalette`, `ShortcutHelp` | `frontend/src/keyboard.jsx` |
@@ -223,6 +270,12 @@ without matching half the list.
   console — no process-level handler sees it. The check traps `jsdomError`, and
   tests that the trap fires, or a crash inside a keystroke would print a stack
   and still report PASS.
+- **Never take a key globally that the browser already gives the user.** The
+  arrows scroll and `Alt+←` goes back. Both were taken once, and it made a
+  working feature feel broken. A shortcut is only free when nothing else wanted
+  the key *in that context*.
+- **A focus ring must be visible on the accent colour too.** A primary button is
+  accent coloured, so an accent ring on it is invisible.
 - **`cursor` inherits — never read the computed one** when deciding whether
   something is a control. `kbdIsClickable` reads the element's own inline style
   for exactly this reason, and the check asserts a div inside a clickable row is

@@ -804,19 +804,36 @@ table.t tbody tr[data-kbd-cursor] {
   background: var(--accent-bg);
   box-shadow: inset 3px 0 0 var(--accent);
 }
+table.t tbody tr[data-kbd-cursor] td:first-child { font-weight: 500; }
 table.t tbody tr[data-kbd-cursor]:hover { background: var(--accent-bg); }
 
-/* Somebody driving by keyboard has to SEE where they are. The browser default
-   outline is invisible against several of our surfaces. */
+/* Somebody driving by keyboard has to SEE where they are, on EVERY surface.
+   A single accent ring is invisible on a primary button, which is accent
+   coloured itself — so the ring is two: a gap in the page colour, then the
+   accent outside it. That reads on white, on grey, on blue and on a card. */
 .nav-item:focus-visible,
 .btn:focus-visible,
+button:focus-visible,
+a:focus-visible,
 [tabindex]:focus-visible,
+[data-kbd-click]:focus-visible,
+[data-kbd-list]:focus-visible,
 table.t tbody tr:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-radius: 4px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+  border-radius: var(--radius);
+  position: relative;
+  z-index: 1;
 }
-.input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline: none; }
+/* A field already shows focus its own way; a second ring on top is noise. */
+.input:focus-visible, .select:focus-visible, .textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* A list is ONE tab stop. Focused, it says so, and the arrows move inside it. */
+[data-kbd-list]:focus-visible { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent); }
+[data-kbd-list]:focus { outline: none; }
 
 .kbd-key {
   display: inline-block;
