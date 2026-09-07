@@ -264,7 +264,25 @@ console.log('\n[4] the screens this was reported broken on');
   else ok(`${label} — ${rows.length} row(s) the arrows reach`);
 });
 
-console.log('\n[5] a group is one tab stop, on the real screens');
+console.log('\n[5] the blue button on every screen can be reached');
+// Every screen has one obvious primary action. If the tab order ever hides one
+// — a roving group swallowing it, say — the screen loses the thing it is for.
+const blueScreens = [];
+for (const [name] of SCREENS) {
+  const markup = rendered[name];
+  if (markup == null || !/btn-primary/.test(markup)) continue;
+  const d = new JSDOM(`<!doctype html><html><body><div class="app"><main class="main">${markup}</main></div></body></html>`);
+  s.document = d.window.document;
+  s.getComputedStyle = d.window.getComputedStyle.bind(d.window);
+  s.kbdEnhance();
+  const all = Array.from(d.window.document.querySelectorAll('.main .btn-primary:not([disabled])'));
+  const reachable = all.filter(b => b.getAttribute('tabindex') !== '-1');
+  if (all.length && !reachable.length) fail(`${name} — its blue button is not in the tab order`);
+  else if (all.length) blueScreens.push(`${name}(${all.length})`);
+}
+ok(`reachable on all ${blueScreens.length}: ${blueScreens.slice(0, 8).join(', ')}…`);
+
+console.log('\n[6] a group is one tab stop, on the real screens');
 // A record with nine tabs must cost one press to get past, not nine.
 const withTabs = [];
 for (const [name] of SCREENS) {

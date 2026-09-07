@@ -20,6 +20,7 @@ touches browser history.
 |---|---|
 | `Tab` / `Shift+Tab` | every button, tab, card, chip, swatch, list and field, in order |
 | `Enter` / `Space` | press whatever is focused |
+| `n` | the blue button this screen is for — new order, new GRN, create |
 | `Ctrl + K` | the command palette — every screen and record, by name |
 | `/` | jump to the search box on this screen |
 | `g` then a key | go straight to a screen (`g s` sales orders, `g p` vendor POs, …) |
@@ -44,8 +45,8 @@ Across the screen:
 
 | Key | What it does |
 |---|---|
-| `←` | to the sidebar, landing on the screen you are on |
-| `→` | back out to the page, landing on its list |
+| `←` | to the sidebar, from anywhere on the page |
+| `→` | out of the sidebar to the page; on the page, opens the selected row |
 | `↑` `↓` in the sidebar | down the sidebar (`Enter` opens) |
 
 The tabs on a record — Overview, Line Items + BOM, Procurement, Vendor POs, GRN,
@@ -432,6 +433,11 @@ without matching half the list.
   `if (control) return null` before the arrow handling, which swallowed `Enter`
   before the line that handles it and killed every button on the page. Scope a
   guard to the keys it is about.
+- **A guard written for a rule that has since changed becomes a bug.** Left and
+   right were blocked on a focused control back when left meant "go back in
+   browser history". Left has crossed to the sidebar for a while, and the guard
+   survived it — stranding anybody who tabbed into the page, with no arrow back
+   to the sidebar. When a key's meaning changes, re-read every guard on it.
 - **One owner per key.** `Ctrl+Enter` is the keyboard layer's; if the dialog
   handled it too, a single press would submit twice. The check asserts the
   dialog leaves it alone.
