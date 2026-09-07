@@ -4,9 +4,12 @@
 // This software is used by accountants, who are faster and more accurate on a
 // keyboard than on a mouse. Every screen can be driven without one.
 //
-//   arrows      move down and up a list; left goes back, right opens
-//   Enter       open the row under the cursor
-//   Space       tick the box on it
+//   Tab         reaches every control, including the lists
+//   arrows      move within whatever has focus — a list, a row of tabs, the
+//               sidebar. NOWHERE ELSE: on the page itself they scroll it, the
+//               way they do in every other program
+//   Enter       press what is focused; in a list, open the row
+//   Space       tick the box on the row
 //   Ctrl+K, /   the command palette — every screen and record, by name
 //   g then key  jump straight to a screen
 //   ?           the list of every shortcut
@@ -66,6 +69,10 @@ function kbdIsControl(el) {
 //                Space itself, and this layer must not answer them as well
 //       group    focus is inside a strip of tabs ('horizontal') or the sidebar
 //                ('vertical'), where the arrows should move along it
+//       inList   focus is inside a data list. ONLY THEN do the arrows drive
+//                rows. Anywhere else they scroll the page, because that is what
+//                they do in every other program and taking it away is worse
+//                than any shortcut is good
 //       pending  the previous keystroke was "g", so this one names a screen
 //
 // Returns null for anything the app should keep its hands off — which is most
@@ -78,6 +85,7 @@ function kbdResolve(e, ctx) {
   const overlay = !!(ctx && ctx.overlay);
   const control = !!(ctx && ctx.control);
   const group = ctx && ctx.group;                  // 'horizontal' | 'vertical' | null
+  const inList = !!(ctx && ctx.inList);
   const pending = ctx && ctx.pending;
 
   // Ctrl+K opens the palette from anywhere at all, mid-word included: it is the
@@ -118,22 +126,29 @@ function kbdResolve(e, ctx) {
   if (group === 'vertical' && key === 'ArrowDown') return { action: 'group-move', delta: 1 };
   if (group === 'vertical' && key === 'ArrowUp') return { action: 'group-move', delta: -1 };
 
-  // With something focused, left and right belong to it. Going back in history
-  // because somebody pressed left on a button is the kind of surprise that
-  // loses work.
-  if (control && (key === 'ArrowLeft' || key === 'ArrowRight')) return null;
+  // Inside a list, the arrows drive the rows.
+  if (inList) {
+    switch (key) {
+      case 'ArrowDown':  return { action: 'row-move', delta: 1 };
+      case 'ArrowUp':    return { action: 'row-move', delta: -1 };
+      case 'PageDown':   return { action: 'row-move', delta: 10 };
+      case 'PageUp':     return { action: 'row-move', delta: -10 };
+      case 'Home':       return { action: 'row-first' };
+      case 'End':        return { action: 'row-last' };
+      case 'ArrowRight': return { action: 'row-open' };
+      case 'ArrowLeft':  return { action: 'leave-list' };
+      case ' ':          return { action: 'row-tick' };
+      default:           break;
+    }
+  }
+
+  // Everything else the arrows might have meant, they no longer do. Scrolling a
+  // page with the arrow keys is older than this software and belongs to the
+  // person using it.
+  if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
+       'PageDown', 'PageUp', 'Home', 'End'].includes(key)) return null;
 
   switch (key) {
-    case 'ArrowDown':  return { action: 'row-move', delta: 1 };
-    case 'ArrowUp':    return { action: 'row-move', delta: -1 };
-    case 'PageDown':   return { action: 'row-move', delta: 10 };
-    case 'PageUp':     return { action: 'row-move', delta: -10 };
-    case 'Home':       return { action: 'row-first' };
-    case 'End':        return { action: 'row-last' };
-    case 'ArrowRight': return { action: 'row-open' };
-    case 'Enter':      return { action: 'row-open' };
-    case 'ArrowLeft':  return { action: 'back' };
-    case ' ':          return { action: 'row-tick' };
     case '/':          return { action: 'search' };
     case '?':          return { action: 'help' };
     default:           return null;
@@ -161,13 +176,18 @@ const KBD_GOTO = {
 // The rows a person can actually act on. Every clickable row in this app is
 // marked the same way — an inline cursor:pointer — so no screen needed changing
 // to take part, and a screen written tomorrow joins in for free.
-function kbdRows(doc) {
+// `from` is whatever has focus. If it is inside a list, THAT list is the scope —
+// a screen can hold several, and the arrows must drive the one being used, not
+// whichever happens to be first on the page.
+function kbdRows(doc, from) {
   const d = doc || (typeof document !== 'undefined' ? document : null);
   if (!d || !d.querySelectorAll) return [];
-  const scope = d.querySelector('.modal-body') || d.querySelector('.main') || d.body;
+  const owned = from && from.closest ? from.closest('[data-kbd-list]') : null;
+  const scope = owned || d.querySelector('.modal-body') || d.querySelector('.main') || d.body;
   if (!scope || !scope.querySelectorAll) return [];
   const out = [];
-  scope.querySelectorAll('table.t tbody tr').forEach(tr => {
+  const sel = scope.matches && scope.matches('table.t') ? 'tbody tr' : 'table.t tbody tr';
+  scope.querySelectorAll(sel).forEach(tr => {
     if (tr.getAttribute('data-kbd-skip') != null) return;
     let pointer = false;
     try {
@@ -208,8 +228,8 @@ function kbdSetCursor(rows, idx, doc) {
 // Move by delta, clamped. Starting from nothing lands on the first row going
 // down and the last going up, which is what every list in every other program
 // does.
-function kbdMove(delta, doc) {
-  const rows = kbdRows(doc);
+function kbdMove(delta, doc, from) {
+  const rows = kbdRows(doc, from);
   if (!rows.length) return null;
   const cur = kbdCursorIndex(rows, doc);
   let next;
@@ -218,22 +238,22 @@ function kbdMove(delta, doc) {
   return kbdSetCursor(rows, next, doc);
 }
 
-function kbdJump(where, doc) {
-  const rows = kbdRows(doc);
+function kbdJump(where, doc, from) {
+  const rows = kbdRows(doc, from);
   if (!rows.length) return null;
   return kbdSetCursor(rows, where === 'first' ? 0 : rows.length - 1, doc);
 }
 
-function kbdCurrentRow(doc) {
-  const rows = kbdRows(doc);
+function kbdCurrentRow(doc, from) {
+  const rows = kbdRows(doc, from);
   const i = kbdCursorIndex(rows, doc);
   return i >= 0 ? rows[i] : null;
 }
 
 // Open the row under the cursor. A real click, so the screen's own handler runs
 // — this layer knows nothing about what any particular row does, and must not.
-function kbdOpenRow(doc) {
-  const row = kbdCurrentRow(doc);
+function kbdOpenRow(doc, from) {
+  const row = kbdCurrentRow(doc, from);
   if (!row) return false;
   if (typeof row.click === 'function') { row.click(); return true; }
   return false;
@@ -241,8 +261,8 @@ function kbdOpenRow(doc) {
 
 // Space ticks the box on the row under the cursor, if it has one. Clicking the
 // input itself fires the screen's onChange exactly as a mouse would.
-function kbdTickRow(doc) {
-  const row = kbdCurrentRow(doc);
+function kbdTickRow(doc, from) {
+  const row = kbdCurrentRow(doc, from);
   if (!row || !row.querySelector) return false;
   const box = row.querySelector('input[type="checkbox"]:not([disabled])');
   if (!box || typeof box.click !== 'function') return false;
@@ -290,7 +310,33 @@ function kbdIsClickable(el) {
       || el.classList.contains('kbd-palette'))) return false;
   const own = !!(el.style && el.style.cursor === 'pointer');
   const byClass = el.matches ? el.matches(KBD_CLICK_CLASSES) : false;
-  return own || byClass;
+  if (!own && !byClass) return false;
+  // A wrapper that already holds real controls is not itself a tab stop. Tab
+  // landing on a card and then on the button inside it is the noise that made
+  // the tab order feel broken; the button is what somebody is aiming for.
+  if (el.querySelector && el.querySelector(
+      'button:not([disabled]), a[href], input:not([disabled]), select, textarea')) return false;
+  return true;
+}
+
+// A list is one tab stop, not one per row: a hundred-row table would otherwise
+// take a hundred presses to get past. Tab lands on the list, the arrows move
+// inside it, Tab moves on. This is how a grid is meant to behave, and it is why
+// the arrows can be given back to the page everywhere else.
+function kbdLists(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || !d.querySelectorAll) return [];
+  return Array.from(d.querySelectorAll('table.t')).filter(t => {
+    const body = t.querySelector('tbody');
+    if (!body) return false;
+    return Array.from(body.querySelectorAll('tr')).some(
+      tr => (tr.getAttribute('style') || '').match(/cursor\s*:\s*pointer/i)
+            && tr.getAttribute('data-kbd-skip') == null);
+  });
+}
+
+function kbdIsInList(el) {
+  return !!(el && el.closest && el.closest('[data-kbd-list]'));
 }
 
 // Put them in the tab order. Idempotent, so it can run as often as it likes.
@@ -304,6 +350,13 @@ function kbdEnhance(doc) {
     el.setAttribute('tabindex', '0');
     el.setAttribute('data-kbd-click', '1');
     if (!el.getAttribute('role')) el.setAttribute('role', 'button');
+    n++;
+  });
+  // Each list of rows becomes ONE tab stop.
+  kbdLists(d).forEach(t => {
+    if (t.getAttribute('data-kbd-list') != null) return;
+    t.setAttribute('data-kbd-list', '1');
+    t.setAttribute('tabindex', '0');
     n++;
   });
   return n;
@@ -448,6 +501,8 @@ function kbdFilter(items, q) {
 window.kbdIsTyping = kbdIsTyping;
 window.kbdIsControl = kbdIsControl;
 window.kbdIsClickable = kbdIsClickable;
+window.kbdLists = kbdLists;
+window.kbdIsInList = kbdIsInList;
 window.kbdEnhance = kbdEnhance;
 window.kbdActivate = kbdActivate;
 window.kbdVisible = kbdVisible;
@@ -548,10 +603,12 @@ function KeyboardLayer() {
       const overlayOpen = palette || help;
       const focused = e.target || document.activeElement;
       const grp = overlayOpen ? null : kbdGroupOf(focused);
+      const inList = !overlayOpen && kbdIsInList(focused);
       const act = kbdResolve(e, {
         typing: kbdIsTyping(focused),
         control: kbdIsControl(focused),
         group: grp ? grp.orientation : null,
+        inList,
         overlay: overlayOpen,
         pending,
       });
@@ -590,7 +647,13 @@ function KeyboardLayer() {
         }
 
         case 'activate':
-          // Only for a div that was made focusable. A real button already acts
+          // In a list, Enter and Space are the row's, not the list element's.
+          if (inList) {
+            if (e.key === ' ') { if (kbdTickRow(null, focused)) e.preventDefault(); return; }
+            if (kbdCurrentRow(null, focused)) { e.preventDefault(); kbdOpenRow(null, focused); }
+            return;
+          }
+          // Otherwise only for a div that was made focusable. A real button acts
           // on Enter by itself, and pressing it here too would fire it twice.
           if (kbdActivate(focused)) e.preventDefault();
           return;
@@ -606,26 +669,31 @@ function KeyboardLayer() {
           e.preventDefault(); setPending(null); go(act.route);
           return;
 
-        case 'row-move':  e.preventDefault(); kbdMove(act.delta); return;
-        case 'row-first': e.preventDefault(); kbdJump('first'); return;
-        case 'row-last':  e.preventDefault(); kbdJump('last'); return;
+        case 'row-move':  e.preventDefault(); kbdMove(act.delta, null, focused); return;
+        case 'row-first': e.preventDefault(); kbdJump('first', null, focused); return;
+        case 'row-last':  e.preventDefault(); kbdJump('last', null, focused); return;
 
         case 'row-open': {
-          const row = kbdCurrentRow();
+          const row = kbdCurrentRow(null, focused);
           if (!row) return;                     // nothing selected — leave Enter alone
-          e.preventDefault(); kbdOpenRow();
+          e.preventDefault(); kbdOpenRow(null, focused);
           return;
         }
 
         case 'row-tick':
           // Space still scrolls the page when no row is selected.
-          if (kbdTickRow()) e.preventDefault();
+          if (kbdTickRow(null, focused)) e.preventDefault();
           return;
 
-        case 'back':
-          if (kbdCurrentRow()) { kbdClearCursor(); return; }   // first Esc-like step: drop the cursor
-          e.preventDefault(); window.history.back();
+        case 'leave-list': {
+          // Left steps OUT of the list. It does not go back in history: doing
+          // that from a stray keypress is how somebody loses a half-typed form.
+          e.preventDefault();
+          kbdClearCursor();
+          const list = focused && focused.closest && focused.closest('[data-kbd-list]');
+          if (list && list.blur) { try { list.blur(); } catch (err) {} }
           return;
+        }
 
         case 'search': {
           const box = document.querySelector('.main input[type="search"]')
@@ -639,8 +707,23 @@ function KeyboardLayer() {
         default: return;
       }
     };
+    // Tabbing onto a list selects its first row, so the arrows visibly do
+    // something straight away. Leaving it drops the highlight, so there is never
+    // a selected row on a list nobody is driving.
+    const onFocusIn = (e) => {
+      const list = e.target && e.target.closest && e.target.closest('[data-kbd-list]');
+      if (list) {
+        if (!kbdCurrentRow(null, e.target)) kbdMove(1, null, e.target);
+      } else {
+        kbdClearCursor();
+      }
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('focusin', onFocusIn);
+    };
   }, [palette, help, pending, go]);
 
   return (
@@ -730,13 +813,14 @@ function CommandPalette({ onClose, go, role, state }) {
 // The shortcut sheet
 // ============================================================================
 const KBD_SHEET = [
-  { group: 'Moving around a list', keys: [
+  { group: 'In a list (Tab onto it first)', keys: [
+    ['Tab', 'onto the list — the whole list is one stop'],
     ['↓ / ↑', 'next row / previous row'],
     ['PgDn / PgUp', 'ten rows at a time'],
     ['Home / End', 'first row / last row'],
     ['→ or Enter', 'open the selected row'],
-    ['←', 'drop the selection, then go back'],
-    ['Space', 'tick the box on the selected row'],
+    ['Space', 'tick the box on it'],
+    ['←', 'step back out of the list'],
   ]},
   { group: 'Getting somewhere', keys: [
     ['Ctrl + K', 'the command palette — every screen and record'],
@@ -749,6 +833,7 @@ const KBD_SHEET = [
     ['Enter or Space', 'press whatever is focused'],
     ['← / →', 'along a row of tabs'],
     ['↑ / ↓', 'down the sidebar (Enter opens)'],
+    ['arrows elsewhere', 'scroll the page, as they always did'],
   ]},
   { group: 'In a dialog or form', keys: [
     ['Tab / Shift + Tab', 'between fields, staying inside the dialog'],

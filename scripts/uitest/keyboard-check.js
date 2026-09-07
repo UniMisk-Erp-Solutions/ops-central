@@ -129,19 +129,36 @@ check('Ctrl+Down is left alone', act('ArrowDown', {}, { ctrlKey: true }), null);
 check('Ctrl+Alt+K is NOT our palette', act('k', {}, { ctrlKey: true, altKey: true }), null);
 check('but plain Ctrl+K is', act('k', {}, { ctrlKey: true }), 'palette');
 check('and so is Cmd+K on a Mac', act('k', {}, { metaKey: true }), 'palette');
-check('shift does not change a bare arrow', act('ArrowDown', {}, { shiftKey: true }), 'row-move');
+check('shift does not change an arrow in a list',
+  act('ArrowDown', { inList: true }, { shiftKey: true }), 'row-move');
 
-console.log('\n[4] the four movement keys, and the rest of the list');
-check('down moves one row', sandbox.kbdResolve(K('ArrowDown'), {}), { action: 'row-move', delta: 1 });
-check('up moves one row back', sandbox.kbdResolve(K('ArrowUp'), {}), { action: 'row-move', delta: -1 });
-check('page down moves ten', sandbox.kbdResolve(K('PageDown'), {}), { action: 'row-move', delta: 10 });
-check('page up moves ten back', sandbox.kbdResolve(K('PageUp'), {}), { action: 'row-move', delta: -10 });
-check('right opens the row', act('ArrowRight'), 'row-open');
-check('so does Enter', act('Enter'), 'row-open');
-check('left goes back', act('ArrowLeft'), 'back');
-check('Home jumps to the first row', act('Home'), 'row-first');
-check('End jumps to the last', act('End'), 'row-last');
-check('space ticks the row', act(' '), 'row-tick');
+console.log('\n[4] THE ARROWS BELONG TO THE PAGE UNLESS A LIST HAS FOCUS');
+// The first version of this took the arrow keys everywhere, so a page could no
+// longer be scrolled with them and Left went back in history from anywhere at
+// all. Scrolling with the arrows is older than this software and belongs to the
+// person using it.
+const ARROWS = ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'PageDown', 'PageUp', 'Home', 'End'];
+check('on the page itself, every arrow is left alone',
+  ARROWS.filter(k => act(k, {}) !== null), []);
+check('and nothing anywhere goes back in history any more',
+  ARROWS.map(k => act(k, {})).concat(ARROWS.map(k => act(k, { inList: true })))
+    .filter(a => a === 'back'), []);
+
+const inL = { inList: true };
+check('in a list, down moves one row',
+  sandbox.kbdResolve(K('ArrowDown'), inL), { action: 'row-move', delta: 1 });
+check('up moves one row back',
+  sandbox.kbdResolve(K('ArrowUp'), inL), { action: 'row-move', delta: -1 });
+check('page down moves ten', sandbox.kbdResolve(K('PageDown'), inL), { action: 'row-move', delta: 10 });
+check('page up moves ten back', sandbox.kbdResolve(K('PageUp'), inL), { action: 'row-move', delta: -10 });
+check('right opens the row', act('ArrowRight', inL), 'row-open');
+check('Home jumps to the first row', act('Home', inL), 'row-first');
+check('End jumps to the last', act('End', inL), 'row-last');
+check('space ticks the row', act(' ', inL), 'row-tick');
+check('left steps OUT of the list, it does not go back', act('ArrowLeft', inL), 'leave-list');
+check('and still nothing fires while typing in a list',
+  ARROWS.filter(k => act(k, { inList: true, typing: true }) !== null), []);
+
 check('slash goes to the search box', act('/'), 'search');
 check('question mark opens the shortcut list', act('?'), 'help');
 check('a letter on its own does nothing', act('z'), null);
@@ -171,10 +188,14 @@ check('and so is Space', act(' ', { control: true }), 'activate');
 // "activate" does not mean "click it". A real button already acts on Enter, and
 // the handler presses only the divs that were put in the tab order — asserted
 // against a real button in [10b].
-check('but the arrows still move the list underneath',
-  act('ArrowDown', { control: true }), 'row-move');
+check('the arrows do NOT move a list from a focused button',
+  act('ArrowDown', { control: true }), null);
+check('they do once focus is in the list itself',
+  act('ArrowDown', { control: true, inList: true }), 'row-move');
 check('and Escape still works', act('Escape', { control: true }), 'escape');
-check('with nothing focused, Enter opens the row', act('Enter', {}), 'row-open');
+check('with nothing focused at all, Enter does nothing', act('Enter', {}), null);
+check('it opens a row only once focus is in the list',
+  act('Enter', { inList: true, control: true }), 'activate');
 
 const ctl = (tag, attrs) => ({ tagName: tag, getAttribute: k => (attrs || {})[k] || null });
 check('a button is a control', sandbox.kbdIsControl(ctl('BUTTON')), true);
@@ -204,7 +225,7 @@ check('and left in the sidebar is not a group move',
 // of surprise that loses work.
 check('left on a button does NOT go back', act('ArrowLeft', { control: true }), null);
 check('right on a button does NOT open a row', act('ArrowRight', { control: true }), null);
-check('but with nothing focused, left still goes back', act('ArrowLeft', {}), 'back');
+check('and with nothing focused, left does nothing at all', act('ArrowLeft', {}), null);
 check('a group cannot be moved while typing in it',
   act('ArrowRight', { typing: true, group: 'horizontal' }), null);
 
@@ -231,6 +252,54 @@ const dom = new JSDOM(`<!doctype html><html><body>
   </main>
 </body></html>`);
 const D = dom.window.document;
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
+console.log('\n[6b] a list is one tab stop, and the arrows work inside it');
+const domL = new JSDOM(`<!doctype html><html><body><main class="main">
+  <table class="t" id="orders"><tbody>
+    <tr id="o1" style="cursor: pointer"><td>SO/FY26/0001</td></tr>
+    <tr id="o2" style="cursor: pointer"><td>SO/FY26/0002</td></tr>
+  </tbody></table>
+  <table class="t" id="pos"><tbody>
+    <tr id="p1" style="cursor: pointer"><td>PO202609001</td></tr>
+    <tr id="p2" style="cursor: pointer"><td>PO202609002</td></tr>
+  </tbody></table>
+  <table class="t" id="totals"><tbody>
+    <tr id="tot"><td>Grand total</td></tr>
+  </tbody></table>
+</main></body></html>`);
+const DL = domL.window.document;
+sandbox.document = DL;
+sandbox.getComputedStyle = domL.window.getComputedStyle.bind(domL.window);
+
+check('a table with clickable rows is a list',
+  sandbox.kbdLists().map(t => t.id), ['orders', 'pos']);
+check('a table of totals is not', sandbox.kbdLists().some(t => t.id === 'totals'), false);
+sandbox.kbdEnhance();
+check('each list became ONE tab stop, not one per row',
+  ['orders', 'pos'].map(id => DL.getElementById(id).getAttribute('tabindex')), ['0', '0']);
+check('no row is a tab stop', DL.querySelectorAll('tr[tabindex]').length, 0);
+check('and the totals table is not one either',
+  DL.getElementById('totals').getAttribute('tabindex'), null);
+check('focus inside a list is recognised', sandbox.kbdIsInList(DL.getElementById('o1')), true);
+check('focus on the page is not', sandbox.kbdIsInList(DL.querySelector('main')), false);
+
+// A screen holds several lists. The arrows must drive the one being used.
+const fromOrders = DL.getElementById('orders');
+const fromPos = DL.getElementById('pos');
+check('the rows seen from the orders list are its own',
+  sandbox.kbdRows(null, fromOrders).map(r => r.id), ['o1', 'o2']);
+check('and from the PO list, its own',
+  sandbox.kbdRows(null, fromPos).map(r => r.id), ['p1', 'p2']);
+check('moving in one list stays in that list',
+  sandbox.kbdMove(1, null, fromPos).id, 'p1');
+check('and moving in the other is independent',
+  sandbox.kbdMove(1, null, fromOrders).id, 'o1');
+check('opening from a list opens ITS row, not the first on the page',
+  (sandbox.kbdCurrentRow(null, fromPos) || {}).id, 'p1');
+
+// Hand the document back to the one the sections below were written against.
 sandbox.document = D;
 sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
 
@@ -299,6 +368,8 @@ const dom4 = new JSDOM(`<!doctype html><html><body>
       <span id="sono" class="mono" style="cursor: pointer">SO/FY26/0002</span>
       <div id="swatch" style="width: 32px; cursor: pointer"></div>
       <div id="off" style="cursor: default">a disabled chip</div>
+      <div id="wrapper" style="cursor: pointer">a card <button id="inner-btn">Open</button></div>
+      <div id="radio" class="radio-card"><div class="radio-card-marker"></div><strong>By sheet</strong></div>
       <div id="plain">just some text</div>
       <div class="queue-item" id="q1">a notification</div>
       <button id="realbtn">Edit items</button>
@@ -323,6 +394,12 @@ check('a known clickable class counts even with no inline style',
 check('a DISABLED control is left out — its cursor says default',
   sandbox.kbdIsClickable(D4.getElementById('off')), false);
 check('plain text is not a control', sandbox.kbdIsClickable(D4.getElementById('plain')), false);
+// Tab landing on a card and then again on the button inside it is the noise
+// that made the tab order feel broken. The button is what somebody is aiming for.
+check('a card that already holds a button is not a second tab stop',
+  sandbox.kbdIsClickable(D4.getElementById('wrapper')), false);
+check('but a card with only text inside it is',
+  sandbox.kbdIsClickable(D4.getElementById('radio')), true);
 check('a real button is already reachable, so it is left alone',
   sandbox.kbdIsClickable(D4.getElementById('realbtn')), false);
 check('and so is a field', sandbox.kbdIsClickable(D4.getElementById('field')), false);
@@ -341,7 +418,13 @@ check('the inherited cursor really is pointer, so this is a live trap',
   dom4.window.getComputedStyle(D4.getElementById('inner')).cursor, 'pointer');
 
 const added = sandbox.kbdEnhance();
-check('the pass reaches the four that needed it', added, 4);
+// five clickable divs, plus the table of rows, which becomes one tab stop
+check('the pass reaches the six that needed it', added, 6);
+check('the card wrapping a button was left out of the tab order',
+  D4.getElementById('wrapper').getAttribute('tabindex'), null);
+check('while the button inside it is reachable as it always was',
+  D4.getElementById('inner-btn').tagName, 'BUTTON');
+check('the table became a list', D4.querySelector('table.t').getAttribute('data-kbd-list'), '1');
 check('each got into the tab order',
   ['doc', 'sono', 'swatch', 'q1'].map(id => D4.getElementById(id).getAttribute('tabindex')),
   ['0', '0', '0', '0']);
@@ -549,6 +632,15 @@ check('the sidebar and the palette read ONE nav list',
 const css = fs.readFileSync(path.join(dir, 'src', 'styles.css'), 'utf8');
 check('the selected row is visible',
   /tbody tr\[data-kbd-cursor\]/.test(css), true);
+// A single accent ring is invisible on a primary button, which is accent
+// coloured itself. The ring is two: a gap in the page colour, then the accent.
+check('the focus ring shows on a coloured button too',
+  /box-shadow: 0 0 0 2px var\(--surface\), 0 0 0 4px var\(--accent\)/.test(css), true);
+check('and a list says when it has focus',
+  /\[data-kbd-list\]:focus-visible/.test(css), true);
+const kbSrc = fs.readFileSync(path.join(dir, 'src', 'keyboard.jsx'), 'utf8');
+check('nothing in the keyboard layer touches history any more',
+  /history\.back|history\.forward|history\.go/.test(kbSrc), false);
 check('and so is whatever has focus', /:focus-visible/.test(css), true);
 
 // ---------------------------------------------------------------------------
