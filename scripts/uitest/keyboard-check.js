@@ -284,6 +284,42 @@ check('right on the page opens the selected row',
 check('and does nothing when no row is selected — there is nothing to its right',
   act('ArrowRight', { control: true }), null);
 
+console.log('\n[5g] Alt and a letter, the way Tally and Excel do it');
+check('Alt+s is an access key',
+  sandbox.kbdResolve(K('s', { altKey: true }), {}), { action: 'access', letter: 's' });
+check('so is Alt+P', sandbox.kbdResolve(K('P', { altKey: true }), {}), { action: 'access', letter: 'p' });
+// It types nothing, so there is nothing for it to interrupt — and leaving a
+// half-filled screen the moment you think of it is the point.
+check('it works mid-word in a field',
+  sandbox.kbdResolve(K('s', { altKey: true }), { typing: true }), { action: 'access', letter: 's' });
+check('and from under a dialog, where its own buttons answer it',
+  sandbox.kbdResolve(K('s', { altKey: true }), { dialog: true }), { action: 'access', letter: 's' });
+check('Ctrl+Alt+s is not ours — that is a browser or OS combination',
+  act('s', {}, { altKey: true, ctrlKey: true }), null);
+check('nor Cmd+Alt+s', act('s', {}, { altKey: true, metaKey: true }), null);
+check('Alt with a non-letter does nothing',
+  act('5', {}, { altKey: true }), null);
+check('Alt+Left is still the browser going back', act('ArrowLeft', {}, { altKey: true }), null);
+check('and Alt on its own is not a shortcut', act('Alt', {}), null);
+
+// Option+e on a Mac arrives as a dead key, not "e". The physical key is the
+// fallback, or the whole feature is unusable on a Mac.
+check('a Mac dead key still resolves to its letter',
+  sandbox.kbdAltLetter({ key: '\u00b4', code: 'KeyE' }), 'e');
+check('a plain letter needs no fallback', sandbox.kbdAltLetter({ key: 'd', code: 'KeyD' }), 'd');
+check('and a digit is not a letter', sandbox.kbdAltLetter({ key: '4', code: 'Digit4' }), null);
+
+console.log('\n[5h] a screen letter is the same one as its g jump');
+// One letter per screen, two ways to press it. Two tables would drift, so the
+// second is derived from the first.
+check('every screen with a g jump has the same Alt letter',
+  Object.keys(sandbox.KBD_GOTO).filter(k => sandbox.KBD_NAV_KEY[sandbox.KBD_GOTO[k]] !== k), []);
+check('no two screens share a letter',
+  Object.keys(sandbox.KBD_NAV_KEY).length, new Set(Object.values(sandbox.KBD_NAV_KEY)).size);
+check('sales orders is s', sandbox.KBD_NAV_KEY['sales-orders'], 's');
+check('vendor POs is p', sandbox.KBD_NAV_KEY['vendor-pos'], 'p');
+check('GRN is n', sandbox.KBD_NAV_KEY['grn'], 'n');
+
 console.log('\n[5d3] one key for the button this screen is for');
 // Every screen has one obvious blue button — New Sales Order, New GRN, Create
 // BOQ. Tabbing to it works, but the whole point of a keyboard is not having to.
@@ -592,6 +628,91 @@ while (sandbox.kbdPaneOf(DX.activeElement) !== 'sidebar' && guard++ < 10) {
 check('and pressing left gets back to the sidebar, from wherever it landed',
   DX.activeElement.id, 'xb');
 check('in a couple of presses, not by luck', guard <= 4, true);
+
+// Hand the document back to the one the sections below were written against.
+sandbox.document = D;
+sandbox.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
+console.log('\n[6c4] the letters land on the page, and Alt shows them');
+const domK = new JSDOM(`<!doctype html><html><body><div class="app">
+  <aside class="sidebar">
+    <div class="nav-item" data-nav="dashboard" id="kD" tabindex="-1">Dashboard</div>
+    <div class="nav-item active" data-nav="sales-orders" id="kS" tabindex="0">Sales Orders</div>
+    <div class="nav-item" data-nav="vendor-pos" id="kP" tabindex="-1">Vendor POs</div>
+    <div class="nav-item" data-nav="grn" id="kN" tabindex="-1">GRN</div>
+  </aside>
+  <main class="main">
+    <button class="btn btn-primary" id="bNew">New Sales Order</button>
+    <button class="btn" id="bEdit">Edit items</button>
+    <button class="btn" id="bHold">Put on hold</button>
+    <button class="btn" id="bOff" disabled>Cancel order</button>
+    <button class="btn" id="bBlank"></button>
+  </main>
+</div></body></html>`);
+const DK = domK.window.document;
+sandbox.document = DK;
+sandbox.getComputedStyle = domK.window.getComputedStyle.bind(domK.window);
+sandbox.kbdAssignAccessKeys();
+
+check('every screen in the sidebar got its fixed letter',
+  ['kD', 'kS', 'kP', 'kN'].map(id => DK.getElementById(id).getAttribute('data-kbd-key')),
+  ['d', 's', 'p', 'n']);
+check('a button takes the first free letter of its own label',
+  DK.getElementById('bNew').getAttribute('data-kbd-key'), 'n');
+check('the next takes the first letter still free',
+  DK.getElementById('bEdit').getAttribute('data-kbd-key'), 'e');
+check('and so on down the page',
+  DK.getElementById('bHold').getAttribute('data-kbd-key'), 'p');
+check('a disabled button gets none — it would be a letter that does nothing',
+  DK.getElementById('bOff').getAttribute('data-kbd-key'), null);
+check('nor does one with no label to take a letter from',
+  DK.getElementById('bBlank').getAttribute('data-kbd-key'), null);
+// A busy screen runs its own labels out — by the tenth button on the dashboard
+// every letter of its label is spoken for. A button nobody can press is worse
+// than an arbitrary letter, so it falls back to one that shadows no screen.
+const busy = {}; 'newsalesordr'.split('').forEach(c => { busy[c] = true; });
+check('when the label has nothing left, it takes a letter no screen uses',
+  ['f', 'h', 'j', 'q', 'y', 'z'].includes(sandbox.kbdPickLetter('New Sales Order', busy)), true);
+const everything = {};
+'abcdefghijklmnopqrstuvwxy'.split('').forEach(c => { everything[c] = true; });
+check('and only then one that does', sandbox.kbdPickLetter('New Sales Order', everything), 'z');
+const full = {};
+'abcdefghijklmnopqrstuvwxyz'.split('').forEach(c => { full[c] = true; });
+check('with the whole alphabet gone it gives up rather than double-booking',
+  sandbox.kbdPickLetter('New Sales Order', full), null);
+check('no two things on the page share a letter',
+  ['bNew', 'bEdit', 'bHold'].map(id => DK.getElementById(id).getAttribute('data-kbd-key')).sort(),
+  ['e', 'n', 'p']);
+
+// The page is what is in front of you, so it wins — and the screen it shadows
+// says so, rather than quietly doing nothing.
+check('Alt+n presses the button, not the GRN screen',
+  (sandbox.kbdAccessTarget('n') || {}).id, 'bNew');
+check('and the shadowed screen is marked, so holding Alt shows what happened',
+  DK.getElementById('kN').getAttribute('data-kbd-shadowed'), '1');
+check('a screen nothing shadows is not marked',
+  DK.getElementById('kD').getAttribute('data-kbd-shadowed'), null);
+check('Alt+d still goes to the Dashboard', (sandbox.kbdAccessTarget('d') || {}).id, 'kD');
+check('Alt+s still goes to Sales Orders', (sandbox.kbdAccessTarget('s') || {}).id, 'kS');
+check('a letter nobody claims does nothing at all', sandbox.kbdAccessTarget('z'), null);
+check('and the screen letters never moved for any of it',
+  ['kD', 'kS', 'kP', 'kN'].map(id => DK.getElementById(id).getAttribute('data-kbd-key')),
+  ['d', 's', 'p', 'n']);
+
+// Running it again must not shuffle anything — it runs on every render.
+sandbox.kbdAssignAccessKeys();
+check('a second pass changes nothing',
+  ['kD', 'kS', 'kP', 'kN', 'bNew', 'bEdit', 'bHold']
+    .map(id => DK.getElementById(id).getAttribute('data-kbd-key')),
+  ['d', 's', 'p', 'n', 'n', 'e', 'p']);
+
+// A button that has gone must not leave its letter shadowing a screen.
+DK.getElementById('bNew').remove();
+sandbox.kbdAssignAccessKeys();
+check('when the button goes, the screen it shadowed is free again',
+  DK.getElementById('kN').getAttribute('data-kbd-shadowed'), null);
+check('and Alt+n reaches the GRN screen once more',
+  (sandbox.kbdAccessTarget('n') || {}).id, 'kN');
 
 // Hand the document back to the one the sections below were written against.
 sandbox.document = D;
@@ -1126,6 +1247,13 @@ check('the focus ring shows on a coloured button too',
   /box-shadow: 0 0 0 2px var\(--surface\), 0 0 0 4px var\(--accent\)/.test(css), true);
 check('and a list says when it has focus',
   /\[data-kbd-list\]:focus-visible/.test(css), true);
+check('holding Alt shows the letters, or nobody can learn them',
+  /body\.kbd-alt \[data-kbd-key\]::after/.test(css), true);
+check('and the badge is the letter itself', /content: attr\(data-kbd-key\)/.test(css), true);
+check('a shadowed screen looks different from a live one',
+  /\[data-kbd-shadowed\]::after/.test(css), true);
+check('the sidebar carries each screen id, which the letters key off',
+  /data-nav=\{it\.id\}/.test(shellJsx), true);
 const kbSrc = fs.readFileSync(path.join(dir, 'src', 'keyboard.jsx'), 'utf8');
 check('nothing in the keyboard layer touches history any more',
   /history\.back|history\.forward|history\.go/.test(kbSrc), false);

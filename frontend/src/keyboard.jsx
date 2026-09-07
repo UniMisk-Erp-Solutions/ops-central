@@ -97,6 +97,14 @@ function kbdResolve(e, ctx) {
   // one key an accountant reaches for when they are lost, so it always answers.
   if (mod && !e.altKey && (key === 'k' || key === 'K')) return { action: 'palette' };
 
+  // Alt and a letter, from anywhere at all — mid-word in a field included. It
+  // types nothing, so there is nothing for it to interrupt, and being able to
+  // leave a half-filled screen the moment you think of it is the point.
+  if (e.altKey && !e.ctrlKey && !e.metaKey) {
+    const letter = kbdAltLetter(e);
+    if (letter) return { action: 'access', letter };
+  }
+
   // Escape closes the top thing, and gets out of a field, from anywhere.
   if (key === 'Escape') return { action: 'escape' };
 
@@ -474,6 +482,7 @@ function kbdEnhance(doc) {
     if (!el.getAttribute('role')) el.setAttribute('role', 'button');
     n++;
   });
+  kbdAssignAccessKeys(d);
   // A strip of tabs, and the role switcher, become one stop each.
   d.querySelectorAll('.tabs, .role-switcher').forEach(kbdRoving);
   // Each list of rows becomes ONE tab stop.
@@ -492,6 +501,139 @@ function kbdActivate(el) {
   if (typeof el.click !== 'function') return false;
   el.click();
   return true;
+}
+
+// ============================================================================
+// Access keys — Alt and a letter, the way Tally and Excel do it
+// ============================================================================
+// Hold Alt and every screen and button on the page shows its letter. Press the
+// letter and you are there. No hunting, no counting Tab presses.
+//
+// A SCREEN'S LETTER NEVER MOVES. It is the same letter as the "g" jump — one
+// letter per screen, two ways to press it — and it comes from a fixed table
+// rather than from whatever happens to be on the page, so it is worth learning.
+//
+// A BUTTON'S LETTER comes from its own label, first free letter, in the order
+// the buttons appear. Those do move between screens, which is exactly why
+// holding Alt shows them.
+//
+// Where a button claims a letter a screen also uses, THE BUTTON WINS — it is
+// the thing in front of you — and the screen's badge is dimmed so you can see
+// what happened. That is how the ribbon and the Tally menu behave.
+
+// route -> letter, derived from the one table so the two can never disagree.
+const KBD_NAV_KEY = (() => {
+  const m = {};
+  Object.keys(KBD_GOTO).forEach(k => { if (!m[KBD_GOTO[k]]) m[KBD_GOTO[k]] = k; });
+  return m;
+})();
+
+// The letters screens hold, so a button can prefer one that shadows nothing.
+const KBD_NAV_KEY_SET = (() => {
+  const m = {};
+  Object.keys(KBD_NAV_KEY).forEach(r => { m[KBD_NAV_KEY[r]] = true; });
+  return m;
+})();
+
+// The buttons and tabs on the page that are worth a letter.
+function kbdAccessTargets(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || !d.querySelector) return [];
+  // Inside a dialog, only the dialog's own buttons — the page behind it is not
+  // something a keystroke should reach.
+  const scope = d.querySelector('.modal') || d.querySelector('.drawer') || d.querySelector('.main');
+  if (!scope || !scope.querySelectorAll) return [];
+  return Array.from(scope.querySelectorAll('button:not([disabled]), [data-kbd-click]'))
+    .filter(kbdVisible)
+    .filter(el => String(el.textContent || '').trim().length > 0);
+}
+
+// A letter for this label. In order of preference:
+//
+//   1. one of its own letters      — mnemonic, which is the whole point
+//   2. any free letter no screen uses — still arbitrary, but shadows nothing
+//   3. any free letter at all      — a button nobody can press is worse
+//
+// A busy screen really does run its own labels out; on the dashboard, by the
+// ninth button every letter of its label is already spoken for.
+const KBD_ALPHABET = 'abcdefghijklmnopqrstuvwxyz';
+function kbdPickLetter(label, taken) {
+  const s = String(label || '').toLowerCase();
+  if (!s.trim()) return null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c >= 'a' && c <= 'z' && !taken[c]) return c;
+  }
+  for (let i = 0; i < KBD_ALPHABET.length; i++) {
+    const c = KBD_ALPHABET[i];
+    if (!taken[c] && !KBD_NAV_KEY_SET[c]) return c;
+  }
+  for (let i = 0; i < KBD_ALPHABET.length; i++) {
+    if (!taken[KBD_ALPHABET[i]]) return KBD_ALPHABET[i];
+  }
+  return null;
+}
+
+// Hand out the letters. Runs with the enhancement pass, because which buttons
+// are on the page changes as the user works.
+function kbdAssignAccessKeys(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || !d.querySelectorAll) return 0;
+  let n = 0;
+
+  // Screens first, from the fixed table. These never move.
+  d.querySelectorAll('.sidebar [data-nav]').forEach(el => {
+    const letter = KBD_NAV_KEY[el.getAttribute('data-nav')];
+    if (!letter) { el.removeAttribute('data-kbd-key'); return; }
+    if (el.getAttribute('data-kbd-key') !== letter) el.setAttribute('data-kbd-key', letter);
+    n++;
+  });
+
+  // Then the page, from each button's own label.
+  const taken = {};
+  const targets = kbdAccessTargets(d);
+  targets.forEach(el => {
+    const letter = kbdPickLetter(el.textContent, taken);
+    if (!letter) { el.removeAttribute('data-kbd-key'); return; }
+    taken[letter] = true;
+    if (el.getAttribute('data-kbd-key') !== letter) el.setAttribute('data-kbd-key', letter);
+    n++;
+  });
+  // A button that has gone away must not leave its letter behind on something
+  // else, and a stale one would shadow a screen for no reason.
+  const live = new Set(targets);
+  d.querySelectorAll('.main [data-kbd-key], .modal [data-kbd-key], .drawer [data-kbd-key]')
+    .forEach(el => { if (!live.has(el)) el.removeAttribute('data-kbd-key'); });
+
+  // Mark the screens whose letter a button has taken, so the badge can say so.
+  d.querySelectorAll('.sidebar [data-kbd-key]').forEach(el => {
+    const shadowed = !!taken[el.getAttribute('data-kbd-key')];
+    if (shadowed) el.setAttribute('data-kbd-shadowed', '1');
+    else el.removeAttribute('data-kbd-shadowed');
+  });
+  return n;
+}
+
+// What Alt+letter should press. The page in front of you wins.
+function kbdAccessTarget(letter, doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || !d.querySelector || !letter) return null;
+  const sel = '[data-kbd-key="' + String(letter).toLowerCase() + '"]';
+  const scope = d.querySelector('.modal') || d.querySelector('.drawer') || d.querySelector('.main');
+  const onPage = scope && scope.querySelector ? scope.querySelector(sel) : null;
+  if (onPage) return onPage;
+  const side = d.querySelector('.sidebar');
+  return side && side.querySelector ? side.querySelector(sel) : null;
+}
+
+// The letter, whatever the keyboard layout did to it. Option+e on a Mac arrives
+// as a dead key rather than "e", so the physical key is the fallback.
+function kbdAltLetter(e) {
+  const k = String(e.key || '').toLowerCase();
+  if (k.length === 1 && k >= 'a' && k <= 'z') return k;
+  const code = String(e.code || '');
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+  return null;
 }
 
 // ============================================================================
@@ -744,6 +886,12 @@ window.kbdTabTo = kbdTabTo;
 window.kbdPaneOf = kbdPaneOf;
 window.kbdFocusSidebar = kbdFocusSidebar;
 window.kbdFocusMain = kbdFocusMain;
+window.KBD_NAV_KEY = KBD_NAV_KEY;
+window.kbdAccessTargets = kbdAccessTargets;
+window.kbdPickLetter = kbdPickLetter;
+window.kbdAssignAccessKeys = kbdAssignAccessKeys;
+window.kbdAccessTarget = kbdAccessTarget;
+window.kbdAltLetter = kbdAltLetter;
 window.kbdGroupOf = kbdGroupOf;
 window.kbdGroupMove = kbdGroupMove;
 window.kbdGroupMoveOrExit = kbdGroupMoveOrExit;
@@ -945,6 +1093,19 @@ function KeyboardLayer() {
           if (kbdTabTo(act.to)) e.preventDefault();
           return;
 
+        case 'access': {
+          // A screen is navigated to; anything else is pressed. Nothing at all
+          // for a letter nobody claims, so the browser keeps its own Alt keys.
+          const target = kbdAccessTarget(act.letter);
+          if (!target) return;
+          e.preventDefault();
+          const navId = target.getAttribute('data-nav');
+          if (navId) { go(navId); return; }
+          if (target.focus) { try { target.focus(); } catch (err) {} }
+          if (typeof target.click === 'function') target.click();
+          return;
+        }
+
         case 'primary-action': {
           // The page's own primary button, the one it is for. Nothing happens
           // on a screen without one, so the key goes back to the page.
@@ -981,9 +1142,20 @@ function KeyboardLayer() {
         default: return;
       }
     };
-    // Tabbing onto a list selects its first row, so the arrows visibly do
-    // something straight away. Leaving it drops the highlight, so there is never
-    // a selected row on a list nobody is driving.
+    // Hold Alt and the letters appear, the way the ribbon does it. Nobody can
+    // learn a shortcut they cannot see, and these are the ones worth learning.
+    const showKeys = (on) => {
+      const b = document.body;
+      if (!b || !b.classList) return;
+      if (on) { kbdAssignAccessKeys(); b.classList.add('kbd-alt'); }
+      else b.classList.remove('kbd-alt');
+    };
+    const onAltDown = (ev) => { if (ev.key === 'Alt' && !ev.ctrlKey && !ev.metaKey) showKeys(true); };
+    const onAltUp = (ev) => { if (ev.key === 'Alt' || !ev.altKey) showKeys(false); };
+    // Alt+Tab leaves the window with the key still down. The letters must not
+    // be left on screen for whenever it comes back.
+    const onBlur = () => showKeys(false);
+
     const onFocusIn = (e) => {
       const el = e.target;
       const list = el && el.closest && el.closest('[data-kbd-list]');
@@ -995,9 +1167,16 @@ function KeyboardLayer() {
       else if (el && el.closest && el.closest('.sidebar')) kbdClearCursor();
     };
     window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onAltDown);
+    window.addEventListener('keyup', onAltUp);
+    window.addEventListener('blur', onBlur);
     document.addEventListener('focusin', onFocusIn);
     return () => {
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onAltDown);
+      window.removeEventListener('keyup', onAltUp);
+      window.removeEventListener('blur', onBlur);
+      showKeys(false);
       document.removeEventListener('focusin', onFocusIn);
     };
   }, [palette, help, pending, go]);
@@ -1111,6 +1290,11 @@ const KBD_SHEET = [
     ['n', 'the blue button on this screen — new order, new GRN, create'],
     ['Enter', 'press whatever is focused'],
     ['Ctrl + Enter', 'save the open dialog'],
+  ]},
+  { group: 'Straight there — hold Alt to see every letter', keys: [
+    ['Alt + letter', 'the screen or the button with that letter'],
+    ['Alt', 'hold it: every letter on screen appears'],
+    ['a screen keeps its letter', 'the same one as its g jump, everywhere, always'],
   ]},
   { group: 'Getting somewhere', keys: [
     ['Ctrl + K', 'the command palette — every screen and record'],

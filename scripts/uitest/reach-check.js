@@ -282,7 +282,32 @@ for (const [name] of SCREENS) {
 }
 ok(`reachable on all ${blueScreens.length}: ${blueScreens.slice(0, 8).join(', ')}…`);
 
-console.log('\n[6] a group is one tab stop, on the real screens');
+console.log('\n[6] Alt gives every button on every screen a letter of its own');
+// Two buttons on one screen sharing a letter means one of them cannot be
+// pressed, and nothing on screen would say which.
+const lettered = [];
+for (const [name] of SCREENS) {
+  const markup = rendered[name];
+  if (markup == null) continue;
+  const d = new JSDOM(`<!doctype html><html><body><div class="app"><main class="main">${markup}</main></div></body></html>`);
+  s.document = d.window.document;
+  s.getComputedStyle = d.window.getComputedStyle.bind(d.window);
+  s.kbdEnhance();
+  const keyed = Array.from(d.window.document.querySelectorAll('.main [data-kbd-key]'));
+  const letters = keyed.map(el => el.getAttribute('data-kbd-key'));
+  const dupes = letters.filter((l, i) => letters.indexOf(l) !== i);
+  if (dupes.length) fail(`${name} — two buttons both answer Alt+${dupes[0]}`);
+  // Every enabled button with a label should have got one; if the alphabet ran
+  // out on a busy screen, say so rather than leaving it silently unreachable.
+  const labelled = Array.from(d.window.document.querySelectorAll('.main button:not([disabled])'))
+    .filter(s.kbdVisible).filter(b => String(b.textContent || '').trim());
+  const missing = labelled.filter(b => !b.getAttribute('data-kbd-key'));
+  if (missing.length) fail(`${name} — ${missing.length} button(s) got no letter (alphabet exhausted?)`);
+  if (letters.length) lettered.push(`${name}(${letters.length})`);
+}
+ok(`unique letters on all ${lettered.length}: ${lettered.slice(0, 7).join(', ')}…`);
+
+console.log('\n[7] a group is one tab stop, on the real screens');
 // A record with nine tabs must cost one press to get past, not nine.
 const withTabs = [];
 for (const [name] of SCREENS) {
