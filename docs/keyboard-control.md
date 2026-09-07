@@ -399,6 +399,15 @@ without matching half the list.
 - **Count the presses, not the possibilities.** Every control was reachable by
   Tab for two rounds of this, and it still felt broken, because reaching the page
   cost thirty presses. A group that belongs together is one stop.
+- **A roving group's members are `tabindex="-1"` on purpose.** Exactly one holds
+  the tab stop; the rest are -1 so Tab passes the group in one press. Anything
+  that walks the group — `kbdGroupMove` — must therefore include -1, or it finds
+  a single member, moves it to itself, and the arrows look dead. That is exactly
+  what happened to the sidebar the moment it became one tab stop, and the test
+  fixture hid it by giving every link `tabindex="0"`, which the real sidebar
+  never has.
+- **A fixture that is tidier than reality proves nothing.** Write the awkward
+  shape the app actually renders.
 - **One owner per key.** `Ctrl+Enter` is the keyboard layer's; if the dialog
   handled it too, a single press would submit twice. The check asserts the
   dialog leaves it alone.

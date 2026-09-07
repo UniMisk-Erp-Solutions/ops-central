@@ -354,9 +354,9 @@ console.log('\n[6c] focus can always get out of the sidebar again');
 // remaining link. On a wide screen that is most of the app out of reach.
 const domP = new JSDOM(`<!doctype html><html><body><div class="app">
   <aside class="sidebar">
-    <div class="nav-item" id="nav1" tabindex="0" role="link">Dashboard</div>
+    <div class="nav-item" id="nav1" tabindex="-1" role="link">Dashboard</div>
     <div class="nav-item active" id="nav2" tabindex="0" role="link">Sales Orders</div>
-    <div class="nav-item" id="nav3" tabindex="0" role="link">Customers</div>
+    <div class="nav-item" id="nav3" tabindex="-1" role="link">Customers</div>
   </aside>
   <div class="tabs"><button class="tab" id="tabA">Overview</button></div>
   <main class="main">
@@ -372,10 +372,30 @@ sandbox.document = DP;
 sandbox.getComputedStyle = domP.window.getComputedStyle.bind(domP.window);
 sandbox.kbdEnhance();
 
+let navOpened = 0;
+DP.getElementById('nav3').addEventListener('click', () => navOpened++);
+
 check('a sidebar link reports the sidebar', sandbox.kbdPaneOf(DP.getElementById('nav2')), 'sidebar');
 check('a tab reports the tabs', sandbox.kbdPaneOf(DP.getElementById('tabA')), 'tabs');
 check('a button on the page reports the page', sandbox.kbdPaneOf(DP.getElementById('firstbtn')), 'main');
 check('and so does nothing in particular', sandbox.kbdPaneOf(DP.body), 'main');
+
+// The sidebar is a roving group: the link for the screen you are on holds the
+// only tab stop and the rest are -1. A mover that skips tabindex="-1" finds one
+// item, moves to itself, and the arrows look dead.
+check('the arrows move down the sidebar, past the links that are -1',
+  (sandbox.kbdGroupMove(DP.getElementById('nav2'), 1) || {}).id, 'nav3');
+check('and back up again',
+  (sandbox.kbdGroupMove(DP.getElementById('nav3'), -1) || {}).id, 'nav2');
+check('stopping at the top rather than wrapping',
+  (sandbox.kbdGroupMove(DP.getElementById('nav1'), -1) || {}).id, 'nav1');
+check('and at the bottom',
+  (sandbox.kbdGroupMove(DP.getElementById('nav3'), 1) || {}).id, 'nav3');
+check('moving carries the tab stop, so Tab does not snap back',
+  Array.from(DP.querySelectorAll('.sidebar .nav-item'))
+    .filter(x => x.getAttribute('tabindex') === '0').map(x => x.id), ['nav3']);
+check('but it does NOT open the screen — an arrow must never leave the page',
+  navOpened, 0);
 
 check('crossing left lands on the screen you are actually on',
   (sandbox.kbdFocusSidebar() || {}).id, 'nav2');
