@@ -45,7 +45,15 @@ Across the screen:
 | `←` | to the sidebar, landing on the screen you are on |
 | `→` | back out to the page, landing on its list |
 | `↑` `↓` in the sidebar | down the sidebar (`Enter` opens) |
-| `←` `→` on a tab | along the row of tabs, switching as it goes |
+
+The tabs on a record — Overview, Line Items + BOM, Procurement, Vendor POs, GRN,
+Invoicing, Virtual Godown, Documents, Audit Log:
+
+| Key | What it does |
+|---|---|
+| `]` `[` | next tab / previous tab, **from anywhere on the page** |
+| `1` … `9` | straight to that tab |
+| `←` `→` | along them, once one has focus |
 
 The selected row is marked down the left in the accent colour. `?` shows the
 whole list without leaving the screen.
@@ -150,6 +158,28 @@ stop, and the arrows move within it.
 A check walks the source and fails if a clickable element is ever written without
 a pointer cursor — it would be invisible to this pass, and to the mouse user too,
 who would get no hand cursor.
+
+### The tabs on a record
+
+An order carries nine tabs and they are the main way around it, so they get keys
+of their own: `]` and `[` step along them and `1`–`9` go straight to one, from
+anywhere on the page.
+
+The side arrows already moved along them once a tab had focus. That was not
+enough — focus arrives there several `Tab` presses in, and coming out of the
+sidebar with `→` lands on the list, past them. A key nobody can reach is not a
+feature.
+
+Two details that matter:
+
+- **The active tab is read from the page**, not from a counter this layer keeps.
+  Somebody may have clicked a different tab with the mouse in between, and a
+  counter would then step from the wrong place.
+- **Switching a tab drops the row selection.** The panel underneath is about to
+  be replaced, so a selected row is pointing at a table that will not be there.
+
+On a screen with no tab strip nothing happens and the keys are left to the page —
+a digit is then just a digit.
 
 ### Seeing where you are
 
@@ -266,6 +296,7 @@ without matching half the list.
 | `kbdIsClickable`, `kbdEnhance`, `kbdActivate` — the clickable divs | `frontend/src/keyboard.jsx` |
 | `kbdLists`, `kbdIsInList` — a list as one tab stop | `frontend/src/keyboard.jsx` |
 | `kbdPaneOf`, `kbdFocusSidebar`, `kbdFocusMain` — crossing the screen | `frontend/src/keyboard.jsx` |
+| `kbdTabStrip`, `kbdTabButtons`, `kbdTabTo` — the tabs on a record | `frontend/src/keyboard.jsx` |
 | `kbdGroupOf`, `kbdGroupMove`, `kbdVisible` — tabs and the sidebar | `frontend/src/keyboard.jsx` |
 | `KeyboardLayer` — the one listener | `frontend/src/keyboard.jsx` |
 | `CommandPalette`, `ShortcutHelp` | `frontend/src/keyboard.jsx` |
@@ -293,6 +324,13 @@ without matching half the list.
   goes back and `Home`/`End` mean top and bottom. Taking those made a working
   feature feel broken. A key is only free when nothing else wanted it *in that
   context*.
+- **A shortcut nobody can reach is not a feature.** The side arrows moved along
+  the record tabs from the day they were written, and it did not count, because
+  getting focus onto a tab took several presses. Ask how somebody arrives at a
+  key, not only what it does once they are there.
+- **Read the state from the page, never from a counter here.** The active tab,
+  the selected row and the open dialog are all things the user can change with
+  the mouse between two keystrokes.
 - **A pane you can enter must be a pane you can leave.** `←` into the sidebar
   without `→` back out is a trap, and it will not be obvious in a test that only
   asks whether the key moved focus.

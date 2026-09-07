@@ -168,6 +168,13 @@ function kbdResolve(e, ctx) {
 
   if (['PageDown', 'PageUp', 'Home', 'End'].includes(key)) return null;
 
+  // The tabs across a record, from anywhere on the page. Bracket keys sit next
+  // to each other and are on every layout; the digits go straight to one, which
+  // is how somebody who works on these records all day will actually use them.
+  if (key === ']') return { action: 'tab-step', to: 'next' };
+  if (key === '[') return { action: 'tab-step', to: 'prev' };
+  if (/^[1-9]$/.test(key)) return { action: 'tab-step', to: Number(key) };
+
   switch (key) {
     case '/':          return { action: 'search' };
     case '?':          return { action: 'help' };
@@ -422,6 +429,45 @@ function kbdVisible(el) {
   } catch (e) { return true; }
 }
 
+// The tab strip on the page. An order has nine tabs across it — Overview, Line
+// Items, Procurement, Vendor POs, GRN, Invoicing, Virtual Godown, Documents,
+// Audit Log — and they are the main way around the record.
+//
+// The side arrows already move along them once a tab has focus. Getting focus
+// there was the problem: from the sidebar it is past the whole page, and by Tab
+// it is several presses in. So they answer from anywhere on the page.
+function kbdTabStrip(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || !d.querySelector) return null;
+  const scope = d.querySelector('.modal-body') || d.querySelector('.main') || d.body;
+  return scope && scope.querySelector ? scope.querySelector('.tabs') : null;
+}
+
+function kbdTabButtons(strip) {
+  if (!strip || !strip.querySelectorAll) return [];
+  return Array.from(strip.querySelectorAll('button:not([disabled]), [data-kbd-click]'))
+    .filter(kbdVisible);
+}
+
+// Move by delta, or straight to the nth (1-based). Returns the tab it landed on.
+function kbdTabTo(where, doc) {
+  const strip = kbdTabStrip(doc);
+  const tabs = kbdTabButtons(strip);
+  if (!tabs.length) return null;
+  const at = tabs.findIndex(t => t.className && /\bactive\b/.test(t.className));
+  let idx;
+  if (typeof where === 'number') idx = where - 1;                 // 1-based, from the digit keys
+  else idx = Math.min(tabs.length - 1, Math.max(0, (at < 0 ? 0 : at) + (where === 'next' ? 1 : -1)));
+  if (idx < 0 || idx >= tabs.length) return null;
+  const tab = tabs[idx];
+  if (tab.focus) { try { tab.focus(); } catch (e) {} }
+  // Switching tab replaces the panel under it, so the row selection down there
+  // belongs to a table that is about to be gone.
+  kbdClearCursor(doc);
+  if (typeof tab.click === 'function') tab.click();
+  return tab;
+}
+
 // Which part of the screen is being driven. Left and right cross between the
 // sidebar and the page, so this has to be right or focus gets stuck in one.
 function kbdPaneOf(el) {
@@ -561,6 +607,9 @@ window.kbdIsInList = kbdIsInList;
 window.kbdEnhance = kbdEnhance;
 window.kbdActivate = kbdActivate;
 window.kbdVisible = kbdVisible;
+window.kbdTabStrip = kbdTabStrip;
+window.kbdTabButtons = kbdTabButtons;
+window.kbdTabTo = kbdTabTo;
 window.kbdPaneOf = kbdPaneOf;
 window.kbdFocusSidebar = kbdFocusSidebar;
 window.kbdFocusMain = kbdFocusMain;
@@ -750,6 +799,12 @@ function KeyboardLayer() {
           if (kbdTickRow(null, focused)) e.preventDefault();
           return;
 
+        case 'tab-step':
+          // Only if the screen actually has tabs — otherwise a digit is just a
+          // digit, and "[" is a bracket.
+          if (kbdTabTo(act.to)) e.preventDefault();
+          return;
+
         case 'pane-sidebar':
           // Left crosses to the sidebar. It does NOT go back in history: doing
           // that from a stray keypress is how somebody loses a half-typed form.
@@ -896,7 +951,11 @@ const KBD_SHEET = [
     ['←', 'to the sidebar'],
     ['→', 'back out to the page'],
     ['↓ / ↑ there', 'down the sidebar (Enter opens)'],
-    ['← / → on tabs', 'along a row of tabs'],
+  ]},
+  { group: 'The tabs on a record', keys: [
+    ['] / [', 'next tab / previous tab, from anywhere'],
+    ['1 … 9', 'straight to that tab'],
+    ['← / →', 'along them, once one has focus'],
   ]},
   { group: 'Getting somewhere', keys: [
     ['Ctrl + K', 'the command palette — every screen and record'],
