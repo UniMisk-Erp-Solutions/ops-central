@@ -165,9 +165,12 @@ console.log('\n[5b] a focused button keeps its own Enter and Space');
 // One press of Enter on a "Create" button must do ONE thing. Before this guard
 // it pressed the button AND opened whatever row the cursor was sitting on —
 // two actions from one keystroke, the second one invisible.
-check('Enter on a focused button is the button, not the row',
-  act('Enter', { control: true }), null);
-check('and Space on it is the button', act(' ', { control: true }), null);
+check('Enter with something focused is about that thing, not the row',
+  act('Enter', { control: true }), 'activate');
+check('and so is Space', act(' ', { control: true }), 'activate');
+// "activate" does not mean "click it". A real button already acts on Enter, and
+// the handler presses only the divs that were put in the tab order — asserted
+// against a real button in [10b].
 check('but the arrows still move the list underneath',
   act('ArrowDown', { control: true }), 'row-move');
 check('and Escape still works', act('Escape', { control: true }), 'escape');
@@ -184,6 +187,26 @@ check('and neither is a table row', sandbox.kbdIsControl(ctl('TR')), false);
 check('tabindex="-1" is not in the tab order, so not a control',
   sandbox.kbdIsControl(ctl('DIV', { tabindex: '-1' })), false);
 check('nothing focused is not a control', sandbox.kbdIsControl(null), false);
+
+console.log('\n[5c] tabs and the sidebar move under the arrows');
+check('right moves along a strip of tabs',
+  sandbox.kbdResolve(K('ArrowRight'), { control: true, group: 'horizontal' }),
+  { action: 'group-move', delta: 1 });
+check('left moves back along it',
+  sandbox.kbdResolve(K('ArrowLeft'), { control: true, group: 'horizontal' }),
+  { action: 'group-move', delta: -1 });
+check('down moves along the sidebar',
+  sandbox.kbdResolve(K('ArrowDown'), { control: true, group: 'vertical' }),
+  { action: 'group-move', delta: 1 });
+check('and left in the sidebar is not a group move',
+  act('ArrowLeft', { control: true, group: 'vertical' }), null);
+// Going back in history because somebody pressed left on a button is the kind
+// of surprise that loses work.
+check('left on a button does NOT go back', act('ArrowLeft', { control: true }), null);
+check('right on a button does NOT open a row', act('ArrowRight', { control: true }), null);
+check('but with nothing focused, left still goes back', act('ArrowLeft', {}), 'back');
+check('a group cannot be moved while typing in it',
+  act('ArrowRight', { typing: true, group: 'horizontal' }), null);
 
 console.log('\n[6] an open palette owns the keyboard');
 check('the list behind it does not move',
@@ -255,6 +278,111 @@ check('a row with no checkbox is left alone', sandbox.kbdTickRow(), false);
 sandbox.kbdClearCursor();
 check('with nothing selected, opening does nothing', sandbox.kbdOpenRow(), false);
 check('and neither does ticking', sandbox.kbdTickRow(), false);
+
+console.log('\n[10b] every clickable div is reachable by Tab');
+// Half the controls in this app are a div with an onClick, invisible to Tab.
+// They are found through the signal the app already uses for "you can click
+// this" — the pointer cursor on the element ITSELF.
+const dom4 = new JSDOM(`<!doctype html><html><body>
+  <div class="app">
+    <div class="tabs">
+      <button class="tab active" id="t1">Overview</button>
+      <button class="tab" id="t2">Line Items</button>
+      <button class="tab" id="t3">Procurement</button>
+    </div>
+    <aside class="sidebar">
+      <div class="nav-item" id="n1" tabindex="0" role="link">Dashboard</div>
+      <div class="nav-item" id="n2" tabindex="0" role="link">Sales Orders</div>
+    </aside>
+    <main class="main">
+      <div id="doc" class="pool-item" style="cursor: pointer">Tax Invoice</div>
+      <span id="sono" class="mono" style="cursor: pointer">SO/FY26/0002</span>
+      <div id="swatch" style="width: 32px; cursor: pointer"></div>
+      <div id="off" style="cursor: default">a disabled chip</div>
+      <div id="plain">just some text</div>
+      <div class="queue-item" id="q1">a notification</div>
+      <button id="realbtn">Edit items</button>
+      <input id="field" type="text">
+      <table class="t"><tbody>
+        <tr id="row" style="cursor: pointer">
+          <td id="cell"><div id="inner">an item name</div></td>
+        </tr>
+      </tbody></table>
+    </main>
+  </div>
+</body></html>`);
+const D4 = dom4.window.document;
+sandbox.document = D4;
+sandbox.getComputedStyle = dom4.window.getComputedStyle.bind(dom4.window);
+
+check('a div with a pointer cursor is a control', sandbox.kbdIsClickable(D4.getElementById('doc')), true);
+check('so is a span rendered as a link', sandbox.kbdIsClickable(D4.getElementById('sono')), true);
+check('so is a colour swatch with no class at all', sandbox.kbdIsClickable(D4.getElementById('swatch')), true);
+check('a known clickable class counts even with no inline style',
+  sandbox.kbdIsClickable(D4.querySelector('.queue-item')), true);
+check('a DISABLED control is left out — its cursor says default',
+  sandbox.kbdIsClickable(D4.getElementById('off')), false);
+check('plain text is not a control', sandbox.kbdIsClickable(D4.getElementById('plain')), false);
+check('a real button is already reachable, so it is left alone',
+  sandbox.kbdIsClickable(D4.getElementById('realbtn')), false);
+check('and so is a field', sandbox.kbdIsClickable(D4.getElementById('field')), false);
+check('something already given a tabindex by hand is left alone',
+  sandbox.kbdIsClickable(D4.getElementById('n1')), false);
+
+// THE TRAP. cursor inherits, so every descendant of a clickable row computes as
+// pointer. Read the computed style instead of the element's own and half the
+// page lands in the tab order.
+check('a row is not put in the tab order — the arrows drive rows',
+  sandbox.kbdIsClickable(D4.getElementById('row')), false);
+check('nor is a cell inside one', sandbox.kbdIsClickable(D4.getElementById('cell')), false);
+check('nor a div inside a clickable row, which INHERITS the pointer cursor',
+  sandbox.kbdIsClickable(D4.getElementById('inner')), false);
+check('the inherited cursor really is pointer, so this is a live trap',
+  dom4.window.getComputedStyle(D4.getElementById('inner')).cursor, 'pointer');
+
+const added = sandbox.kbdEnhance();
+check('the pass reaches the four that needed it', added, 4);
+check('each got into the tab order',
+  ['doc', 'sono', 'swatch', 'q1'].map(id => D4.getElementById(id).getAttribute('tabindex')),
+  ['0', '0', '0', '0']);
+check('and is announced as a button',
+  D4.getElementById('doc').getAttribute('role'), 'button');
+check('a second pass changes nothing — it is safe to run on every render',
+  sandbox.kbdEnhance(), 0);
+check('the disabled chip stayed out', D4.getElementById('off').getAttribute('tabindex'), null);
+check('and so did the row', D4.getElementById('row').getAttribute('tabindex'), null);
+
+let hits = 0;
+D4.getElementById('doc').addEventListener('click', () => hits++);
+check('Enter presses one', sandbox.kbdActivate(D4.getElementById('doc')), true);
+check('exactly once', hits, 1);
+check('a real button is NOT pressed by this path — it acts on Enter itself',
+  sandbox.kbdActivate(D4.getElementById('realbtn')), false);
+check('and neither is plain text', sandbox.kbdActivate(D4.getElementById('plain')), false);
+
+console.log('\n[10c] the arrows move along tabs and down the sidebar');
+check('a tab is in a horizontal group',
+  (sandbox.kbdGroupOf(D4.getElementById('t1')) || {}).orientation, 'horizontal');
+check('the sidebar is a vertical one',
+  (sandbox.kbdGroupOf(D4.getElementById('n1')) || {}).orientation, 'vertical');
+check('a document in the list is in neither',
+  sandbox.kbdGroupOf(D4.getElementById('doc')), null);
+
+let switched = 0;
+D4.getElementById('t2').addEventListener('click', () => switched++);
+const moved = sandbox.kbdGroupMove(D4.getElementById('t1'), 1);
+check('right lands on the next tab', moved && moved.id, 't2');
+check('and switches to it, because a tab only swaps a panel already on screen', switched, 1);
+check('it stops at the last tab rather than wrapping',
+  (sandbox.kbdGroupMove(D4.getElementById('t3'), 1) || {}).id, 't3');
+check('and at the first going back',
+  (sandbox.kbdGroupMove(D4.getElementById('t1'), -1) || {}).id, 't1');
+
+let navigated = 0;
+D4.getElementById('n2').addEventListener('click', () => navigated++);
+const navMoved = sandbox.kbdGroupMove(D4.getElementById('n1'), 1);
+check('down moves to the next sidebar link', navMoved && navMoved.id, 'n2');
+check('but does NOT open it — an arrow key must never leave the page', navigated, 0);
 
 console.log('\n[11] a dialog takes over the list keys');
 const dom2 = new JSDOM(`<!doctype html><html><body>
@@ -337,6 +465,62 @@ check('letters in order still match', sandbox.kbdFilter(items, 'vpo').length > 0
 check('nonsense matches nothing', sandbox.kbdFilter(items, 'zzqq'), []);
 check('an empty box shows everything', sandbox.kbdFilter(items, '').length, items.length);
 check('and whitespace is not a search', sandbox.kbdFilter(items, '   ').length, items.length);
+
+console.log('\n[14b] no clickable is left behind');
+// The pass finds controls by their pointer cursor. A new clickable div written
+// without one would be invisible to it — and to the mouse user too, who gets no
+// hand cursor. This walks the source and fails when one appears.
+//
+// These are the only ones that legitimately have no pointer: a click used to
+// stop propagation, and a backdrop that exists to be clicked past. Neither is
+// something to focus.
+// A JSX opening tag cannot be matched with a regex: onClick={e => ...} holds a
+// ">" that does not end it. Walk from "<" to the ">" at brace depth zero.
+const tagAt = (src, i) => {
+  let depth = 0, quote = null;
+  for (let c = i; c < src.length; c++) {
+    const ch = src[c];
+    if (quote) { if (ch === quote && src[c - 1] !== '\\') quote = null; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    else if (ch === '>' && depth === 0) return src.slice(i, c + 1);
+  }
+  return src.slice(i, i + 400);
+};
+
+// These legitimately have no pointer, and none of them is something to focus:
+// a click that only stops propagation, and a backdrop that exists to be clicked
+// past (Escape closes those too).
+const NOT_CONTROLS = /stopPropagation|modal-backdrop|position: 'fixed', inset: 0/;
+const POINTER_CLASSES = ['nav-item', 'queue-item', 'radio-card', 'toggle', 'kbd-palette-row'];
+const uncovered = [];
+fs.readdirSync(path.join(dir, 'src')).filter(f => f.endsWith('.jsx')).forEach(f => {
+  const src = fs.readFileSync(path.join(dir, 'src', f), 'utf8');
+  const re = /<(div|span|li|section|article)\b/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const tag = tagAt(src, m.index);
+    if (!/\bonClick\b/.test(tag)) continue;                 // not clickable
+    if (NOT_CONTROLS.test(tag)) continue;                    // not a control
+    if (/cursor:\s*[^,;}]*pointer/.test(tag)) continue;       // carries the signal
+    if (/\.\.\.clk\b/.test(tag)) continue;                   // shared pointer style
+    if (POINTER_CLASSES.some(c => tag.includes(c))) continue; // a known clickable class
+    if (/tabIndex=/.test(tag)) continue;                     // placed by hand
+    uncovered.push(f + ': ' + tag.replace(/\s+/g, ' ').slice(0, 70));
+  }
+});
+check('the tag walker sees past the ">" inside an arrow function',
+  /cursor/.test(tagAt('<div onClick={e => go(e)} style={{ cursor: "pointer" }}>x', 0)), true);
+check('every clickable element carries a pointer cursor, so the pass finds it',
+  uncovered, []);
+
+const kb = fs.readFileSync(path.join(dir, 'src', 'keyboard.jsx'), 'utf8');
+check('the pass reads the element own style, never the computed one',
+  /getComputedStyle/.test(kb.slice(kb.indexOf('function kbdIsClickable'),
+                                  kb.indexOf('function kbdEnhance'))), false);
+check('the observer watches children only, so its own attributes cannot re-trigger it',
+  /childList: true, subtree: true/.test(kb) && !/attributes: true/.test(kb), true);
 
 console.log('\n[15] it is actually wired in');
 const idx = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
