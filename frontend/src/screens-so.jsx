@@ -830,6 +830,27 @@ function SalesOrderDetail({ soId }) {
           {canHold && so.on_hold && (
             <button className="btn btn-primary" onClick={doResume}><Icon name="repeat" size={13}/>Resume</button>
           )}
+          {wfOn('client_acceptance') && ['Purchase', 'Org Admin'].includes(role)
+            && !SO_MANUAL_STATES.includes(so.status) && (
+            <button className="btn btn-primary" onClick={() => {
+              const review = window.soClientReview ? window.soClientReview(state, so) : null;
+              if (!review || !review.items.length) {
+                toast('Nothing has been dispatched yet.');
+                return;
+              }
+              if (!review.allReviewed) {
+                toast("Some item(s) are still awaiting the client's decision.");
+                return;
+              }
+              mutate(s => ({
+                ...s,
+                sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, status: 'Closed' } : x),
+              }), { action: 'status', entity: 'SalesOrder', entity_id: so.id, from: so.status, to: 'Closed' });
+              toast(so.so_no + ' closed', 'success');
+            }} title="Close the order once the client has decided on every item">
+              <Icon name="check" size={13}/>Confirm &amp; Close
+            </button>
+          )}
           {canDoNext && !so.on_hold && (
             <button className="btn btn-primary" onClick={advanceStatus}>
               <Icon name={nextAction.icon} size={13}/> {nextAction.label}
@@ -852,7 +873,13 @@ function SalesOrderDetail({ soId }) {
       <div className="card mb-2">
         <div className="card-body" style={{ padding: '10px 14px' }}>
           <div className="h-timeline">
-            {['Draft','Approved','Procurement Started','Material Received','Ready to Dispatch','Invoiced','Fully Paid','Closed'].map((stage, i) => {
+            {/* The historic eight, unchanged. An org running client acceptance
+                sees two more between dispatch and invoicing; every other org's
+                strip is byte-for-byte what it always was. */}
+            {(wfOn('client_acceptance')
+              ? ['Draft','Approved','Procurement Started','Material Received','Ready to Dispatch','Pending Client Acceptance','Client Accepted','Invoiced','Fully Paid','Closed']
+              : ['Draft','Approved','Procurement Started','Material Received','Ready to Dispatch','Invoiced','Fully Paid','Closed']
+            ).map((stage, i) => {
               // The furthest of "what is stored" and "what has actually
               // happened", so an order that was never formally approved still
               // reports honestly once POs, goods and invoices exist against it.
@@ -1070,6 +1097,9 @@ function SalesOrderDetail({ soId }) {
           <SOProfitPanel so={so}/>
           {/* What gets billed together, decided on top of the bill of materials. */}
           {typeof BOQPanel !== 'undefined' && <BOQPanel so={so}/>}
+          {/* Off everywhere except an org running client acceptance; see the
+              component's own gate for why this is safe to mount unconditionally. */}
+          {typeof ClientReviewPanel !== 'undefined' && <ClientReviewPanel so={so}/>}
           {canEditSO && !billingLocked && (
             <div className="card"><div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div className="grow"><strong className="small">Bill of Materials</strong><div className="tiny muted">Purchase / PM can adjust line items, quantities and components here after approval — flows into procurement & the Virtual Godown.</div></div>

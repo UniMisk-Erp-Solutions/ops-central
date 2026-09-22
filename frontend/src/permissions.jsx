@@ -188,6 +188,9 @@ const WORKFLOW_FALLBACK = {
   supervisor_signoff:  true,
   auto_invoice_on_grn: true,
   outward_dispatch:    false,
+  // Off everywhere until an organization turns it on. See soClientReview() in
+  // utils.jsx and docs/client-acceptance.md.
+  client_acceptance:   false,
 };
 
 function wf(key) {
