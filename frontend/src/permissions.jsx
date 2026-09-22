@@ -97,14 +97,19 @@ const PERMISSIONS = {
   // Does NOT create a Sales Order. They write down what the client wants —
   // free text, helped by recommendations from past orders — and send it to
   // Purchase, who does the item-name mapping and creates the real SO. See
-  // docs/client-requests.md. 'sales-orders' stays in nav so they can watch an
-  // order they asked for; createSO/editOwnDraft are deliberately absent.
+  // docs/client-requests.md.
+  //
+  // Only two pages, by request: Item Requests and SCM Tracking (pure
+  // quantities — ordered/on PO/in transit/received/dispatched — no cost, no
+  // vendor price, so it is safe for this desk the same way the rest of its
+  // access always excluded cost).
   'Client Facing': {
-    nav: ['dashboard','inbox','client-requests','sales-orders','customers','invoices','collections','products'],
+    nav: ['client-requests', 'scm'],
     // NOT 'client-requests' — that route is workflow-gated and off for most
     // organizations, and a role's primary must always be a route it can
-    // actually open (roles-check asserts this for every role).
-    primary: { route: 'sales-orders', label: 'Sales Orders', icon: 'receipt' },
+    // actually open (roles-check asserts this for every role). 'scm' carries
+    // no such gate.
+    primary: { route: 'scm', label: 'SCM Tracking', icon: 'repeat' },
     can: { createClientRequest: true, viewCustomers: true,
            viewProducts: true, logFollowup: true },
   },

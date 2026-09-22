@@ -24,6 +24,16 @@ does not exist — not hidden by a role check, blocked at the route itself, the
 same way a disabled feature flag blocks a route — and every function this
 document describes is defined but never reached.
 
+Client Facing's whole nav is exactly two pages: **Item Requests** and **SCM
+Tracking**. Nothing else — no Sales Orders, Customers, Invoices, Collections
+or Products, even though earlier drafts of this role carried some of those.
+SCM Tracking is safe for this desk for the same reason the rest of its access
+always excluded cost: `scmLineTotals` (`screens-scm.jsx`) is pure quantities —
+ordered / on PO / in transit / received / dispatched — with no vendor price or
+identity anywhere in it. `PERMISSIONS['Client Facing'].nav` in
+`permissions.jsx` is the one place this list is defined; `roles-check.js`
+asserts it is exactly `['client-requests', 'scm']`.
+
 This replaces an earlier design (still visible in git history) where Client
 Facing created the SO directly by importing the customer's own sheet. The
 client-side "import" door is closed again — `canImportSheet` is back to
@@ -123,6 +133,19 @@ screen here to protect.
 
 ## Traps
 
+- **A role's `primary` route must never be workflow-gated.** Client Facing's
+  `primary` was briefly set to `client-requests` itself — reads naturally, "the
+  role's main page is the one it exists for" — but that route is blocked by
+  `workflowBlocks` for every organization where `client_order_requests` is off,
+  which includes the sandboxed default `roles-check.js` runs under. The result
+  was the exact bug this feature shipped with: **the App's route guard
+  redirects to `primary` whenever the current route is inaccessible, and if
+  `primary` is *itself* inaccessible, the role lands nowhere reachable** — from
+  the outside this looks exactly like "the page won't open," because the
+  redirect fires immediately, silently, before anything renders. `primary` is
+  `scm` instead — a route with no workflow gate — precisely so this can never
+  happen again. `roles-check.js`'s "no role lands on a screen it may not open"
+  check exists to catch exactly this.
 - **`can` is a whole-object override, not a merge** — the same rule every
   other permissions change in this app has to respect. Not relevant to this
   change specifically (it edits the shared `PERMISSIONS` table, not a

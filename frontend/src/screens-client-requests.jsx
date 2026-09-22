@@ -210,6 +210,10 @@ function ClientRequestNew() {
     if (!customerId) { toast('Pick a customer'); return; }
     if (!items.length) { toast('Add at least one item'); return; }
     setBusy(true);
+    // Same call-time pattern boqNo/vendorPoNo/challanNo already use (see
+    // screens-boq.jsx's create()) — derived from what exists right now, not
+    // re-verified inside the updater, because the number is also needed
+    // immediately below for the toast and the URL.
     const req = {
       id: 'creq-' + Date.now(),
       request_no: clientReqNo(state, TODAY),
