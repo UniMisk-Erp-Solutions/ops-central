@@ -38,6 +38,11 @@ function allocBuildRows(state, so) {
   });
   const pooled = {};
   (so.pool_alloc || []).forEach(a => { pooled[a.product_id] = (pooled[a.product_id] || 0) + (Number(a.qty) || 0); });
+  // A client's rejection is one more unit to order, on top of what the order
+  // already needed — see soRejectedOutstanding(). Added onto the FIRST row for
+  // that product only, so a product spanning two bundles is not double-counted.
+  const rejected = (typeof soRejectedOutstanding === 'function') ? soRejectedOutstanding(state, so) : {};
+  const rejectedLeft = Object.assign({}, rejected);
 
   const rows = [];
   (so.lines || []).forEach((l, li) => {
@@ -48,14 +53,20 @@ function allocBuildRows(state, so) {
       ? `PO Sr ${ref.po_sr}${ref.group ? ' · ' + String(ref.group).replace(/^Group\s*/i, 'Group ') : ''}`
       : (ref.equip || l.client_name || `Line ${li + 1}`);
     (l.components || []).forEach((c, ci) => {
-      const need = (Number(c.qty) || 0) * (Number(l.bundle_qty) || 1);
+      const ownNeed = (Number(c.qty) || 0) * (Number(l.bundle_qty) || 1);
+      // Claim the whole rejection-driven extra on the first row for this
+      // product, wherever it falls — a product with no ordinary need left
+      // (fully covered by the original PO) still gets a row this way.
+      const extra = rejectedLeft[c.product_id] || 0;
+      if (extra > 0) rejectedLeft[c.product_id] = 0;
+      const need = ownNeed + extra;
       if (need <= 0) return;
       rows.push({
         key: `${l.id || li}:${c.product_id}:${ci}`,
         line_id: l.id, product_id: c.product_id, comp_index: ci,
         groupKey, groupLabel,
         equip: ref.equip || l.client_name || '',
-        need,
+        need, replacementQty: extra,
         vendor_id: '', rate: 0, rateSource: '', vendorSource: '',
         // What the CUSTOMER pays for this component, as the order currently has
         // it. Untouched unless the user edits it, so opening this screen can
@@ -80,7 +91,7 @@ function allocBuildRows(state, so) {
     let covered = Math.min(left[r.product_id] || 0, r.need);
     left[r.product_id] = (left[r.product_id] || 0) - covered;
     const qty = r.need - covered;
-    if (qty > 0) out.push({ ...r, qty });
+    if (qty > 0) out.push({ ...r, qty, replacementQty: Math.min(r.replacementQty || 0, qty) });
   });
   return out;
 }
@@ -375,6 +386,11 @@ function VendorAllocator({ soId, onClose }) {
                               <td>
                                 <div className="small trunc" style={{ maxWidth: 330 }}>{p.name}</div>
                                 <div className="tiny muted mono">{p.code}</div>
+                                {r.replacementQty > 0 && (
+                                  <div className="tiny" style={{ color: 'var(--warning)' }} title="The client rejected units of this item; this row includes ordering a replacement">
+                                    includes {qty(r.replacementQty)} to replace a rejection
+                                  </div>
+                                )}
                               </td>
                               <td className="num mono small">{qty(r.qty)}</td>
                               <td>

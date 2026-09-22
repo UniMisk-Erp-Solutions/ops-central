@@ -16,6 +16,13 @@
  *   THE LIFECYCLE IS SHARED  SO_LIFECYCLE is one array for every organization;
  *                            inserting two names into it must not move any
  *                            other name relative to any other name
+ *   A REJECTION IS TWO QUESTIONS, NOT ONE   "has Purchase ordered a
+ *                            replacement" (nets against what is on a vendor
+ *                            PO) and "has the client actually got it and said
+ *                            yes" (nets against what the client accepted) are
+ *                            different facts with different consumers, and
+ *                            conflating them either double-orders or closes
+ *                            an order the client is still owed something on
  *
  * Usage: node scripts/uitest/client-review-check.js [path-to-frontend]
  */
@@ -86,9 +93,9 @@ const baseSO = () => ({
     ] }],
   invoices: [], extra: {},
 });
-const mkState = (so, dispatches, wfObj) => {
+const mkState = (so, dispatches, vendorPos, wfObj) => {
   sandbox.__opcWorkflow = wfObj;
-  return { products: PRODUCTS, sales_orders: [so], vendor_pos: [], grns: [],
+  return { products: PRODUCTS, sales_orders: [so], vendor_pos: vendorPos || [], grns: [],
     notifications: [], audit: [], outward_dispatches: dispatches || [],
     payments: [] };
 };
@@ -110,7 +117,7 @@ const DISPATCHES = [
   { id: 'dc1', so_id: 'so-1', items: [{ product_id: 'p1', qty: 8 }, { product_id: 'p2', qty: 5 }] },
   { id: 'dc2', so_id: 'so-1', items: [{ product_id: 'p1', qty: 2 }] },
 ];
-let st = mkState(baseSO(), DISPATCHES, ON);
+let st = mkState(baseSO(), DISPATCHES, [], ON);
 let review = sandbox.soClientReview(st, st.sales_orders[0]);
 check('two items were dispatched, each summed across both challans',
   review.items.map(i => [i.product_id, i.dispatched]).sort(), [['p1', 10], ['p2', 5]]);
@@ -119,7 +126,7 @@ check('nothing decided yet, everything is pending',
 check('so nothing is reviewed', review.allReviewed, false);
 check('and nothing is rejected', review.anyRejected, false);
 check('a totals-only row (nothing dispatched) never appears',
-  sandbox.soClientReview(mkState(baseSO(), [], ON), baseSO()).items, []);
+  sandbox.soClientReview(mkState(baseSO(), [], [], ON), baseSO()).items, []);
 
 console.log('\n[2] accepting part of an item leaves the rest pending');
 let { ctx, box } = mkCtx(st);
@@ -159,14 +166,12 @@ review = sandbox.soClientReview(box.state, box.state.sales_orders[0]);
 check('every pending unit is accepted', review.items.map(i => i.pending), [0, 0]);
 check('so the order reads fully reviewed', review.allReviewed, true);
 check('and cleanly, nothing rejected', review.anyRejected, false);
-check('a second "accept whole order" with nothing left to accept does not throw',
-  () => sandbox.soAcceptWholeOrder('so-1', Object.assign({}, ctx, { state: box.state })), () => {});
-// (call it for real to prove it does not throw)
 sandbox.soAcceptWholeOrder('so-1', Object.assign({}, ctx, { state: box.state }));
-check('and leaves the review exactly as it was', sandbox.soClientReview(box.state, box.state.sales_orders[0]).allReviewed, true);
+check('a second "accept whole order" with nothing left to accept does not throw, and leaves the review exactly as it was',
+  sandbox.soClientReview(box.state, box.state.sales_orders[0]).allReviewed, true);
 
 console.log('\n[6] partial acceptance rejects nothing, and blocks nothing by itself');
-({ ctx, box } = mkCtx(mkState(baseSO(), DISPATCHES, ON)));
+({ ctx, box } = mkCtx(mkState(baseSO(), DISPATCHES, [], ON)));
 sandbox.soApplyClientReview('so-1', { p1: { accept: 10 } }, ctx);
 review = sandbox.soClientReview(box.state, box.state.sales_orders[0]);
 check('p1 fully accepted', review.items.find(i => i.product_id === 'p1').status, 'Accepted');
@@ -179,11 +184,11 @@ console.log('\n[7] the order status is gated behind the workflow key, not assume
 // object — so the flag has to be set immediately before each call, exactly
 // the way a real session only ever has one org's workflow loaded at once.
 const dispatchedSO = () => Object.assign({}, baseSO(), { status: 'Ready to Dispatch' });
-const stOn = mkState(dispatchedSO(), DISPATCHES, ON);
+const stOn = mkState(dispatchedSO(), DISPATCHES, [], ON);
 sandbox.__opcWorkflow = ON;
 check('with the flag ON and nothing reviewed yet, the strip shows Pending Client Acceptance',
   sandbox.soDerivedStatus(stOn, stOn.sales_orders[0]), 'Pending Client Acceptance');
-const stOff = mkState(dispatchedSO(), DISPATCHES, OFF);
+const stOff = mkState(dispatchedSO(), DISPATCHES, [], OFF);
 sandbox.__opcWorkflow = OFF;
 check('with the flag OFF, the exact same facts read as they always did (Fully Delivered)',
   sandbox.soDerivedStatus(stOff, stOff.sales_orders[0]), 'Fully Delivered');
@@ -193,7 +198,7 @@ sandbox.soAcceptWholeOrder('so-1', ctx);
 check('once fully accepted (flag on), the derived status moves on',
   sandbox.soDerivedStatus(box.state, box.state.sales_orders[0]), 'Client Accepted');
 check('a rejection keeps it at Pending Client Acceptance, not Client Accepted', (() => {
-  const st2 = mkState(dispatchedSO(), DISPATCHES, ON);
+  const st2 = mkState(dispatchedSO(), DISPATCHES, [], ON);
   sandbox.__opcWorkflow = ON;
   const c2 = mkCtx(st2);
   sandbox.soApplyClientReview('so-1', { p1: { reject: 10 }, p2: { accept: 5 } }, c2.ctx);
@@ -208,9 +213,6 @@ check('both sit strictly between Fully Delivered and Invoiced',
   idx('Fully Delivered') < idx('Pending Client Acceptance')
     && idx('Pending Client Acceptance') < idx('Client Accepted')
     && idx('Client Accepted') < idx('Invoiced'), true);
-// The relative order of every OTHER pair is exactly what it was before this
-// feature existed — this is the actual safety property, not just "the two new
-// names are somewhere sensible".
 const HISTORIC_ORDER = ['Draft','Pending Approval','Approved','Procurement Started','Material Received',
   'Ready to Dispatch','Partially Delivered','Fully Delivered','Invoiced','Payment Pending','Fully Paid','Closed'];
 let pairsOk = true;
@@ -219,15 +221,94 @@ for (let i = 0; i < HISTORIC_ORDER.length; i++) for (let j = i + 1; j < HISTORIC
 }
 check('every historic status pair keeps its original relative order', pairsOk, true);
 
-console.log('\n[9] wfOn is guarded — this file must survive being loaded without permissions.jsx');
+console.log('\n[9] a rejection is TWO questions — has Purchase re-ordered, and has the client got it');
+// 10 required, all dispatched, 6 accepted, 4 rejected. Nothing re-ordered yet.
+const rejSO = () => Object.assign({}, baseSO(), { status: 'Ready to Dispatch' });
+const stR = mkState(rejSO(), DISPATCHES, [], ON);
+sandbox.__opcWorkflow = ON;
+let cR = mkCtx(stR);
+// p2 is also part of this fixture's DISPATCHES (5 units) — decide it cleanly
+// first so the outstanding/unfulfilled figures below are about p1 alone.
+sandbox.soApplyClientReview('so-1', { p2: { accept: 5 } }, cR.ctx);
+sandbox.soApplyClientReview('so-1', { p1: { accept: 6, reject: 4 } }, cR.ctx);
+let outstanding = sandbox.soRejectedOutstanding(cR.box.state, cR.box.state.sales_orders[0]);
+check('Purchase still needs to order 4 more of p1', outstanding, { p1: 4 });
+let unfulfilled = sandbox.soUnfulfilled(cR.box.state, cR.box.state.sales_orders[0]);
+check('and the client is owed 4 of p1', unfulfilled, { p1: 4 });
+
+// Purchase places a replacement PO for exactly the 4 rejected — before it has
+// arrived, ordering is satisfied but fulfilment is NOT. The original PO that
+// covered the first 10 units has to be in the fixture too, or "onPO" never
+// reaches the required baseline and the netting has nothing to net against.
+const ORIGINAL_AND_REPLACEMENT_PO = [
+  { id: 'po-1', so_id: 'so-1', status: 'Issued', items: [{ product_id: 'p1', qty: 10 }] },
+  { id: 'po-r1', so_id: 'so-1', status: 'Issued', items: [{ product_id: 'p1', qty: 4 }] },
+];
+let stR2 = Object.assign({}, cR.box.state, { vendor_pos: ORIGINAL_AND_REPLACEMENT_PO });
+outstanding = sandbox.soRejectedOutstanding(stR2, stR2.sales_orders[0]);
+check('once the replacement PO exists, Purchase does not need to order again',
+  outstanding, {});
+unfulfilled = sandbox.soUnfulfilled(stR2, stR2.sales_orders[0]);
+check('but the client still does not have it — closing must still be blocked',
+  unfulfilled, { p1: 4 });
+
+// The replacement is received and dispatched — a THIRD challan for the same
+// product against the same SO. The in/out cycle must not be capped by what
+// was already sent once.
+const stR3 = Object.assign({}, stR2, {
+  outward_dispatches: DISPATCHES.concat([{ id: 'dc3', so_id: 'so-1', items: [{ product_id: 'p1', qty: 4 }] }]),
+});
+const reviewR3 = sandbox.soClientReview(stR3, stR3.sales_orders[0]);
+check('the replacement shipment is visible — dispatched climbs to 14',
+  reviewR3.items.find(i => i.product_id === 'p1').dispatched, 14);
+check('and it shows up as freshly pending, not swallowed by the earlier decision',
+  reviewR3.items.find(i => i.product_id === 'p1').pending, 4);
+let cR3 = mkCtx(stR3);
+sandbox.soApplyClientReview('so-1', { p1: { accept: 4 } }, cR3.ctx);
+unfulfilled = sandbox.soUnfulfilled(cR3.box.state, cR3.box.state.sales_orders[0]);
+check('the client has now had every unit accepted — nothing left owed',
+  unfulfilled, {});
+check('the rejection stays on the permanent record even after remediation',
+  sandbox.soClientReview(cR3.box.state, cR3.box.state.sales_orders[0]).anyRejected, true);
+
+console.log('\n[10] the extra ordering need lands on exactly one row, never doubled');
+({ ctx, box } = mkCtx(stR));                                // 4 owed on p1, nothing ordered
+sandbox.__opcWorkflow = ON;
+const twoLineSO = {
+  id: 'so-2', so_no: 'SO/FY26/0002', customer_id: 'c1', status: 'Ready to Dispatch',
+  lines: [
+    { id: 'la', bundle_qty: 1, unit_price: 0, components: [{ product_id: 'p1', qty: 6, sell: 0 }] },
+    { id: 'lb', bundle_qty: 1, unit_price: 0, components: [{ product_id: 'p1', qty: 4, sell: 0 }] },
+  ], invoices: [], extra: {},
+};
+const stTwoLine = mkState(twoLineSO, [{ id: 'dcx', so_id: 'so-2', items: [{ product_id: 'p1', qty: 10 }] }], [], ON);
+sandbox.__opcWorkflow = ON;
+const cTwo = mkCtx(stTwoLine);
+sandbox.soApplyClientReview('so-2', { p1: { accept: 6, reject: 4 } }, cTwo.ctx);
+const twoLineRows = sandbox.allocBuildRows(cTwo.box.state, cTwo.box.state.sales_orders[0]);
+check('one row for the item on each line', twoLineRows.length, 2);
+check('the whole rejection lands on exactly one of them, not both',
+  twoLineRows.filter(r => r.replacementQty > 0).length, 1);
+check('and the total extra offered across both rows is exactly 4, not 8',
+  twoLineRows.reduce((a, r) => a + (r.replacementQty || 0), 0), 4);
+
+console.log('\n[11] with the flag off, none of this exists');
+check('soRejectedOutstanding is empty with the flag off',
+  sandbox.soRejectedOutstanding(mkState(baseSO(), DISPATCHES, [], OFF), baseSO()), {});
+check('soUnfulfilled is empty with the flag off',
+  sandbox.soUnfulfilled(mkState(baseSO(), DISPATCHES, [], OFF), baseSO()), {});
+
+console.log('\n[12] wfOn is guarded — this file must survive being loaded without permissions.jsx');
 // status-check.js sandboxes utils.jsx alone; a bare `wfOn(...)` reference
 // there threw ReferenceError and failed every status assertion, not just the
 // ones about this feature.
 const utilsSrc = fs.readFileSync(path.join(dir, 'src', 'utils.jsx'), 'utf8');
 check("soDerivedStatus never calls wfOn without checking it exists first",
   /if \(typeof wfOn === 'function' && wfOn\('client_acceptance'\)/.test(utilsSrc), true);
+check("soRejectedOutstanding guards the same way",
+  (utilsSrc.match(/typeof wfOn === 'function' && wfOn\('client_acceptance'\)/g) || []).length >= 3, true);
 
-console.log('\n[10] wired into the screen, gated the same way everywhere');
+console.log('\n[13] wired into the screens, gated the same way everywhere');
 const soJsx = fs.readFileSync(path.join(dir, 'src', 'screens-so.jsx'), 'utf8');
 check('the panel is mounted', /ClientReviewPanel\s+so=\{so\}/.test(soJsx), true);
 check('the historic 8-badge strip literal is untouched',
@@ -235,10 +316,15 @@ check('the historic 8-badge strip literal is untouched',
 check('the extended strip only ever appears behind the workflow flag',
   /wfOn\('client_acceptance'\)\s*\n\s*\? \[/.test(soJsx), true);
 check('Confirm & Close is gated behind the same flag', /wfOn\('client_acceptance'\) && \['Purchase', 'Org Admin'\]/.test(soJsx), true);
+check('Confirm & Close gates on fulfilment (soUnfulfilled), not merely on review',
+  /soUnfulfilled/.test(soJsx), true);
+const allocJsx = fs.readFileSync(path.join(dir, 'src', 'screens-alloc.jsx'), 'utf8');
+check('the allocator asks about rejection-driven extra need',
+  /soRejectedOutstanding/.test(allocJsx), true);
 const idxHtml = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
 check('the file is actually loaded by the page', /src\/screens-client-review\.jsx/.test(idxHtml), true);
 check('the importer now also admits Client Facing, same algorithm as everyone else',
   /\['Purchase', 'Org Admin', 'Client Facing'\]/.test(fs.readFileSync(path.join(dir, 'src', 'screens-import.jsx'), 'utf8')), true);
 
-console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the client can accept or reject what shipped, and no other org ever sees it');
+console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the client can accept or reject what shipped, a rejection can be re-procured, and no other org ever sees any of it');
 process.exit(bad ? 1 : 0);

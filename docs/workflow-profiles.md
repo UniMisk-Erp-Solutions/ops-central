@@ -61,22 +61,24 @@ back too rather than leaving nobody able to receive.
 | | `standard` | `procurement_only` | `split_stores` |
 |---|---|---|---|
 | receiving | Purchase marks → Stores accepts | **Stores confirms → Purchase accepts** | **Stores In confirms → Purchase accepts** |
-| PO prints in | our names | **vendor part numbers** | our names |
+| PO prints in | our names | **vendor part numbers** | **vendor part numbers** |
 | in-transit tracking | off | **on** | **on** |
 | customer wording | off | **on** | off |
 | outward dispatch | off | **on** | **on** |
 | supervisor sign-off | on | off | off |
 | invoice on GRN | on | **off** | **off** |
-| invoice on dispatch | off | **on** | **off — not decided yet** |
+| invoice on dispatch | off | **on** | **on** |
 | client accepts/rejects delivery | off | off | **on** |
 
 Live: **Microlink** (`ml`) runs `procurement_only`; **OP Central Demo**
 (`unimisk`) runs `standard`; **Demo Org** (`dm`) runs `split_stores` — see
 [tenant-dm.md](./tenant-dm.md).
 
-`split_stores` has **both** invoicing triggers off on purpose: that company has
-not said where billing sits in its flow, and off is recoverable where an invoice
-sent to a customer by surprise is not.
+`split_stores` was given `standard`'s billing settings at first — both triggers
+off — then explicitly moved to match `procurement_only` exactly
+(`035_split_stores_match_microlink.sql`), on the record as a placeholder
+("same as Microlink for now, will change later") rather than a considered
+decision about this company's own billing.
 
 ## Changing it
 

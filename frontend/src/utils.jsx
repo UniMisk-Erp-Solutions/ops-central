@@ -208,6 +208,64 @@ function soClientReview(state, so) {
   };
 }
 
+// A rejected unit still owes the client one, until it is replaced and
+// accepted. This is what a rejection turns into for Purchase: how much MORE
+// needs to be ordered, beyond what the order originally required — netting
+// out any replacement vendor PO already placed, so the figure goes back to
+// zero the moment Purchase has re-ordered enough, not only once the
+// replacement has arrived.
+//
+//   rejected=4, nothing re-ordered yet          -> owed 4
+//   rejected=4, a PO for +4 already exists       -> owed 0 (ordered; the
+//                                                    receive/dispatch/review
+//                                                    cycle takes it from here)
+//   rejected=4, a PO for +2 exists                -> owed 2
+//
+// Only for an organization running client_acceptance — everywhere else this
+// returns {} and no procurement screen sees anything different.
+function soRejectedOutstanding(state, so) {
+  if (!(typeof wfOn === 'function' && wfOn('client_acceptance'))) return {};
+  if (typeof soClientReview !== 'function') return {};
+  const review = soClientReview(state, so);
+  if (!review.anyRejected) return {};
+  const required = (typeof soRequired === 'function') ? soRequired(so) : {};
+  const onPO = {};
+  ((state && state.vendor_pos) || []).forEach(po => {
+    if (po.so_id !== so.id || ['Rejected', 'Cancelled'].includes(po.status)) return;
+    (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + (Number(it.qty) || 0); });
+  });
+  const out = {};
+  review.items.forEach(i => {
+    if (i.rejected <= 0.0001) return;
+    const alreadyReordered = Math.max(0, (onPO[i.product_id] || 0) - (required[i.product_id] || 0));
+    const owed = Math.max(0, i.rejected - alreadyReordered);
+    if (owed > 0.0001) out[i.product_id] = owed;
+  });
+  return out;
+}
+
+// Has the client actually RECEIVED and ACCEPTED everything the order
+// requires? Not the same question as soRejectedOutstanding: that one nets
+// against what has been ORDERED (an existing vendor PO satisfies it, even
+// before the goods arrive), because its job is to stop Purchase ordering the
+// same replacement twice. This one nets against what has been ACCEPTED,
+// because its job is to stop the order closing while the client is still
+// owed something — placing the replacement PO is not the same as the client
+// having it in hand and having said yes to it.
+function soUnfulfilled(state, so) {
+  if (!(typeof wfOn === 'function' && wfOn('client_acceptance'))) return {};
+  const required = (typeof soRequired === 'function') ? soRequired(so) : {};
+  const review = (typeof soClientReview === 'function') ? soClientReview(state, so) : { items: [] };
+  const acceptedBy = {};
+  review.items.forEach(i => { acceptedBy[i.product_id] = i.accepted; });
+  const out = {};
+  Object.keys(required).forEach(pid => {
+    const owed = (Number(required[pid]) || 0) - (Number(acceptedBy[pid]) || 0);
+    if (owed > 0.0001) out[pid] = owed;
+  });
+  return out;
+}
+
 // What to SHOW. The stored status and the facts, whichever is further along, so
 // an order that was never formally approved still reports honestly once goods
 // have moved — and a manual state is never overridden.
@@ -781,7 +839,7 @@ Object.assign(window, {
   docStem, docNo, boqNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
   nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
-  soDispatchedQty, soClientReview,
+  soDispatchedQty, soClientReview, soRejectedOutstanding, soUnfulfilled,
   inrFmt, inr, inrK, fmtDate, addDays, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
   Icon, StatusBadge, PriorityBadge, Avatar, Delta, Toggle, Modal,
   ToastProvider, useToast,
