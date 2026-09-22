@@ -111,12 +111,32 @@ DNS-only, so Cloudflare's one-level Universal SSL limit does not apply.
 
 ---
 
+## Provisioning one
+
+A company is an INSERT, not a release. One script does the whole thing — login,
+organization, membership, capabilities, profile — in one transaction, and it is
+idempotent, so a re-run repairs a half-finished attempt rather than duplicating
+it:
+
+```bash
+SSH_PASSWORD='…' python scripts/ssh-provision-tenant.py   --name "Acme Pvt Ltd" --slug acme --subdomain acme   --admin-email admin@acme.com --admin-password '…'   --profile standard --dry-run          # drop --dry-run to commit
+```
+
+It prints every organization's row counts before and after, because the thing
+most worth proving about a new tenant is that the existing ones did not move.
+See [tenant-dm.md](./tenant-dm.md) for a worked example, and for the two traps
+that cost an hour: a hand-made `auth.users` row needs empty strings rather than
+NULLs in its token columns, and a user with no `auth.identities` row cannot sign
+in however right the password is.
+
 ## Verifying
 
 ```bash
 SSH_PASSWORD='…' python scripts/ssh-test-tenant-isolation.py
 SSH_PASSWORD='…' python scripts/ssh-verify-workflow-profiles.py
+python  scripts/verify-tenant-isolation.py          # as the tenant, over the API
 node scripts/uitest/render-check.js frontend
+node scripts/uitest/roles-check.js frontend
 ```
 
 Run isolation checks **as a real tenant user** (`role=authenticated` plus that
