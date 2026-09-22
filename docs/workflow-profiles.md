@@ -47,6 +47,7 @@ exactly as before.
 | `receiving_requester_label` | text | what to call that side on screen, e.g. `Stores (inward)` |
 | `receiving_approver_label` | text | what to call the other side |
 | `client_acceptance` | bool | the client accepts/rejects delivered quantities before the order is treated as settled. See [client-acceptance.md](./client-acceptance.md) |
+| `client_order_requests` | bool | the client sends a typed item request instead of creating the Sales Order themselves; Purchase matches it to the catalogue and creates the SO. See [client-requests.md](./client-requests.md) |
 
 The four `receiving_*_roles` / `_label` keys exist because a company does not
 have to call its stores team `Stores`. One that splits inward from outward has
@@ -69,6 +70,7 @@ back too rather than leaving nobody able to receive.
 | invoice on GRN | on | **off** | **off** |
 | invoice on dispatch | off | **on** | **on** |
 | client accepts/rejects delivery | off | off | **on** |
+| client sends a request instead of creating the SO | off | off | **on** |
 
 Live: **Microlink** (`ml`) runs `procurement_only`; **OP Central Demo**
 (`unimisk`) runs `standard`; **Demo Org** (`dm`) runs `split_stores` — see
@@ -79,6 +81,11 @@ off — then explicitly moved to match `procurement_only` exactly
 (`035_split_stores_match_microlink.sql`), on the record as a placeholder
 ("same as Microlink for now, will change later") rather than a considered
 decision about this company's own billing.
+
+`client_order_requests` followed the same "preset default, not a per-org
+override" pattern as `client_acceptance` (`037_client_order_requests_split_stores.sql`)
+once the client-facing side of the flow changed from "creates the SO" to
+"sends a request" — see [client-requests.md](./client-requests.md).
 
 ## Changing it
 

@@ -6,7 +6,7 @@ const STORAGE_KEY = 'opc.state.v3';
 const SYNCED_TABLES = {
   sales_orders: 'id', vendor_pos: 'id', grns: 'id', vendor_invoices: 'id',
   payments: 'id', rfqs: 'id', sourcings: 'id', transfer_requests: 'id', notifications: 'id', audit: 'id',
-  outward_dispatches: 'id',
+  outward_dispatches: 'id', client_requests: 'id',
 };
 const LOADED_TABLES = [
   // Master data. Per-organization in the database (RLS + composite keys), so it
@@ -18,7 +18,7 @@ const LOADED_TABLES = [
   // Transactional
   'sales_orders', 'vendor_pos', 'grns', 'vendor_invoices', 'payments',
   'pool', 'rfqs', 'sourcings', 'transfer_requests', 'notifications', 'audit',
-  'outward_dispatches',
+  'outward_dispatches', 'client_requests',
 ];
 
 // Is this a real deployment? Deliberately keyed on CONFIGURATION, not on
@@ -217,6 +217,7 @@ function buildDefaultState() {
     notifications: [],
     transfer_requests: [],
     outward_dispatches: [],
+    client_requests: [],
     config: {
       industry_template: 'Trading',
       teams: ['Sales','Pre-sales','Project Management','Purchase','Stores','Billing','Collections','Managing Director','Org Admin'],
