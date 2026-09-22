@@ -81,17 +81,20 @@ here. Until then, use the shared host; everything works.
 
 ## The workflow profile
 
-`split_stores`, added by `supabase/migrations/033_split_stores_profile.sql`.
+`split_stores`, added by `supabase/migrations/033_split_stores_profile.sql`,
+extended by `034_client_acceptance_split_stores.sql`.
 
 | Key | Value | Why |
 |---|---|---|
 | `receiving_flow` | `stores_to_purchase` | a dedicated inward team confirms arrivals |
 | `receiving_requester_roles` | `['Stores In']` | …and it is *them*, not a role called Stores |
 | `receiving_approver_roles` | `['Purchase','Org Admin']` | Purchase accepts and posts the GRN |
-| `outward_dispatch` | `true` | outward is a team, so it is a step |
+| `outward_dispatch` | `true` | outward is a team, so it is a step — and it creates the delivery challan in the same action |
 | `intransit_tracking` | `true` | somebody is watching for arrivals |
+| `client_acceptance` | `true` | the client accepts/rejects delivered quantities before the order is settled |
 | `auto_invoice_on_grn` | `false` | **not decided yet** |
 | `invoice_on_dispatch` | `false` | **not decided yet** |
+| `po_item_language` | `ours` | **left as-is — see the open question below** |
 | everything else | as `standard` | no reason to differ yet |
 
 Both invoicing triggers are **off**. Nothing bills by itself until the company
@@ -101,12 +104,52 @@ a customer by surprise is not.
 ## Capabilities
 
 On: `sales_desk`, `stores`, `scm_tracking`, `item_mapping`, `surplus_pool`,
-`partial_invoicing`, `e_invoice`.
-Off: `presales`, `rfq_email`, `implementation`, `cross_so_transfer`,
-`e_way_bill`, `whatsapp`, `sms`.
+`partial_invoicing`, `e_invoice`, `presales`.
+Off: `rfq_email`, `implementation`, `cross_so_transfer`, `e_way_bill`,
+`whatsapp`, `sms`.
 
 Written as explicit rows rather than left absent. Absent means *inherited*, and
 a tenant's capability set should be something you can read rather than infer.
+
+`presales` is on **not** because Demo Org has a Pre-sales team — it does not —
+but because it is the flag that unlocks the Sourcing / RFQ module's *route*.
+Purchase already carries `doSourcing`/`selectVendor` in the shared code; the one
+capability missing was `createSourcing`, granted to Purchase **for this
+organization only** — see below.
+
+## The order flow
+
+Client Facing takes down what the client ordered and imports it the same way
+Purchase or Microlink always have — the sheet importer now also admits
+`Client Facing` (`canImportSheet`), running the identical matching algorithm:
+our code, our name, then the customer's own alias history
+([item-name-mapping.md](./item-name-mapping.md)). An unmatched row still
+defaults to "add as a new catalogue item" rather than sitting unmapped — nothing
+about the algorithm changed with who runs it.
+
+Purchase then floats RFQ to vendors by email from the Sourcing module — the
+same "vendor selection + Float RFQ" feature Sales/Pre-sales use elsewhere,
+reused here as an **internal vendor-comparison workspace**, not as a customer
+quote. Purchase can create the Sourcing record itself (a per-organization
+`createSourcing` grant — see below); it never converts one into a second Sales
+Order (`canConvert` stays `['Sales','Pre-sales','Org Admin']`, deliberately
+unchanged, because the SO already exists — the client already ordered).
+Vendor responses land in `sourcings.prices`, exactly as everywhere else the
+feature is used.
+
+Purchase picks a vendor per line and raises the Vendor PO from the real SO via
+`VendorAllocator` — the same screen, same layout, same e-Bill template every
+other organization uses; nothing about the Vendor PO's UI is tenant-specific
+code.
+
+Stores In posts the GRN. Stores Out dispatches and the delivery challan is
+created in the same action (`outward_dispatch: true`) — unconditional, the same
+as Microlink.
+
+The client, through Client Facing, then reviews what arrived: accept the whole
+order in one click, or accept/reject each line by quantity. See
+[client-acceptance.md](./client-acceptance.md) for the mechanics. Purchase sees
+the outcome and, once every item is decided, presses **Confirm & Close**.
 
 ## Why the code had to change at all
 
@@ -131,6 +174,38 @@ access, silently. It now falls back to the dashboard and nothing else.
 that role resolved through the unknown-role path — which, until the fix above,
 meant Org Admin. The label now matches the key, and `roles-check` fails if
 Settings ever offers a role again that the app does not define.
+
+**"New Inquiry" was gated on a hard-coded role list too**, not on the
+`createSourcing` capability the code already declares for exactly this purpose.
+`canCreate` in `screens-sourcing.jsx` was `['Sales','Pre-sales','Org Admin'].
+includes(role)` — a literal list no per-organization grant could ever reach. It
+now reads `canDo(role, 'createSourcing')`, which is what let Purchase be granted
+the capability for this organization alone (below) and have the button actually
+appear.
+
+## Purchase's one extra capability, scoped to this organization only
+
+Purchase needs `createSourcing` to float RFQ here, and **only** here — granting
+it in the shared `PERMISSIONS` table would hand every organization's Purchase
+role a "New Inquiry" button that makes no sense in their flow. Instead it is
+written into Demo Org's own `config` row (`config.data.permissions.Purchase`),
+the same per-organization override mechanism the Settings → "Screen access by
+role" editor already uses:
+
+```sql
+-- config.data.permissions.Purchase.can, for this organization's config row only
+{"createRFQ": true, "selectVendor": true, "createVendorPO": true,
+ "doSourcing": true, "viewVendors": true, "viewCost": true,
+ "viewProducts": true, "createSourcing": true}
+```
+
+One trap in `perm()`'s merge rule made this easy to get wrong: **`can` is a
+whole-object override, not a merge.** Write only `{"createSourcing": true}` and
+every other capability Purchase had disappears — `doSourcing`, `selectVendor`,
+the lot. The override above repeats Purchase's entire base `can` object and adds
+the one new key. `roles-check` asserts the base `PERMISSIONS.Purchase` in the
+shared code carries **no** `createSourcing` — proving this grant lives only in
+Demo Org's own row, never in anything another organization could inherit.
 
 ## Traps
 

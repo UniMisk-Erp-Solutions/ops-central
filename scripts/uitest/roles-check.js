@@ -194,5 +194,16 @@ check('Settings offers a sensible number of roles', uiRoles.length >= 8, true);
 check('every role offered in Settings is a role the app defines',
   uiRoles.filter(r => !ROLES.includes(r)), []);
 
+console.log('\n[6] the Sourcing "New Inquiry" gate reads the capability, not a literal list');
+check('the base Purchase role does NOT carry createSourcing -- any grant of it lives in one organization\'s own config, never in the shared code',
+  !!(s.PERMISSIONS.Purchase.can || {}).createSourcing, false);
+check('Sales keeps it, unaffected', s.canDo('Sales', 'createSourcing'), true);
+check('Pre-sales keeps it, unaffected', s.canDo('Pre-sales', 'createSourcing'), true);
+const srcJsx = fs.readFileSync(path.join(dir, 'src', 'screens-sourcing.jsx'), 'utf8');
+check('"New Inquiry" is gated on the capability now, not a hard-coded role list',
+  /canCreate = canDo\(role, 'createSourcing'\)/.test(srcJsx), true);
+check('and the old literal list is gone from that line',
+  /const canCreate = \['Sales'/.test(srcJsx), false);
+
 console.log(bad ? `\nFAILED - ${bad} problem(s)` : '\nPASS - roles are defined, scoped, and never silently administrative');
 process.exit(bad ? 1 : 0);

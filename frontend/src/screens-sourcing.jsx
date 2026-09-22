@@ -149,7 +149,7 @@ function srcHasAlloc(src) { return Object.values(src.alloc || {}).some(rows => (
 function SourcingList() {
   const { state, navigate, getCustomer, getUser, currentUser, getProduct } = useStore();
   const role = currentUser ? getUser(currentUser)?.role : '';
-  const canCreate = ['Sales', 'Pre-sales', 'Org Admin'].includes(role);
+  const canCreate = canDo(role, 'createSourcing');
   // A Supervisor only sees the inquiries whose implementation is assigned to them.
   const rows = role === 'Supervisor'
     ? (state.sourcings || []).filter(x => x.implementation && x.implementation.supervisor_id === currentUser)

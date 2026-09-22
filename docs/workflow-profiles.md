@@ -46,6 +46,7 @@ exactly as before.
 | `receiving_approver_roles` | array | WHICH roles accept it and post the GRN. Absent = the historic pair |
 | `receiving_requester_label` | text | what to call that side on screen, e.g. `Stores (inward)` |
 | `receiving_approver_label` | text | what to call the other side |
+| `client_acceptance` | bool | the client accepts/rejects delivered quantities before the order is treated as settled. See [client-acceptance.md](./client-acceptance.md) |
 
 The four `receiving_*_roles` / `_label` keys exist because a company does not
 have to call its stores team `Stores`. One that splits inward from outward has
@@ -67,6 +68,7 @@ back too rather than leaving nobody able to receive.
 | supervisor sign-off | on | off | off |
 | invoice on GRN | on | **off** | **off** |
 | invoice on dispatch | off | **on** | **off — not decided yet** |
+| client accepts/rejects delivery | off | off | **on** |
 
 Live: **Microlink** (`ml`) runs `procurement_only`; **OP Central Demo**
 (`unimisk`) runs `standard`; **Demo Org** (`dm`) runs `split_stores` — see

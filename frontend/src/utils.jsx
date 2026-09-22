@@ -70,10 +70,19 @@ function statusClass(status) {
   return map[status] || 'status-draft';
 }
 
+// Two stages sit between 'Fully Delivered' and 'Invoiced' for an organization
+// that has turned wf('client_acceptance') ON — the client reviews what
+// actually arrived (whole order, or line by line with quantities) before the
+// order is treated as settled. Absent/false, soDerivedStatus() never produces
+// them, so their presence here changes nothing for an org that has not asked
+// for it: every existing comparison is RELATIVE (soAdvanceStatus checks
+// b > a, never an absolute index), and inserting two names between two
+// existing ones does not reorder anything on either side of them.
 const SO_LIFECYCLE = [
   'Draft','Pending Approval','Approved','Procurement Started','Material Received',
-  'Ready to Dispatch','Partially Delivered','Fully Delivered','Invoiced',
-  'Payment Pending','Fully Paid','Closed'
+  'Ready to Dispatch','Partially Delivered','Fully Delivered',
+  'Pending Client Acceptance','Client Accepted',
+  'Invoiced','Payment Pending','Fully Paid','Closed'
 ];
 
 // How far along the lifecycle a status sits. -1 for anything not in it
@@ -121,10 +130,7 @@ function soDerivedStatus(state, so) {
   const allReceived = needed > 0 && Object.keys(required).every(k => (received[k] || 0) >= required[k]);
 
   const dcs = (state.outward_dispatches || []).filter(d => d.so_id === so.id && d.status !== 'Cancelled');
-  const dispatched = {};
-  dcs.forEach(d => (d.items || []).forEach(it => {
-    dispatched[it.product_id] = (dispatched[it.product_id] || 0) + (Number(it.qty) || 0);
-  }));
+  const dispatched = soDispatchedQty(so, state);
   const anyDispatched = dcs.length > 0;
   const allDispatched = needed > 0 && Object.keys(required).every(k => (dispatched[k] || 0) >= required[k]);
 
@@ -139,12 +145,67 @@ function soDerivedStatus(state, so) {
   if (fullyPaid) return 'Fully Paid';
   if (invoiced && paid > 0) return 'Payment Pending';
   if (invoiced) return 'Invoiced';
+  // The client reviewing what arrived sits between delivery and invoicing —
+  // and only for an organization that has switched it on. Off, this block
+  // never runs and the order behaves exactly as it always has.
+  if (typeof wfOn === 'function' && wfOn('client_acceptance') && anyDispatched) {
+    const review = soClientReview(state, so);
+    if (review.items.length && review.allReviewed && !review.anyRejected) return 'Client Accepted';
+    return 'Pending Client Acceptance';
+  }
   if (allDispatched) return 'Fully Delivered';
   if (anyDispatched) return 'Partially Delivered';
   if (allReceived) return 'Ready to Dispatch';
   if (anyReceived) return 'Material Received';
   if (pos.length) return 'Procurement Started';
   return null;   // nothing has happened yet — leave the stored status alone
+}
+
+// Quantity of each item actually sent out, from the delivery challans —
+// the one place this tally is computed, so a figure quoted anywhere else
+// (the client-acceptance panel, a report) can never drift from what the
+// status strip itself is reading.
+function soDispatchedQty(so, state) {
+  const out = {};
+  (state.outward_dispatches || []).filter(d => d.so_id === so.id && d.status !== 'Cancelled')
+    .forEach(d => (d.items || []).forEach(it => {
+      out[it.product_id] = (out[it.product_id] || 0) + (Number(it.qty) || 0);
+    }));
+  return out;
+}
+
+// Per item: how much has gone out, how much the client has accepted or
+// rejected of that, and how much is still waiting on a decision. Reads
+// so.extra.client_review — written by soApplyClientReview() below — and
+// never anything else, so this is the one place that answers "has the client
+// signed off on this line".
+//
+// A rejection is never erased by a later acceptance of the SAME units: once
+// dispatched quantity is spoken for (accepted OR rejected) it stays spoken
+// for, the same rule a BOQ uses for "already committed".
+function soClientReview(state, so) {
+  const dispatched = soDispatchedQty(so, state);
+  const decided = (so.extra && so.extra.client_review && so.extra.client_review.items) || {};
+  const items = Object.keys(dispatched).filter(pid => dispatched[pid] > 0.0001).map(pid => {
+    const sent = dispatched[pid];
+    const d = decided[pid] || {};
+    const accepted = Math.max(0, Number(d.accepted) || 0);
+    const rejected = Math.max(0, Number(d.rejected) || 0);
+    const pending = Math.max(0, sent - accepted - rejected);
+    return {
+      product_id: pid, dispatched: sent, accepted, rejected, pending,
+      note: d.note || '',
+      status: pending > 0.0001 ? 'Pending'
+            : rejected > 0.0001 ? (accepted > 0.0001 ? 'Partly rejected' : 'Rejected')
+            : 'Accepted',
+    };
+  });
+  return {
+    items,
+    allReviewed: items.length > 0 && items.every(i => i.pending <= 0.0001),
+    anyReviewed: items.some(i => i.accepted > 0.0001 || i.rejected > 0.0001),
+    anyRejected: items.some(i => i.rejected > 0.0001),
+  };
 }
 
 // What to SHOW. The stored status and the facts, whichever is further along, so
@@ -720,6 +781,7 @@ Object.assign(window, {
   docStem, docNo, boqNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
   nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
+  soDispatchedQty, soClientReview,
   inrFmt, inr, inrK, fmtDate, addDays, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
   Icon, StatusBadge, PriorityBadge, Avatar, Delta, Toggle, Modal,
   ToastProvider, useToast,
