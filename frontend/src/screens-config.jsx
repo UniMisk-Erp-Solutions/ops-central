@@ -20,7 +20,7 @@ function OnboardingWizard() {
     md_approval: 'above_1L',
     eway_bill: 'yes_freq',
     has_collections: true,
-    teams: ['Sales','Pre-sales','Project Management','Purchase','Stores','Billing','Collections','Managing Director'],
+    teams: ['Sales','Pre-sales','Project Manager','Purchase','Stores','Billing','Collections','Managing Director'],
     invitees: [],
     import_method: 'fresh',
   });
@@ -308,12 +308,15 @@ function OnboardingWizard() {
 const teamDesc = {
   'Sales': 'Receives customer POs, creates SOs',
   'Pre-sales': 'Drafts quotations · RFQ for pricing',
-  'Project Management': 'Owns SOs end-to-end · approves dispatch',
+  'Project Manager': 'Owns SOs end-to-end · approves dispatch',
   'Purchase': 'RFQ · vendor selection · vendor POs',
   'Stores': 'GRN · QC · surplus reconciliation',
   'Billing': '3-way match · invoices · e-Way Bills',
   'Collections': 'Overdue follow-ups · ageing reports',
   'Managing Director': 'High-value approvals · MIS oversight',
+  'Stores In': 'Receives against POs · GRN · QC',
+  'Stores Out': 'Picks and dispatches to the customer',
+  'Client Facing': 'Takes the order · chases the invoice',
 };
 
 function Question({ label, children }) {
@@ -520,7 +523,7 @@ function BrandingPane() {
 const DEFAULT_TEAMS = [
   { name: 'Sales', desc: 'Receives customer POs, creates SOs' },
   { name: 'Pre-sales', desc: 'Drafts quotations' },
-  { name: 'Project Management', desc: 'Owns SOs end-to-end' },
+  { name: 'Project Manager', desc: 'Owns SOs end-to-end' },
   { name: 'Purchase', desc: 'RFQ + vendor selection' },
   { name: 'Stores', desc: 'GRN + QC + surplus' },
   { name: 'Billing', desc: '3-way match + invoices' },
@@ -528,6 +531,10 @@ const DEFAULT_TEAMS = [
   { name: 'Supervisor', desc: 'Site implementation · BOQ + daily usage' },
   { name: 'Managing Director', desc: 'High-value approvals' },
   { name: 'Org Admin', desc: 'Customisation + billing' },
+  // For a company whose stores is two teams — see docs/tenant-dm.md.
+  { name: 'Stores In', desc: 'Receives against POs · GRN' },
+  { name: 'Stores Out', desc: 'Picks and dispatches' },
+  { name: 'Client Facing', desc: 'Takes the order · chases the invoice' },
 ];
 
 function StructurePane() {

@@ -65,6 +65,35 @@ const PERMISSIONS = {
     primary: { route: 'collections', label: 'Collections', icon: 'cash' },
     can: { logFollowup: true, viewCustomers: true },
   },
+  // ---- A company whose stores is two teams --------------------------------
+  // Inward and outward are different people: one receives against purchase
+  // orders, the other picks and dispatches to the customer. Neither is a
+  // smaller 'Stores' — they do different halves of the job.
+  //
+  // WHICH of them receives is NOT decided here. It is the workflow profile's
+  // `receiving_requester_roles` / `receiving_approver_roles`, because a company
+  // that splits its stores may still put either half on either side of the
+  // hand-off. See docs/workflow-profiles.md.
+  'Stores In': {
+    nav: ['dashboard','inbox','vendor-pos','grn','godown','scm','pool','products'],
+    primary: { route: 'grn', label: 'GRN', icon: 'package' },
+    can: { createGRN: true, reconcileSurplus: true, viewProducts: true },
+  },
+  'Stores Out': {
+    nav: ['dashboard','inbox','sales-orders','godown','scm','pool','products'],
+    primary: { route: 'scm', label: 'Dispatch', icon: 'truck' },
+    can: { dispatch: true, viewProducts: true },
+  },
+  // The desk the customer actually talks to: takes the order, chases the
+  // invoice. Deliberately NO cost or margin — that is Purchase's business, and
+  // a customer-facing screen is the easiest place for a buy price to be read
+  // out loud by accident.
+  'Client Facing': {
+    nav: ['dashboard','inbox','sales-orders','customers','invoices','collections','products'],
+    primary: { route: 'sales-orders', label: 'Sales Orders', icon: 'receipt' },
+    can: { createSO: true, editOwnDraft: true, viewCustomers: true,
+           viewProducts: true, logFollowup: true },
+  },
   // Site supervisor for Supply+Implementation / Implementation-only orders. Sees
   // ONLY the SOs assigned to them (enforced by filtering on extra.implementation.supervisor_id).
   'Supervisor': {
@@ -78,8 +107,19 @@ const PERMISSIONS = {
 // Supabase by the store) takes precedence when present so admins can customize
 // roles; the built-in PERMISSIONS constant is the exact fallback, so default
 // behavior is unchanged until an admin actually edits a role.
+// What an unrecognised role gets. NOT Org Admin, which is what it used to be:
+// a typo in a role name, a role removed from a customisation, or a browser
+// running yesterday's bundle against a company that has just invented a role
+// would all have silently handed out full administrative access. The safe
+// direction for "I do not know who this is" is the dashboard and nothing else.
+const PERM_UNKNOWN = {
+  nav: ['dashboard'],
+  primary: { route: 'dashboard', label: 'Dashboard' },
+  can: {},
+};
+
 function perm(role) {
-  const base = PERMISSIONS[role] || PERMISSIONS['Org Admin'];
+  const base = PERMISSIONS[role] || PERM_UNKNOWN;
   const overrides = (typeof window !== 'undefined' && window.__opcPerms) || null;
   const o = overrides && overrides[role];
   if (!o || typeof o !== 'object') return base;
@@ -163,7 +203,7 @@ function wfOn(key) { return !!wf(key); }
 // therefore one setting, not a second code path.
 function wfReceiving() {
   const reversed = wf('receiving_flow') === 'stores_to_purchase';
-  return reversed
+  const base = reversed
     ? { mode: 'stores_to_purchase',
         requesterLabel: 'Stores',   requesterRoles: ['Stores'],
         approverLabel:  'Purchase', approverRoles:  ['Purchase', 'Org Admin'],
@@ -172,8 +212,44 @@ function wfReceiving() {
         requesterLabel: 'Purchase', requesterRoles: ['Purchase', 'Project Manager'],
         approverLabel:  'Stores',   approverRoles:  ['Stores', 'Org Admin'],
         note: 'Purchase marks material received · Stores accepts and posts the GRN' };
+
+  // A company does not have to call its stores team 'Stores'. One that splits
+  // inward from outward has no role of that name at all, and the hand-off would
+  // have had no requester — the tick boxes simply would not appear for anybody.
+  //
+  // ABSENT MEANS THE HISTORIC ROLES, so every organization without these keys
+  // behaves exactly as it did.
+  const req = wf('receiving_requester_roles');
+  const app = wf('receiving_approver_roles');
+  // Filter FIRST, then ask whether anything survived: [''] filters down to [],
+  // and an empty array is truthy, so returning it would leave nobody able to
+  // receive at all. A malformed override must fall back, never empty the list.
+  const list = (v) => {
+    if (!Array.isArray(v)) return null;
+    const out = v.filter(x => typeof x === 'string' && x.trim());
+    return out.length ? out : null;
+  };
+  return {
+    ...base,
+    requesterRoles: list(req) || base.requesterRoles,
+    approverRoles: list(app) || base.approverRoles,
+    requesterLabel: wf('receiving_requester_label') || base.requesterLabel,
+    approverLabel: wf('receiving_approver_label') || base.approverLabel,
+  };
 }
 function wfCanAcceptReceipt(role) { return wfReceiving().approverRoles.indexOf(role) !== -1; }
+
+// Everyone with a hand in receiving: whoever ticks what arrived, whoever posts
+// the GRN, and the administrator. Read from the profile so a company that has
+// renamed or split its stores team is not locked out of its own godown.
+function wfReceivingRoles() {
+  const r = wfReceiving();
+  const out = [];
+  [].concat(r.requesterRoles || [], r.approverRoles || [], ['Org Admin'])
+    .forEach(x => { if (x && out.indexOf(x) === -1) out.push(x); });
+  return out;
+}
+function wfCanReceive(role) { return wfReceivingRoles().indexOf(role) !== -1; }
 
 function canDo(role, capability) {
   const p = perm(role).can || {};
@@ -196,7 +272,12 @@ function canAccess(role, route) {
   if (root === 'platform') return !!(typeof window !== 'undefined' && window.__opcIsMaster);
   // A capability switched off for this organization hides its routes entirely.
   if (featureBlocks(root)) return false;
-  if (SCM_ROUTES.indexOf(root) !== -1) return SCM_ROLES.indexOf(role) !== -1;
+  // SCM_ROLES is the historic list, kept so nothing that worked stops working.
+  // A role may also opt in by carrying the route in its own nav, which is how
+  // every other screen is decided — one fewer list to keep in step.
+  if (SCM_ROUTES.indexOf(root) !== -1) {
+    return SCM_ROLES.indexOf(role) !== -1 || allowed.indexOf(root) !== -1;
+  }
   // A specific SO's invoice (invoices/<soId>[/<invId>]) is opened from the SO or
   // its Virtual Godown, so anyone who can see the SO / VG may view it — even
   // without the Invoices list in their nav. The bare 'invoices' list stays gated.
@@ -661,6 +742,9 @@ window.wf = wf;
 window.wfOn = wfOn;
 window.wfReceiving = wfReceiving;
 window.wfCanAcceptReceipt = wfCanAcceptReceipt;
+window.wfReceivingRoles = wfReceivingRoles;
+window.wfCanReceive = wfCanReceive;
+window.PERM_UNKNOWN = PERM_UNKNOWN;
 window.WORKFLOW_FALLBACK = WORKFLOW_FALLBACK;
 window.canAccess = canAccess;
 window.SCM_ROUTES_SET = { scm: true, mapping: true };

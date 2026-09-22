@@ -85,7 +85,7 @@ function VGReceivePanel({ so }) {
   const { state, mutate, addToPool, getProduct, getVendor, getUser, currentUser } = useStore();
   const toast = useToast();
   const role = getUser(currentUser)?.role;
-  const canReceive = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role)
+  const canReceive = wfCanReceive(role)
     || wfReceiving().requesterRoles.includes(role) || wfReceiving().approverRoles.includes(role);
 
   const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
@@ -1116,7 +1116,7 @@ function VirtualGodownView({ soId, embedded }) {
   const cust = getCustomer(so.customer_id);
   const role = getUser(currentUser)?.role;
   const canEditBOM = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
-  const canReceive = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role)
+  const canReceive = wfCanReceive(role)
     || wfReceiving().requesterRoles.includes(role) || wfReceiving().approverRoles.includes(role);
   const removeComponent = (pid) => {
     const p = getProduct(pid);
@@ -1412,7 +1412,7 @@ function MasterPool() {
   const { state, getProduct, getCustomer, getUser, currentUser } = useStore();
   const [showAdd, setShowAdd] = React.useState(false);
   const role = getUser(currentUser)?.role;
-  const canAdd = ['Stores', 'Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const canAdd = wfCanReceive(role);
   const pool = state.pool;
   const enriched = pool.map(p => ({ ...p, product: getProduct(p.product_id), age: daysBetween(p.received_date, TODAY) }));
   const totalValue = enriched.reduce((s, p) => s + p.product.buy * p.qty, 0);

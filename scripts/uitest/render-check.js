@@ -219,7 +219,12 @@ function detailRoutes(st) {
          'vendor-pos/does-not-exist', 'grn/does-not-exist', 'invoices/does-not-exist');
   return r;
 }
-const ROLES = ['Purchase', 'Stores', 'Org Admin', 'Managing Director', 'Sales', 'Billing'];
+const ROLES = ['Purchase', 'Stores', 'Org Admin', 'Managing Director', 'Sales', 'Billing',
+  // A company whose stores is two teams, plus its customer-facing desk.
+  'Stores In', 'Stores Out', 'Client Facing',
+  // And a role nobody defined: it used to resolve to Org Admin, so this is
+  // both a render case and a standing check that it no longer does.
+  'Not A Real Role'];
 
 function renderApp(s, role, route, store) {
   const out = ReactDOMServer.renderToStaticMarkup(

@@ -42,22 +42,39 @@ exactly as before.
 | `supervisor_signoff` | bool | a final invoice waits for the site supervisor |
 | `auto_invoice_on_grn` | bool | raise the client invoice when goods ARRIVE |
 | `invoice_on_dispatch` | bool | raise the client invoice when goods SHIP |
+| `receiving_requester_roles` | array | WHICH roles confirm what arrived. Absent = the historic pair for the flow above |
+| `receiving_approver_roles` | array | WHICH roles accept it and post the GRN. Absent = the historic pair |
+| `receiving_requester_label` | text | what to call that side on screen, e.g. `Stores (inward)` |
+| `receiving_approver_label` | text | what to call the other side |
 
-## The two presets
+The four `receiving_*_roles` / `_label` keys exist because a company does not
+have to call its stores team `Stores`. One that splits inward from outward has
+no role of that name at all, and the hand-off would have had no requester — the
+tick boxes simply would not have appeared for anybody. **Absent means the
+historic roles**, so every organization without these keys behaves exactly as it
+did. A malformed override (an empty array, a string, a list of numbers) falls
+back too rather than leaving nobody able to receive.
 
-| | `standard` | `procurement_only` |
-|---|---|---|
-| receiving | Purchase marks → Stores accepts | **Stores confirms → Purchase accepts** |
-| PO prints in | our names | **vendor part numbers** |
-| in-transit tracking | off | **on** |
-| customer wording | off | **on** |
-| outward dispatch | off | **on** |
-| supervisor sign-off | on | off |
-| invoice on GRN | on | **off** |
-| invoice on dispatch | off | **on** |
+## The presets
+
+| | `standard` | `procurement_only` | `split_stores` |
+|---|---|---|---|
+| receiving | Purchase marks → Stores accepts | **Stores confirms → Purchase accepts** | **Stores In confirms → Purchase accepts** |
+| PO prints in | our names | **vendor part numbers** | our names |
+| in-transit tracking | off | **on** | **on** |
+| customer wording | off | **on** | off |
+| outward dispatch | off | **on** | **on** |
+| supervisor sign-off | on | off | off |
+| invoice on GRN | on | **off** | **off** |
+| invoice on dispatch | off | **on** | **off — not decided yet** |
 
 Live: **Microlink** (`ml`) runs `procurement_only`; **OP Central Demo**
-(`unimisk`) runs `standard`.
+(`unimisk`) runs `standard`; **Demo Org** (`dm`) runs `split_stores` — see
+[tenant-dm.md](./tenant-dm.md).
+
+`split_stores` has **both** invoicing triggers off on purpose: that company has
+not said where billing sits in its flow, and off is recoverable where an invoice
+sent to a customer by surprise is not.
 
 ## Changing it
 
@@ -72,6 +89,11 @@ every organization before and after so it is visible nothing else moved.
 
 `INSERT` a row into `workflow_profiles` with its `defaults`. It appears in the
 console immediately. **No application change** — that is the entire point.
+`supabase/migrations/033_split_stores_profile.sql` is the worked example.
+
+A whole new *company* — login, organization, membership, capabilities, profile —
+is one run of `scripts/ssh-provision-tenant.py`, which is idempotent and takes
+`--dry-run`. See [tenant-dm.md](./tenant-dm.md).
 
 ## Rules
 
