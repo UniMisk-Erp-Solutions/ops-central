@@ -82,7 +82,8 @@ here. Until then, use the shared host; everything works.
 ## The workflow profile
 
 `split_stores`, added by `supabase/migrations/033_split_stores_profile.sql`,
-extended by `034_client_acceptance_split_stores.sql`.
+extended by `034_client_acceptance_split_stores.sql` and
+`035_split_stores_match_microlink.sql`.
 
 | Key | Value | Why |
 |---|---|---|
@@ -92,14 +93,14 @@ extended by `034_client_acceptance_split_stores.sql`.
 | `outward_dispatch` | `true` | outward is a team, so it is a step — and it creates the delivery challan in the same action |
 | `intransit_tracking` | `true` | somebody is watching for arrivals |
 | `client_acceptance` | `true` | the client accepts/rejects delivered quantities before the order is settled |
-| `auto_invoice_on_grn` | `false` | **not decided yet** |
-| `invoice_on_dispatch` | `false` | **not decided yet** |
-| `po_item_language` | `ours` | **left as-is — see the open question below** |
+| `po_item_language` | `vendor` | the vendor PO prints their own part numbers — **same as Microlink**, per request |
+| `auto_invoice_on_grn` | `false` | matches Microlink |
+| `invoice_on_dispatch` | `true` | the client invoice raises on dispatch — **same as Microlink, "for now, will change later"** |
 | everything else | as `standard` | no reason to differ yet |
 
-Both invoicing triggers are **off**. Nothing bills by itself until the company
-says where billing belongs in their flow: off is recoverable, an invoice sent to
-a customer by surprise is not.
+Both invoicing keys now match `procurement_only` exactly — explicitly requested
+as a placeholder ("same as Microlink for now"), not a considered decision about
+this company's own billing, which is still open.
 
 ## Capabilities
 
@@ -147,9 +148,13 @@ created in the same action (`outward_dispatch: true`) — unconditional, the sam
 as Microlink.
 
 The client, through Client Facing, then reviews what arrived: accept the whole
-order in one click, or accept/reject each line by quantity. See
-[client-acceptance.md](./client-acceptance.md) for the mechanics. Purchase sees
-the outcome and, once every item is decided, presses **Confirm & Close**.
+order in one click, or accept/reject each line by quantity. A rejected item is
+not a dead end — Purchase sees it flagged, and re-procures through the exact
+same RFQ/vendor-selection/PO tools, which offer the item again for exactly the
+rejected quantity. It runs the in/out cycle a second time: GRN, dispatch,
+challan, review. See [client-acceptance.md](./client-acceptance.md) for the
+mechanics. Once the client has actually accepted everything the order
+requires — including any replacement — Purchase presses **Confirm & Close**.
 
 ## Why the code had to change at all
 

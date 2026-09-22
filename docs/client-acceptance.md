@@ -120,10 +120,13 @@ right, not one per mount point.
 | Thing | Where |
 |---|---|
 | `soDispatchedQty`, `soClientReview` | `frontend/src/utils.jsx` |
+| `soRejectedOutstanding` — how much more to order | `frontend/src/utils.jsx` |
+| `soUnfulfilled` — how much the client is still owed | `frontend/src/utils.jsx` |
 | `soApplyClientReview`, `soAcceptWholeOrder`, `ClientReviewPanel` | `frontend/src/screens-client-review.jsx` |
 | The two new lifecycle stages | `SO_LIFECYCLE` in `frontend/src/utils.jsx` |
 | The gated status-strip badges | `frontend/src/screens-so.jsx` |
-| Confirm & Close | `frontend/src/screens-so.jsx`, next to Hold/Resume |
+| Confirm & Close (gated on `soUnfulfilled`) | `frontend/src/screens-so.jsx`, next to Hold/Resume |
+| The reappearing row, and its badge | `allocBuildRows`, `VendorAllocator` in `frontend/src/screens-alloc.jsx` |
 | Checks | `scripts/uitest/client-review-check.js` |
 
 ## Traps
@@ -142,15 +145,65 @@ right, not one per mount point.
   capability to a role, per-organization, means writing out that role's entire
   `can` object in the config override — omit an existing key and it is gone,
   not inherited.
+- **"Ordered" and "fulfilled" are different facts, and conflating them breaks
+  in opposite directions.** Gate re-ordering on `soUnfulfilled` (nets against
+  *accepted*) and Purchase can never place the replacement PO in the first
+  place — it never stops reporting the full rejected amount as needed, even
+  after the PO exists. Gate closing on `soRejectedOutstanding` (nets against
+  *onPO*) and the order becomes closeable the moment a replacement PO is
+  merely placed, before the client has it. Each function answers exactly one
+  of the two questions; neither may stand in for the other.
+- **The extra quantity has to land on exactly one row per product.** A product
+  spanning two bundles produces two rows in `allocBuildRows`; adding the same
+  `soRejectedOutstanding` figure onto both would double it. It is consumed
+  from a shared pool as rows are built, oldest first — the same pattern
+  `allocBuildRows` already uses for `onPO`/`pooled`.
 
-## Left open
+## After a rejection — Purchase re-procures through the tools they already use
 
-- **What happens after a rejection** — return, replace, credit — is not built.
-  The order stays flagged and visible; a human handles it.
-- **Invoicing** for an organization on this flow is undecided and left off (see
-  [tenant-dm.md](./tenant-dm.md)); Confirm & Close does not raise one.
-- **`po_item_language`** for `split_stores` is left at `ours`, not `vendor`. The
-  request that this flow should be "the same as Microlink" was about the vendor
-  PO's UI and layout — already true, since that screen is one shared component
-  used by every organization — not explicitly about printing the vendor's own
-  part numbers on the document. Flip the workflow key if that is wanted too.
+A reject is not a dead end. The item's status badge in this panel reads
+**Rejected** (or **Partly rejected**) to whoever is looking — Purchase
+included — and from there Purchase does exactly what they would for any other
+outstanding requirement: float RFQ, or pick a vendor directly and place the PO
+again, through the same Procurement / Vendor Allocation screen every order
+uses. Nothing about *that* screen is specific to a rejection — it is specific
+to this: the row for a fully-covered item **reappears**, because a rejection
+is treated as one more unit the order needs.
+
+Two different, deliberately separate questions make this safe:
+
+**`soRejectedOutstanding(state, so)`** — *how much more does Purchase need to
+order?* Nets the rejected quantity against what is already on a vendor PO for
+that product, beyond the order's original requirement. Placing a replacement
+PO satisfies it immediately, even before the goods arrive — its only job is to
+stop Purchase ordering the same replacement twice. `allocBuildRows` adds this
+onto exactly **one** row per product (never every row a product happens to
+span), so the extra quantity is offered once, not multiplied by however many
+bundles that product appears in. The row carries `replacementQty`, and
+`VendorAllocator` shows a small amber note — *"includes N unit(s) to replace a
+rejection"* — so Purchase understands why an apparently-fulfilled item is
+asking to be bought again.
+
+**`soUnfulfilled(state, so)`** — *does the client actually have everything the
+order requires, accepted?* Nets against what the client has **accepted**, not
+against what has been ordered or even dispatched. Placing the replacement PO
+does *not* satisfy this — only a fresh delivery challan for the replacement,
+reviewed and accepted, does. This is what **Confirm & Close** gates on: a
+rejection blocks closing until it is genuinely made good, not merely
+re-ordered.
+
+The in/out cycle needs nothing special to run a second time for the same
+product against the same SO: receiving is capped by what a specific vendor PO
+itself ordered, dispatch is capped by what currently sits in the Virtual
+Godown, and `soDispatchedQty`/`soClientReview` already sum **every** challan
+ever raised — so a third delivery for a product that has shipped twice before
+is visible, and reviewable, exactly like the first.
+
+## Still undecided, tracked elsewhere
+
+- **What happens if the replacement is rejected too** — a second round of the
+  same cycle, which the design above already supports without change, but has
+  not been exercised.
+- **Invoicing** now matches Microlink's `procurement_only` preset
+  (`invoice_on_dispatch: true`) — "for now, will change later," per the
+  request. See [tenant-dm.md](./tenant-dm.md).

@@ -838,8 +838,18 @@ function SalesOrderDetail({ soId }) {
                 toast('Nothing has been dispatched yet.');
                 return;
               }
-              if (!review.allReviewed) {
-                toast("Some item(s) are still awaiting the client's decision.");
+              // Required minus accepted, not required minus dispatched: a
+              // rejection is not resolved by being reviewed, and a replacement
+              // is not resolved by merely being ordered — both need to reach
+              // the client and be accepted before this can close. Purchase
+              // floats RFQ or picks a vendor and places the PO again from the
+              // Procurement tab, same as any other requirement; the row
+              // reappears there for exactly this reason (soRejectedOutstanding).
+              const unfulfilled = window.soUnfulfilled ? window.soUnfulfilled(state, so) : {};
+              if (Object.keys(unfulfilled).length) {
+                toast(review.anyRejected
+                  ? 'A rejected item still needs to be re-ordered and delivered before this can close — see Procurement.'
+                  : "Some item(s) are still awaiting the client's decision.");
                 return;
               }
               mutate(s => ({
