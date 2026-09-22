@@ -18,6 +18,7 @@ function opcNavGroups(state, role) {
       { id: 'inbox', label: 'My Tasks', icon: 'bell', badge: myTasks || null },
     ]},
     { label: 'Sales', items: [
+      { id: 'client-requests', label: 'Item Requests', icon: 'file' },
       { id: 'sourcing', label: 'Sourcing / Inquiries', icon: 'bookmark' },
       { id: 'sales-orders', label: 'Sales Orders', icon: 'receipt' },
       { id: 'customers', label: 'Customers', icon: 'user' },
@@ -166,6 +167,7 @@ function Topbar({ onOpenTweaks }) {
   let crumb = [{ label: 'Workspace' }];
   const labels = {
     'dashboard': 'Dashboard', 'inbox': 'My Approvals',
+    'client-requests': 'Item Requests',
     'sales-orders': 'Sales Orders', 'customers': 'Customers',
     'godown': 'Virtual Godowns', 'pool': 'Master Surplus Pool', 'transfers': 'Cross-SO Transfers',
     'rfq': 'RFQ Comparison', 'vendor-pos': 'Vendor POs', 'grn': 'GRN', 'three-way': '3-Way Match', 'vendors': 'Vendors',

@@ -701,10 +701,7 @@ function SheetImportModal({ onClose, onCreated }) {
 
 // Purchase turn the customer's sheet into our order; Org Admin can too.
 function canImportSheet(role) {
-  // Client Facing imports the customer's own sheet — same parser, same
-  // matching algorithm, same "create a new catalogue item" fallback as when
-  // Purchase does it. Nothing about the algorithm changes with who runs it.
-  return ['Purchase', 'Org Admin', 'Client Facing'].indexOf(role) !== -1;
+  return ['Purchase', 'Org Admin'].indexOf(role) !== -1;
 }
 
 window.SheetImportModal = SheetImportModal;

@@ -4,7 +4,7 @@ Every document in `docs/`, what it covers, and who it is for. **Keep this file
 current**: when a feature changes, update its document *and* the row here. When
 something new is built, add the document *and* a row here in the same change.
 
-_Last updated: 2026-09-03_
+_Last updated: 2026-09-22_
 
 ---
 
@@ -22,6 +22,7 @@ _Last updated: 2026-09-03_
 |---|---|---|
 | [tenant-dm.md](./tenant-dm.md) | The `dm` tenant | Demo Org: five roles including a stores team split inward/outward, the `split_stores` profile, how it was provisioned and proved empty, and how to add the next company. |
 | [client-acceptance.md](./client-acceptance.md) | Client review | The client accepts or rejects delivered quantities, item by item or the whole order at once, gated entirely behind a workflow key that is off everywhere else. |
+| [client-requests.md](./client-requests.md) | The client's own request | The client types a list of what they want instead of creating the SO themselves; Purchase matches it to the catalogue and creates the order. Gated behind the same kind of workflow key, off everywhere else. |
 | [microlink-procurement-flow.md](./microlink-procurement-flow.md) | The whole flow | Import → SO → vendor PO → in transit → GRN → VG → dispatch → invoice, and the two hard parts. |
 | [sheet-import.md](./sheet-import.md) | Customer BOQ → Sales Order | Reading their Excel: Sr. No. hierarchy, merged cells, group banners, the bundle-quantity trap. |
 | [item-name-mapping.md](./item-name-mapping.md) | The three-name chain | Customer name → our item → vendor part number. Where each is used, how it is learned, batch matching. |

@@ -125,7 +125,7 @@ else console.log('  ok  all files execute · all cross-file globals present');
 const LISTS = ['customers', 'vendors', 'products', 'categories', 'boms', 'sales_orders',
   'vendor_pos', 'grns', 'vendor_invoices', 'payments', 'rfqs', 'sourcings',
   'transfer_requests', 'notifications', 'audit', 'outward_dispatches', 'pool', 'invoices',
-  'site_updates', 'item_aliases', 'collections'];
+  'site_updates', 'item_aliases', 'collections', 'client_requests'];
 
 function makeStore(s, { role = 'Org Admin', seeded = false, mixed = false, route = 'dashboard' } = {}) {
   const seed = s.OPC_SEED || {};
@@ -169,7 +169,8 @@ const ML_WORKFLOW = { receiving_flow: 'stores_to_purchase', po_item_language: 'v
 
 // ------------------------------------------------------------- 2. screens ---
 const SCREENS = ['Dashboard', 'ApprovalInbox', 'SCMTracking', 'ItemMapping', 'SalesOrdersList',
-  'SalesOrderNew', 'SourcingList', 'SourcingNew', 'CustomersList', 'VendorsList', 'ProductsList',
+  'SalesOrderNew', 'SourcingList', 'SourcingNew', 'ClientRequestList', 'ClientRequestNew',
+  'CustomersList', 'VendorsList', 'ProductsList',
   'VirtualGodownList', 'MasterPool', 'CrossSOTransfers', 'RFQList', 'VendorPOList',
   'GRNList', 'GRNNew', 'ThreeWayMatchList', 'AuditLog', 'Settings', 'PlatformConsole'];
 
@@ -198,7 +199,7 @@ for (const mode of ['empty', 'seeded', 'mixed']) {
 const LIST_ROUTES = ['dashboard', 'inbox', 'scm', 'mapping', 'sales-orders', 'sales-orders/new',
   'godown', 'pool', 'transfers', 'vendor-pos', 'grn', 'grn/new', 'three-way',
   'invoices', 'customers', 'vendors', 'products', 'settings', 'audit', 'collections',
-  'sourcing', 'rfq', 'platform', 'unknown-route'];
+  'sourcing', 'rfq', 'client-requests', 'client-requests/new', 'platform', 'unknown-route'];
 
 // DETAIL routes matter more than lists here: a list renders an empty state when
 // data is missing, but a detail screen dereferences one specific record and
@@ -211,6 +212,7 @@ function detailRoutes(st) {
   const po = first(st.vendor_pos);   if (po) r.push('vendor-pos/' + po);
   const grn = first(st.grns);        if (grn) r.push('grn/' + grn);
   const src = first(st.sourcings);   if (src) r.push('sourcing/' + src);
+  const creq = first(st.client_requests); if (creq) r.push('client-requests/' + creq);
   const vi = first(st.vendor_invoices); if (vi) r.push('three-way/' + vi);
   const cust = first(st.customers);  if (cust) r.push('customers/' + cust + '/ledger');
   // Ids that do not exist at all — a stale bookmark, or a link to a record that

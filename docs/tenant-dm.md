@@ -82,8 +82,9 @@ here. Until then, use the shared host; everything works.
 ## The workflow profile
 
 `split_stores`, added by `supabase/migrations/033_split_stores_profile.sql`,
-extended by `034_client_acceptance_split_stores.sql` and
-`035_split_stores_match_microlink.sql`.
+extended by `034_client_acceptance_split_stores.sql`,
+`035_split_stores_match_microlink.sql` and
+`037_client_order_requests_split_stores.sql`.
 
 | Key | Value | Why |
 |---|---|---|
@@ -93,6 +94,7 @@ extended by `034_client_acceptance_split_stores.sql` and
 | `outward_dispatch` | `true` | outward is a team, so it is a step — and it creates the delivery challan in the same action |
 | `intransit_tracking` | `true` | somebody is watching for arrivals |
 | `client_acceptance` | `true` | the client accepts/rejects delivered quantities before the order is settled |
+| `client_order_requests` | `true` | the client sends a typed item request instead of creating the SO themselves — Purchase matches it to the catalogue and creates the SO. See [client-requests.md](./client-requests.md) |
 | `po_item_language` | `vendor` | the vendor PO prints their own part numbers — **same as Microlink**, per request |
 | `auto_invoice_on_grn` | `false` | matches Microlink |
 | `invoice_on_dispatch` | `true` | the client invoice raises on dispatch — **same as Microlink, "for now, will change later"** |
@@ -120,13 +122,18 @@ organization only** — see below.
 
 ## The order flow
 
-Client Facing takes down what the client ordered and imports it the same way
-Purchase or Microlink always have — the sheet importer now also admits
-`Client Facing` (`canImportSheet`), running the identical matching algorithm:
+**The client never creates a Sales Order here — they send a request.** Client
+Facing writes down what the client wants as a plain typed list (helped by
+recommendations from that customer's own past orders), and sends it to
+Purchase. Purchase is the one who matches every typed name to the catalogue —
 our code, our name, then the customer's own alias history
-([item-name-mapping.md](./item-name-mapping.md)). An unmatched row still
-defaults to "add as a new catalogue item" rather than sitting unmapped — nothing
-about the algorithm changed with who runs it.
+([item-name-mapping.md](./item-name-mapping.md)), the same algorithm the sheet
+importer uses elsewhere — and creates the real Sales Order. An unmatched item
+still defaults to "add as a new catalogue item" rather than sitting unmapped.
+See [client-requests.md](./client-requests.md) for the mechanics; it replaces
+an earlier version of this flow where Client Facing imported the customer's
+own sheet directly (`canImportSheet` briefly admitted `Client Facing` — it no
+longer does).
 
 Purchase then floats RFQ to vendors by email from the Sourcing module — the
 same "vendor selection + Float RFQ" feature Sales/Pre-sales use elsewhere,

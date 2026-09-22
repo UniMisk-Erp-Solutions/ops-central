@@ -35,11 +35,16 @@ const PERMISSIONS = {
     },
   },
   'Purchase': {
-    nav: ['dashboard','inbox','sourcing','sales-orders','godown','transfers','rfq','vendor-pos','grn','vendors','pool','products'],
+    nav: ['dashboard','inbox','client-requests','sourcing','sales-orders','godown','transfers','rfq','vendor-pos','grn','vendors','pool','products'],
     primary: { route: 'sourcing', label: 'Sourcing', icon: 'bookmark' },
     can: {
       createRFQ: true, selectVendor: true, createVendorPO: true, doSourcing: true,
       viewVendors: true, viewCost: true, viewProducts: true,
+      // Matches a client request's free-typed items to the catalogue and turns
+      // it into a real Sales Order — the ONLY way Purchase creates an SO here;
+      // they do not carry the general createSO capability. See
+      // docs/client-requests.md.
+      convertClientRequest: true,
     },
   },
   'Stores': {
@@ -88,10 +93,19 @@ const PERMISSIONS = {
   // invoice. Deliberately NO cost or margin — that is Purchase's business, and
   // a customer-facing screen is the easiest place for a buy price to be read
   // out loud by accident.
+  //
+  // Does NOT create a Sales Order. They write down what the client wants —
+  // free text, helped by recommendations from past orders — and send it to
+  // Purchase, who does the item-name mapping and creates the real SO. See
+  // docs/client-requests.md. 'sales-orders' stays in nav so they can watch an
+  // order they asked for; createSO/editOwnDraft are deliberately absent.
   'Client Facing': {
-    nav: ['dashboard','inbox','sales-orders','customers','invoices','collections','products'],
+    nav: ['dashboard','inbox','client-requests','sales-orders','customers','invoices','collections','products'],
+    // NOT 'client-requests' — that route is workflow-gated and off for most
+    // organizations, and a role's primary must always be a route it can
+    // actually open (roles-check asserts this for every role).
     primary: { route: 'sales-orders', label: 'Sales Orders', icon: 'receipt' },
-    can: { createSO: true, editOwnDraft: true, viewCustomers: true,
+    can: { createClientRequest: true, viewCustomers: true,
            viewProducts: true, logFollowup: true },
   },
   // Site supervisor for Supply+Implementation / Implementation-only orders. Sees
@@ -175,6 +189,24 @@ function featureBlocks(route) {
   return false;
 }
 
+// Same idea as FEATURE_ROUTES/featureBlocks, for a route that only exists
+// under a WORKFLOW key rather than a feature flag — a route that is part of
+// one company's process, not a screen every company could opt into. Absent
+// (or false) blocks it, same "off means hidden" rule as everywhere else, so a
+// role carrying the nav id for an org that never turned the key on still sees
+// nothing.
+const WORKFLOW_ROUTES = {
+  client_order_requests: ['client-requests'],
+};
+function workflowBlocks(route) {
+  const root = String(route || '').split('/')[0];
+  for (const key of Object.keys(WORKFLOW_ROUTES)) {
+    if (WORKFLOW_ROUTES[key].indexOf(root) === -1) continue;
+    if (!wfOn(key)) return true;
+  }
+  return false;
+}
+
 // ===== Per-organization WORKFLOW =====
 // Feature flags decide what an org can SEE. These decide how its PROCESS runs.
 // Resolved server-side (preset defaults + per-org overrides) and delivered by
@@ -191,6 +223,8 @@ const WORKFLOW_FALLBACK = {
   // Off everywhere until an organization turns it on. See soClientReview() in
   // utils.jsx and docs/client-acceptance.md.
   client_acceptance:   false,
+  // Off everywhere until an organization turns it on. See docs/client-requests.md.
+  client_order_requests: false,
 };
 
 function wf(key) {
@@ -275,6 +309,8 @@ function canAccess(role, route) {
   if (root === 'platform') return !!(typeof window !== 'undefined' && window.__opcIsMaster);
   // A capability switched off for this organization hides its routes entirely.
   if (featureBlocks(root)) return false;
+  // A route that only exists under a workflow this organization has not turned on.
+  if (workflowBlocks(root)) return false;
   // SCM_ROLES is the historic list, kept so nothing that worked stops working.
   // A role may also opt in by carrying the route in its own nav, which is how
   // every other screen is decided — one fewer list to keep in step.
@@ -749,6 +785,8 @@ window.wfReceivingRoles = wfReceivingRoles;
 window.wfCanReceive = wfCanReceive;
 window.PERM_UNKNOWN = PERM_UNKNOWN;
 window.WORKFLOW_FALLBACK = WORKFLOW_FALLBACK;
+window.featureBlocks = featureBlocks;
+window.workflowBlocks = workflowBlocks;
 window.canAccess = canAccess;
 window.SCM_ROUTES_SET = { scm: true, mapping: true };
 window.FEATURE_ROUTES = FEATURE_ROUTES;

@@ -145,6 +145,10 @@ const DATA = {
                          items: [{ product_id: P[0].id, qty: 2 }] }],
   payments: [], rfqs: [], transfer_requests: [], notifications: [], audit: [], pool: [],
   invoices: [], site_updates: [], item_aliases: [], collections: [],
+  client_requests: [{ id: 'creq-1', request_no: 'CREQ202605001', customer_id: customers[0].id,
+                       status: 'Sent', items: [{ id: 'i1', text: '24 port core switch', qty: 4,
+                       note: null, product_id: null, matched_by: null }],
+                       notes: null, created_by: 'u1', sent_at: '2026-05-21', converted_so_id: null }],
 };
 
 const st = { loaded: true, org: { ...(seed.org || {}) }, config: { ...(seed.config || {}) },
@@ -174,13 +178,15 @@ s.__opcFeatures = { presales: true, rfq_email: true, implementation: true, cross
   partial_invoicing: true, e_invoice: true, e_way_bill: true, sales_desk: true, stores: true,
   scm_tracking: true, item_mapping: true, surplus_pool: true };
 s.__opcWorkflow = { receiving_flow: 'stores_to_purchase', po_item_language: 'vendor',
-  intransit_tracking: true, customer_language: true, outward_dispatch: true, auto_invoice_on_grn: false };
+  intransit_tracking: true, customer_language: true, outward_dispatch: true, auto_invoice_on_grn: false,
+  client_order_requests: true };
 s.__opcIsMaster = false; s.OPC_SB = null;
 
 const SCREENS = [
   ['Dashboard', {}], ['ApprovalInbox', {}], ['SCMTracking', {}], ['ItemMapping', {}],
   ['SalesOrdersList', {}], ['SalesOrderNew', {}], ['SalesOrderDetail', { soId: 'so-1' }],
   ['SourcingList', {}], ['SourcingNew', {}], ['SourcingDetail', { srcId: 'src-1' }],
+  ['ClientRequestList', {}], ['ClientRequestNew', {}], ['ClientRequestDetail', { reqId: 'creq-1' }],
   ['CustomersList', {}], ['CustomerLedger', { custId: customers[0].id }],
   ['VendorsList', {}], ['ProductsList', {}],
   ['VirtualGodownList', {}], ['VirtualGodownView', { soId: 'so-1' }],
