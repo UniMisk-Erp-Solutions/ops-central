@@ -102,6 +102,16 @@ can override any of them from a dropdown before converting.
 From here on it is the existing machinery, completely unchanged: procurement,
 RFQ, vendor PO, GRN, dispatch, client review, close.
 
+### "View Sales Order" goes wherever that role can actually see it
+
+A `Converted` request shows a "View Sales Order" button. It does not send
+every role to the same place: Client Facing cannot open the SO detail page
+(see [client-acceptance.md](./client-acceptance.md)'s note on their two-page
+nav), so for them it navigates to `scm/<soId>` — SCM Tracking, pre-selected on
+that order — instead of `sales-orders/<soId>`. Every other role still gets the
+full detail page. `SCMTracking` accepts an optional `soId` prop for exactly
+this; without it, it falls back to the first order, as it always has.
+
 ## Why it is that way
 
 **Why is Purchase's capability `convertClientRequest`, not the general

@@ -208,7 +208,7 @@ function detailRoutes(st) {
   const first = (arr) => (Array.isArray(arr) && arr[0] ? arr[0].id : null);
   const r = [];
   const so = first(st.sales_orders);
-  if (so) { r.push('sales-orders/' + so, 'godown/' + so, 'invoices/' + so); }
+  if (so) { r.push('sales-orders/' + so, 'godown/' + so, 'invoices/' + so, 'scm/' + so); }
   const po = first(st.vendor_pos);   if (po) r.push('vendor-pos/' + po);
   const grn = first(st.grns);        if (grn) r.push('grn/' + grn);
   const src = first(st.sourcings);   if (src) r.push('sourcing/' + src);
