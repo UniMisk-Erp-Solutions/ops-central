@@ -49,6 +49,31 @@ has happened here before — `products`, `categories` and `boms` were missing fr
 the store's `LOADED_TABLES`, so every tenant silently ran on the demo company's
 products. That is fixed, and `verify-tenant-isolation.py` is how it stays fixed.
 
+## Test data
+
+That "zero rows" state was true at provisioning. `scripts/sql/dm-dummy-test-data.sql`
+(2026-09-23) has since added sample master data so the client-requests flow —
+and everything downstream of it — has something real to work against:
+
+- **5 vendors** (`v-dm-01`..`05`): Cisco Systems India, Juniper Networks India,
+  Redington, Ingram Micro, Rashi Peripherals.
+- **5 customers** (`c-dm-01`..`05`): Relience Infotech, Bluepeak Networks,
+  Orion Retail Chain, Nimbus Hospitality, Anchor Manufacturing.
+- **13 products** (`p-dm-01`..`13`): the individually-priced items — switches,
+  PSUs, SFP modules, a router, patch cables, an access point, a firewall, a
+  UPS, etc.
+- **5 categories with a BOM each** (`cat-dm-01`..`05`): "Core Switching
+  Stack," "Edge Router Kit," "Wireless Access Kit," "Firewall Appliance Kit,"
+  "UPS Backup Kit" — each a kit a client can order as one thing, decomposing
+  into 3 of the products above via `boms.components`, the same
+  `state.boms[categoryId]` structure every Sales Order bundle line already
+  reads (`screens-sourcing.jsx`).
+
+Idempotent (`ON CONFLICT DO NOTHING`) and scoped to Demo Org's `organization_id`
+only — re-running it is safe and never touches Microlink or OP Central Demo.
+Re-apply with `SSH_PASSWORD='...' python scripts/ssh-apply-sql.py
+scripts/sql/dm-dummy-test-data.sql`.
+
 ## The login
 
 ```
