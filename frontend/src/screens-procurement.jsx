@@ -2320,11 +2320,49 @@ function soReqComponents(so) {
 }
 window.soReqComponents = soReqComponents;
 
+// What vendorPOGroups should actually raise a PO for RIGHT NOW, as opposed to
+// what the order originally needed in total (soReqComponents, unchanged --
+// still used everywhere that reports the order's total requirement).
+//
+// Nets the original requirement against whatever is already on a vendor PO
+// for this SO, then adds soRejectedOutstanding — the replacement quantity a
+// client rejection still owes, on an organization running client_acceptance.
+// The two additions never overlap: soRejectedOutstanding only counts a vendor
+// PO placed BEYOND the original requirement (a genuine replacement), while
+// this function's own netting only closes the gap UP TO that original
+// requirement -- so a product can never be double-subtracted or double-owed.
+//
+// On the very first call for an SO (no vendor PO exists yet), onPO is empty
+// for every product, so this returns exactly soReqComponents(so) -- byte for
+// byte the same as before this existed. Every existing caller of
+// generateVendorPOsFromSourcing only ever calls it once, so nothing about
+// today's behaviour changes; this only matters the second time it runs,
+// which is what lets Purchase float RFQ / raise a Vendor PO again for a
+// rejected item through the same screen, instead of a dead end. See
+// docs/client-acceptance.md.
+function soOutstandingProcurement(state, so) {
+  const req = soReqComponents(so);
+  const onPO = {};
+  (state.vendor_pos || []).forEach(po => {
+    if (po.so_id !== so.id || ['Rejected', 'Cancelled'].includes(po.status)) return;
+    (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + (Number(it.qty) || 0); });
+  });
+  const rejected = (typeof soRejectedOutstanding === 'function') ? soRejectedOutstanding(state, so) : {};
+  const out = {};
+  new Set([...Object.keys(req), ...Object.keys(rejected)]).forEach(pid => {
+    const gap = Math.max(0, (req[pid] || 0) - (onPO[pid] || 0));
+    const owed = gap + (rejected[pid] || 0);
+    if (owed > 0.0001) out[pid] = owed;
+  });
+  return out;
+}
+window.soOutstandingProcurement = soOutstandingProcurement;
+
 // Group an SO's required components by the vendor chosen during sourcing, each at
 // the sourced unit price. Components without a saved pick fall back to the
 // cheapest vendor / baseline so nothing is left unsourced.
 function vendorPOGroups(state, so, sourcing, getProduct) {
-  const req = soReqComponents(so);
+  const req = soOutstandingProcurement(state, so);
   const alloc = (sourcing && sourcing.alloc) || {};
   const picks = (sourcing && sourcing.picks) || {};
   const prices = (sourcing && sourcing.prices) || {};

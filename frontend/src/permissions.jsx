@@ -748,6 +748,41 @@ function buildTasks(state, mutate, navigate, toast) {
     });
   });
 
+  // 11. Client rejected something and nothing has been re-ordered for it yet
+  // → Purchase floats RFQ / picks a vendor again, through the exact same
+  // vendor-comparison screen (or the manual Vendor PO / Assign vendors &
+  // prices tool) every other requirement already uses. A rejection used to
+  // be a dead end here — recorded, notified once, then nothing pointed
+  // Purchase back at it. soRejectedOutstanding is {} for every organization
+  // not running client_acceptance, so this task never exists for them. See
+  // docs/client-acceptance.md.
+  state.sales_orders.forEach(so => {
+    const owed = window.soRejectedOutstanding ? window.soRejectedOutstanding(state, so) : {};
+    const pids = Object.keys(owed);
+    if (!pids.length) return;
+    const cust = state.customers.find(c => c.id === so.customer_id);
+    const items = pids.map(pid => {
+      const p = state.products.find(x => x.id === pid);
+      return `${qty(owed[pid])}× ${p ? p.name : pid}`;
+    }).join(', ');
+    const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
+    tasks.push({
+      id: `task-reject-reorder-${so.id}`,
+      role: 'Purchase',
+      kind: 'Rejected — re-order',
+      ref: so.so_no,
+      refId: so.id,
+      by: 'Client',
+      amount: 0,
+      detail: `${cust?.name || ''} · client rejected · ${items}`,
+      gate: 'Purchase action',
+      icon: 'cart',
+      navigateTo: `sales-orders/${so.id}`,
+      approve: () => navigate(sourcing ? `sourcing/${sourcing.id}` : `sales-orders/${so.id}`),
+      approveLabel: sourcing ? 'Float RFQ / pick vendor' : 'Open Procurement tab',
+    });
+  });
+
   // Inventory write-off (MD)
   if (!state.dismissed_writeoff) {
     tasks.push({
