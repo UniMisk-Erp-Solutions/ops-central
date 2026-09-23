@@ -486,7 +486,7 @@ function SourcingNew() {
 // ---- detail: vendor comparison + margin match (Purchase) + convert (Sales) --
 
 function SourcingDetail({ srcId }) {
-  const { state, navigate, mutate, saveConfig, getCustomer, getProduct, getCategory, getVendor, getUser, currentUser, addVendor } = useStore();
+  const { state, navigate, mutate, saveConfig, getCustomer, getProduct, getCategory, getVendor, getUser, currentUser, addVendor, getSO } = useStore();
   const toast = useToast();
   const src = (state.sourcings || []).find(x => x.id === srcId);
   const role = currentUser ? getUser(currentUser)?.role : '';
@@ -718,6 +718,27 @@ function SourcingDetail({ srcId }) {
     toast(`${src.src_no} sent to Sales · margin ${pct1(margin.marginPct)}`, 'success');
   };
 
+  // This inquiry already has a real Sales Order (converted_so_id was set the
+  // moment it was created — see docs/client-requests.md), so "Send to Sales"
+  // makes no sense here: nobody downstream is waiting to raise the order,
+  // because it already exists. "Create Vendor PO(s)" instead, straight from
+  // whatever was picked per item — the exact same generateVendorPOsFromSourcing
+  // the SO's own Procurement tab button calls, so doing it from either screen
+  // ends up in the identical place. Saves the vendor picks first, the same way
+  // "Save vendor quotation" already does, so nothing typed here is lost.
+  const [genBusy, setGenBusy] = React.useState(false);
+  const isSoWorkspace = !!src.converted_so_id;
+  const generateFromHere = () => {
+    const so = getSO(src.converted_so_id);
+    if (!so) { toast('Could not find the linked Sales Order'); return; }
+    setGenBusy(true);
+    const updatedSrc = { ...src, picks, prices: buildPrices(), margin };
+    mutate(s => ({ ...s, sourcings: (s.sourcings || []).map(x => x.id === src.id ? updatedSrc : x) }),
+      { action: 'source', entity: 'Sourcing', entity_id: src.id });
+    window.generateVendorPOsFromSourcing(so, updatedSrc, { state, mutate, toast, navigate, getProduct });
+    setGenBusy(false);
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -733,8 +754,11 @@ function SourcingDetail({ srcId }) {
           {hasSupply && canSource && !locked && <button className="btn" disabled={rfqBusy} onClick={floatRFQ} title="Email each shortlisted vendor a private link to quote these items"><Icon name="mail" size={13}/>{rfqBusy ? 'Floating…' : 'Float RFQ'}</button>}
           {hasSupply && canSource && !locked && <button className="btn" onClick={() => setShowAllocate(true)}><Icon name="arrowLeftRight" size={13}/>Allocate across vendors</button>}
           {hasSupply && canSource && !locked && <button className="btn" onClick={saveQuotation}><Icon name="save" size={13}/>Save vendor quotation</button>}
-          {hasSupply && canSource && !locked && <button className="btn btn-primary" onClick={sendToSales}><Icon name="mail" size={13}/>Send to Sales</button>}
-          {canConvert && !locked && (src.status === 'Sent to Sales' || src.status === 'Sourced') && (
+          {hasSupply && canSource && !locked && (isSoWorkspace
+            ? <button className="btn btn-primary" disabled={genBusy} onClick={generateFromHere} title="Raise one Vendor PO per vendor chosen above, straight from this comparison">
+                <Icon name="cart" size={13}/>{genBusy ? 'Creating…' : 'Create Vendor PO(s)'}</button>
+            : <button className="btn btn-primary" onClick={sendToSales}><Icon name="mail" size={13}/>Send to Sales</button>)}
+          {canConvert && !locked && !isSoWorkspace && (src.status === 'Sent to Sales' || src.status === 'Sourced') && (
             <button className="btn btn-primary" onClick={() => setShowConvert(true)}><Icon name="receipt" size={13}/>Create Sales Order</button>
           )}
           {src.converted_so_id && <button className="btn" onClick={() => navigate(`sales-orders/${src.converted_so_id}`)}><Icon name="arrowRight" size={13}/>View Sales Order</button>}

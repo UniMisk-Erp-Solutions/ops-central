@@ -52,6 +52,25 @@ inquiry:
   Admin']`), so there is no path from this screen back through "Convert to
   SO" a second time — the real SO already exists.
 
+### "Send to Sales" becomes "Create Vendor PO(s)"
+
+On a normal inquiry, once vendors are compared and priced the next step is
+handing it to Sales to raise the order. Here the order already exists, so
+that button would be a dead end — it now reads **"Create Vendor PO(s)"**
+instead, and does the SO Procurement tab's own one-click generation *from
+this screen*, without navigating away: it saves whatever was just picked
+(same write "Save vendor quotation" already does), then calls the identical
+`generateVendorPOsFromSourcing` the Procurement tab's own button calls.
+
+The swap is keyed on one thing: `isSoWorkspace = !!src.converted_so_id`. In
+the main flow, `converted_so_id` is only ever set together with `status:
+'Converted'` (`ConvertToSOModal`) — which already hides every action button
+via `locked`. So a *visible* "Send to Sales" button with `converted_so_id`
+already set can only happen on the record this feature itself builds; no
+tenant or organization check was needed to scope it correctly. The normal
+"Create Sales Order" convert button is hidden the same way, for the same
+reason — the SO it would create already exists.
+
 From the SO's Procurement tab, a **"Compare vendors & Float RFQ"** card
 appears whenever the linked Sourcing exists and nothing has been picked on
 it yet, opening `sourcing/<id>` — the identical screen shown for the main
@@ -117,6 +136,7 @@ don't exist), but there is no reason to carry fields that mean nothing here.
 | `soSourcing`, `vendorPOGroups`, `generateVendorPOsFromSourcing` (unmodified, reused) | `frontend/src/screens-procurement.jsx` |
 | `canGenerate`'s `'Draft'` allowance, "Compare vendors & Float RFQ" entry point | `ProcurementTab`, `frontend/src/screens-so.jsx` |
 | The vendor comparison grid, "Add vendor & quote," Float RFQ (unmodified, reused) | `SourcingDetail`, `frontend/src/screens-sourcing.jsx` |
+| `isSoWorkspace`, `generateFromHere` — "Create Vendor PO(s)" in place of "Send to Sales" | `SourcingDetail`, `frontend/src/screens-sourcing.jsx` |
 | The org-lookup fallback (defensive, not on the critical path) | `supabase/functions/main/index.ts`, `/float-rfq` |
 | Checks | `scripts/uitest/so-rfq-check.js` |
 

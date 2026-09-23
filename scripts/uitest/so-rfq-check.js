@@ -140,5 +140,42 @@ check('rates come from the quote captured on the sourcing, not the catalogue', (
 check('the SO advances out of Draft the same way a manually-created PO already does',
   st.sales_orders[0].status, 'Procurement Started');
 
+console.log('\n[5] "Send to Sales" is replaced by "Create Vendor PO(s)" -- only for a workspace sourcing that already has its own SO');
+// converted_so_id is set on a workspace sourcing from the moment it is
+// created, before any status change at all -- in the main flow, the only
+// way converted_so_id is ever set is together with status: 'Converted'
+// (ConvertToSOModal), which already hides every action button via `locked`.
+// So this condition can never fire for a real Sales/Pre-sales inquiry -- it
+// only exists on the exact record convert() builds.
+check('the button choice is keyed on converted_so_id, not a hard-coded tenant/org check',
+  /const isSoWorkspace = !!src\.converted_so_id;/.test(srcJsx), true);
+check('Create Vendor PO(s) shown instead of Send to Sales when isSoWorkspace',
+  /\? <button className="btn btn-primary" disabled=\{genBusy\} onClick=\{generateFromHere\}/.test(srcJsx), true);
+check('Send to Sales is still exactly what a real inquiry sees otherwise',
+  /: <button className="btn btn-primary" onClick=\{sendToSales\}><Icon name="mail" size=\{13\}\/>Send to Sales<\/button>\)/.test(srcJsx), true);
+check('"Create Sales Order" (the normal convert button) is also hidden for a workspace sourcing -- the SO already exists',
+  /canConvert && !locked && !isSoWorkspace && \(src\.status === 'Sent to Sales' \|\| src\.status === 'Sourced'\)/.test(srcJsx), true);
+check('generateFromHere calls the SAME generateVendorPOsFromSourcing the SO Procurement tab button calls',
+  /window\.generateVendorPOsFromSourcing\(so, updatedSrc, \{ state, mutate, toast, navigate, getProduct \}\)/.test(srcJsx), true);
+check('it saves the current picks/prices/margin first, so nothing typed on screen is lost',
+  /const updatedSrc = \{ \.\.\.src, picks, prices: buildPrices\(\), margin \};/.test(srcJsx), true);
+
+console.log('\n[6] generateFromHere, run end to end: different vendors per item, one PO each, priced from what was just picked');
+const so2 = { id: 'so-2', so_no: 'SO/DM/2026/0005', status: 'Draft', lines: [
+  { id: 'l1', bundle_qty: 1, components: [{ product_id: 'p1', qty: 1 }] },
+  { id: 'l2', bundle_qty: 1, components: [{ product_id: 'p2', qty: 1 }] },
+] };
+const workspaceSrc = { id: 'src-2', converted_so_id: 'so-2', picks: { p1: 'v1', p2: 'v2' },
+  prices: { p1: { v1: 11760 }, p2: { v2: 5600 } }, alloc: {} };
+let st2 = { config: {}, vendor_pos: [], sales_orders: [so2], sourcings: [workspaceSrc], notifications: [] };
+const mutate2 = (fn) => { st2 = fn(st2); };
+const getProduct2 = id => ({ p1: { id: 'p1', buy: 13000 }, p2: { id: 'p2', buy: 6000 } })[id];
+// Mirrors generateFromHere's own two-step sequence -- save first, then generate.
+mutate2(s => ({ ...s, sourcings: s.sourcings.map(x => x.id === workspaceSrc.id ? workspaceSrc : x) }));
+sandbox.generateVendorPOsFromSourcing(so2, workspaceSrc, { state: st2, mutate: mutate2, toast: () => {}, navigate: () => {}, getProduct: getProduct2 });
+check('two vendors picked, two POs raised', st2.vendor_pos.length, 2);
+check('vendor v1 got the item priced at v1\'s own quote', st2.vendor_pos.find(p => p.vendor_id === 'v1').amount, 11760);
+check('vendor v2 got the item priced at v2\'s own quote', st2.vendor_pos.find(p => p.vendor_id === 'v2').amount, 5600);
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - Purchase gets the exact same per-item vendor comparison and Float RFQ screen the main flow already has, from an SO with no inquiry of its own');
 process.exit(bad ? 1 : 0);
