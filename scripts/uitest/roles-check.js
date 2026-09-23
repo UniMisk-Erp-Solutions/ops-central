@@ -110,8 +110,23 @@ console.log('\n[2] the three roles a split-stores company needs');
 check('Stores In can open GRN', s.canAccess('Stores In', 'grn'), true);
 check('Stores Out can open SCM tracking, which is where dispatch lives',
   s.canAccess('Stores Out', 'scm'), true);
-check('Client Facing can open customers', s.canAccess('Client Facing', 'customers'), true);
-check('and invoices', s.canAccess('Client Facing', 'invoices'), true);
+// Only two pages, by request: Item Requests and SCM Tracking. Everything this
+// desk used to see directly (Sales Orders, Customers, Invoices, Collections,
+// Products) is gone from its nav -- it now only reaches the request it wrote
+// and the pure-quantity tracking screen.
+check('Client Facing has exactly two pages', s.PERMISSIONS['Client Facing'].nav.slice().sort(),
+  ['client-requests', 'scm']);
+check('it can open Item Requests (workflow flag assumed on for this check)', (() => {
+  const before = s.__opcWorkflow;
+  s.__opcWorkflow = { client_order_requests: true };
+  const r = s.canAccess('Client Facing', 'client-requests');
+  s.__opcWorkflow = before;
+  return r;
+})(), true);
+check('and SCM Tracking', s.canAccess('Client Facing', 'scm'), true);
+check('but no longer Customers directly', s.canAccess('Client Facing', 'customers'), false);
+check('nor Invoices directly', s.canAccess('Client Facing', 'invoices'), false);
+check('nor Sales Orders directly', s.canAccess('Client Facing', 'sales-orders'), false);
 // The customer-facing screen is the easiest place for a buy price to be read
 // out loud by accident.
 check('Client Facing cannot see cost', s.canDo('Client Facing', 'viewCost'), false);

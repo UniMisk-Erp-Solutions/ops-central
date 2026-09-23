@@ -19,7 +19,7 @@ run: one where the stores team is split in two, inward and outward.
 | **Purchase** | vendor POs, and accepts what the inward team reports |
 | **Stores In** | receives against POs — confirms what physically arrived |
 | **Stores Out** | picks and dispatches to the customer |
-| **Client Facing** | takes the order, chases the invoice. **No cost, no margin.** |
+| **Client Facing** | sends the client's item request, tracks it through SCM Tracking. Exactly two pages — **no cost, no margin, nothing else.** |
 
 There is deliberately no Sales, Pre-sales, Project Manager, Managing Director or
 Supervisor here. Those roles still exist for the companies that use them.
