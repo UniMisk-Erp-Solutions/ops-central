@@ -492,9 +492,32 @@ function CustomerChallanModal({ dc, onClose }) {
     if (w) { w.document.open(); w.document.write(html); w.document.close(); }
   };
 
+  // A plain-text summary for WhatsApp/email — neither can carry the printable
+  // HTML without a file host, so this is the next best thing: everything the
+  // customer needs to recognise the delivery, in one message, one tap.
+  const shareText = () => {
+    const lines = (dc.items || []).map(i => `• ${i.qty}× ${i.name}`).join('\n');
+    return `Delivery Challan ${dc.dc_no}\n`
+      + `Against order: ${so ? so.so_no : '—'}\n`
+      + `Date: ${fmtDate(dc.date)}\n\n${lines}\n\n`
+      + `${t.mode ? 'Transport: ' + t.mode + (t.carrier ? ' · ' + t.carrier : '') + '\n' : ''}`
+      + `— ${org.name || ''}`;
+  };
+  const whatsappHref = () => {
+    const digits = String((cust && cust.phone) || '').replace(/\D/g, '');
+    const to = digits.length === 10 ? '91' + digits : digits.length > 10 ? digits : '';
+    return `https://wa.me/${to}?text=${encodeURIComponent(shareText())}`;
+  };
+  const mailHref = () => `mailto:?subject=${encodeURIComponent('Delivery Challan ' + dc.dc_no)}&body=${encodeURIComponent(shareText())}`;
+
   return (
     <Modal title={`Delivery Challan — ${dc.dc_no}`} size="lg" onClose={onClose} footer={
       <><button className="btn" onClick={onClose}>Close</button>
+      <a className="btn" href={mailHref()} title="Open your email app with the details pre-filled">
+        <Icon name="mail" size={13}/>Email</a>
+      <a className="btn" href={whatsappHref()} target="_blank" rel="noopener noreferrer"
+        title={cust && cust.phone ? `Open WhatsApp to ${cust.phone}` : 'Open WhatsApp — pick who to send it to'}>
+        <Icon name="msg" size={13}/>WhatsApp</a>
       <button className="btn btn-primary" onClick={printIt}><Icon name="print" size={13}/>Print / Download PDF</button></>}>
       <div className="doc-paper" style={{ padding: 18 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid var(--border-strong)', paddingBottom: 10 }}>

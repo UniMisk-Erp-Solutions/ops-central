@@ -78,6 +78,20 @@ async function matchRequestItems(customerId, items) {
 function canCreateClientRequest(role) { return canDo(role, 'createClientRequest'); }
 function canConvertClientRequest(role) { return canDo(role, 'convertClientRequest') || role === 'Org Admin'; }
 
+// One definition of what each status means in plain words, so the list badge,
+// its hover text and the detail page's status line never say three different
+// things about the same request. `label` is short enough for a table cell;
+// `detail` is the full sentence for a title/subtitle.
+function clientReqStatusCopy(status) {
+  switch (status) {
+    case 'Draft':     return { label: 'Draft', detail: 'Not sent yet — keep editing or send it to Purchase' };
+    case 'Sent':      return { label: 'Being matched', detail: 'Purchase is matching your items to our catalogue — usually done within a day' };
+    case 'Converted': return { label: 'Order placed', detail: 'This became a Sales Order — open it to track delivery' };
+    case 'Cancelled': return { label: 'Cancelled', detail: 'This request will not be actioned' };
+    default:          return { label: status || '', detail: '' };
+  }
+}
+
 // ============================================================================
 // List — Client Facing sees their own; Purchase sees the queue plus history
 // ============================================================================
@@ -99,10 +113,11 @@ function ClientRequestList() {
         <td className="small">{cust ? cust.name : '—'}</td>
         <td className="num mono small">{(r.items || []).length}</td>
         <td>
-          {r.status === 'Draft' && <span className="badge dot">Draft</span>}
-          {r.status === 'Sent' && <span className="badge accent dot">Sent — awaiting Purchase</span>}
-          {r.status === 'Converted' && <span className="badge success dot" title={r.converted_so_id}>Converted</span>}
-          {r.status === 'Cancelled' && <span className="badge dot">Cancelled</span>}
+          {(() => {
+            const sc = clientReqStatusCopy(r.status);
+            const cls = r.status === 'Sent' ? 'badge accent dot' : r.status === 'Converted' ? 'badge success dot' : 'badge dot';
+            return <span className={cls} title={sc.detail}>{sc.label}</span>;
+          })()}
         </td>
         <td className="tiny muted">{fmtDate(r.sent_at || r.created_at)}</td>
       </tr>
@@ -270,24 +285,56 @@ function ClientRequestNew() {
         </div>
       </div></div>
 
-      {customerId && recs.length > 0 && (
-        <div className="card mb-2">
-          <div className="card-header"><h3 className="card-title">Ordered before</h3>
-            <span className="tiny muted">tap to add — quantity defaults to 1, adjust it in the list below</span></div>
-          <div className="card-body" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {recs.map(r => (
-              <button key={r.product_id} className="btn btn-sm" disabled={alreadyAdded.has(r.product_id)}
-                onClick={() => addRecommended(r)} title={`Ordered ${r.count} time(s), most recently ${fmtDate(r.lastDate)}`}>
-                <Icon name="plus" size={11}/>{r.label}
-                <span className="tiny muted" style={{ marginLeft: 4 }}>×{r.count}</span>
-              </button>
-            ))}
+      {/* Recommendations come first and are the prominent option — tapping one
+          needs no typing and Purchase never has to map it, since it already
+          carries its product_id. The free-text form below is the fallback,
+          labelled and styled as the secondary path once there is something to
+          compare it against. */}
+      {customerId && (
+        <div className="card mb-2" style={recs.length ? { borderLeft: '3px solid var(--accent)' } : null}>
+          <div className="card-header">
+            <h3 className="card-title">Quick add — ordered before</h3>
+            {recs.length > 0 && <span className="tiny muted">tap to add instantly — nothing to type, nothing for Purchase to match</span>}
+          </div>
+          <div className="card-body">
+            {recs.length === 0 ? (
+              <div className="empty" style={{ padding: '6px 0' }}>
+                No past orders for this customer yet. Once Purchase completes their first order, it shows up here so reordering is one tap.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 10 }}>
+                {recs.map(r => {
+                  const added = alreadyAdded.has(r.product_id);
+                  return (
+                    <button key={r.product_id} className="pool-item" disabled={added}
+                      onClick={() => addRecommended(r)}
+                      title={`Ordered ${r.count} time(s), most recently ${fmtDate(r.lastDate)}`}
+                      style={{ width: '100%', textAlign: 'left', cursor: added ? 'default' : 'pointer', opacity: added ? 0.55 : 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                        <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-bg)',
+                          display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                          <Icon name={added ? 'check' : 'plus'} size={14} color="var(--accent)"/>
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div className="small trunc" style={{ fontWeight: 500 }}>{r.label}</div>
+                          <div className="tiny muted">ordered {r.count}× · last {fmtDate(r.lastDate)}</div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
 
       <div className="card mb-2">
-        <div className="card-header"><h3 className="card-title">Add an item</h3></div>
+        <div className="card-header">
+          <h3 className="card-title" style={recs.length ? { color: 'var(--text-2)', fontWeight: 500 } : null}>
+            {recs.length ? "Can't find it above? Type it in" : 'What do they want?'}
+          </h3>
+        </div>
         <div className="card-body">
           <div className="field-row">
             <div className="field grow">
@@ -448,7 +495,16 @@ function ClientRequestDetail({ reqId }) {
         id: 'n-creq-conv-' + Date.now(), kind: 'so', role: 'Purchase',
         text: `${newSO.so_no} created from ${req.request_no} · ${lines.length} item(s)`,
         date: TODAY, read: false,
-      }, ...s.notifications],
+      },
+      // The requester has no "My Tasks" page to check for this — the topbar
+      // bell is the only passive way they find out their request moved.
+      // Without this, they would never see it at all.
+      ...(req.created_by ? [{
+        id: 'n-creq-conv-req-' + Date.now(), kind: 'client-request', user_id: req.created_by,
+        text: `${req.request_no} is now Sales Order ${newSO.so_no} — Purchase is on it`,
+        date: TODAY, read: false,
+      }] : []),
+      ...s.notifications],
     }), { action: 'convert', entity: 'ClientRequest', entity_id: req.id,
           detail: `${req.request_no} -> ${newSO.so_no} · ${lines.length} item(s), ${madeProducts.length} new` });
 
@@ -478,9 +534,12 @@ function ClientRequestDetail({ reqId }) {
             <Icon name="chevronLeft" size={12}/> Item Requests
           </div>
           <h1 className="page-title"><span className="mono">{req.request_no || '(draft)'}</span></h1>
-          <div className="page-sub">{cust ? cust.name : ''} · {(req.items || []).length} item(s)
-            {req.status === 'Draft' ? ' · Draft' : req.status === 'Sent' ? ' · Sent to Purchase' : req.status === 'Converted' ? ' · Converted' : ''}
-          </div>
+          <div className="page-sub">{cust ? cust.name : ''} · {(req.items || []).length} item(s)</div>
+          {req.status !== 'Draft' && (
+            <div className="tiny" style={{ marginTop: 3, color: req.status === 'Converted' ? 'var(--success)' : 'var(--text-2)' }}>
+              {clientReqStatusCopy(req.status).detail}
+            </div>
+          )}
         </div>
         {req.status === 'Draft' && req.created_by === currentUser && (
           <div className="page-actions"><button className="btn btn-primary" onClick={send}>Send to Purchase</button></div>

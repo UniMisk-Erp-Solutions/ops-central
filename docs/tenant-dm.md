@@ -83,7 +83,14 @@ first pass left for testing:
   vendor-scope `item_aliases` row per (vendor, product) — each vendor's own
   invented part number — so a Vendor PO prints real vendor part numbers
   (`po_item_language: 'vendor'`) instead of falling back to ours with every
-  line flagged "unmapped".
+  line flagged "unmapped". Testing this surfaced a gap worth fixing for every
+  organization, not only dm: Float RFQ used to dead-end on a missing email
+  with a toast naming the vendor and pointing at "Add vendor & quote" — a
+  screen the user then had to go find. It now opens
+  `MissingVendorEmailsModal` right there (`screens-sourcing.jsx`), collects
+  the email(s), saves them to the same `config.vendor_emails` every other
+  vendor-email save already uses, and retries immediately with the value just
+  typed rather than waiting on state to round-trip through a save.
 - **`scripts/sql/dm-historical-orders.sql`** — 3 `Closed` Sales Orders, one
   each for 3 of the 5 customers, so `clientPastItems()`
   (`screens-client-requests.jsx`) has something to recommend the very first

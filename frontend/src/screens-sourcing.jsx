@@ -486,7 +486,7 @@ function SourcingNew() {
 // ---- detail: vendor comparison + margin match (Purchase) + convert (Sales) --
 
 function SourcingDetail({ srcId }) {
-  const { state, navigate, mutate, getCustomer, getProduct, getCategory, getVendor, getUser, currentUser, addVendor } = useStore();
+  const { state, navigate, mutate, saveConfig, getCustomer, getProduct, getCategory, getVendor, getUser, currentUser, addVendor } = useStore();
   const toast = useToast();
   const src = (state.sourcings || []).find(x => x.id === srcId);
   const role = currentUser ? getUser(currentUser)?.role : '';
@@ -496,6 +496,10 @@ function SourcingDetail({ srcId }) {
   const [showAddVendor, setShowAddVendor] = React.useState(false);
   const [rfqBusy, setRfqBusy] = React.useState(false);
   const [floatModal, setFloatModal] = React.useState(null);   // { vendors, itemsPayload, distinctItems, isRefloat, names }
+  // Vendors Float RFQ found with no email on file: { vendor_id, name }[] — filled
+  // in right here instead of a dead-end toast pointing at a screen the user has
+  // to go find.
+  const [missingEmails, setMissingEmails] = React.useState(null);
   const [refloatReason, setRefloatReason] = React.useState('');
   const [locks, setLocks] = React.useState({});               // { [product_id]: { price, delivery_days, payment_terms, notes } }
   const setLock = (pid, f, v) => setLocks(m => ({ ...m, [pid]: { ...(m[pid] || {}), [f]: v } }));
@@ -570,8 +574,10 @@ function SourcingDetail({ srcId }) {
     return true;
   };
 
-  const floatRFQ = () => {
-    const emails = (state.config && state.config.vendor_emails) || {};
+  // overrideEmails: emails just collected from the inline prompt below, used
+  // immediately without waiting on state.config to round-trip through a save.
+  const floatRFQ = (overrideEmails) => {
+    const emails = { ...((state.config && state.config.vendor_emails) || {}), ...(overrideEmails || {}) };
     const compList = src ? srcComponentList(src) : [];
     if (!compList.length) { toast('No line items to quote'); return; }
     const mkItems = (pids) => pids.map(pid => { const p = getProduct(pid) || {}; const c = compList.find(x => x.product_id === pid); return { product_id: pid, name: p.name || pid, code: p.code || '', qty: c ? c.qty : 0 }; });
@@ -588,7 +594,10 @@ function SourcingDetail({ srcId }) {
       vendors = vids.map(vid => ({ vendor_id: vid, name: (getVendor(vid) || {}).name || vid, email: (emails[vid] || '').trim(), items: mkItems(allPids) }));
     }
     const missing = vendors.filter(v => !v.email);
-    if (missing.length) { toast(`No email set for: ${missing.map(v => v.name).join(', ')} — add it in “Add vendor & quote”`); return; }
+    if (missing.length) {
+      setMissingEmails(missing.map(v => ({ vendor_id: v.vendor_id, name: v.name })));
+      return;
+    }
     const itemsPayload = mkItems(allPids);
     // Always open the Float modal: presales can optionally lock fields, and give a
     // reason if this is a re-send to a vendor already asked.
@@ -979,6 +988,10 @@ function SourcingDetail({ srcId }) {
       {showConvert && <ConvertToSOModal src={src} margin={margin} onClose={() => setShowConvert(false)}/>}
       {showAddVendor && <AddVendorQuoteModal src={src} comps={comps} onClose={() => setShowAddVendor(false)}/>}
       {showAllocate && <AllocateVendorsModal src={src} onClose={() => setShowAllocate(false)}/>}
+      {missingEmails && (
+        <MissingVendorEmailsModal vendors={missingEmails} onClose={() => setMissingEmails(null)}
+          onSaved={(collected) => { setMissingEmails(null); floatRFQ(collected); }}/>
+      )}
       {floatModal && (
         <Modal title={floatModal.isRefloat ? 'Re-send RFQ' : 'Float RFQ'} size="lg" onClose={() => setFloatModal(null)}
           footer={<><button className="btn" onClick={() => setFloatModal(null)}>Cancel</button>
@@ -1009,6 +1022,44 @@ function SourcingDetail({ srcId }) {
         </Modal>
       )}
     </div>
+  );
+}
+
+// Float RFQ found one or more shortlisted vendors with no email on file.
+// Collect them right here — one field per vendor — instead of a toast that
+// names the problem and leaves finding "Add vendor & quote" as homework.
+function MissingVendorEmailsModal({ vendors, onClose, onSaved }) {
+  const { state, saveConfig } = useStore();
+  const [vals, setVals] = React.useState(() => Object.fromEntries(vendors.map(v => [v.vendor_id, ''])));
+  const [busy, setBusy] = React.useState(false);
+  const EMAIL_RE = /^\S+@\S+\.\S+$/;
+  const allValid = vendors.every(v => EMAIL_RE.test((vals[v.vendor_id] || '').trim()));
+
+  const save = async () => {
+    setBusy(true);
+    const cur = (state.config && state.config.vendor_emails) || {};
+    const collected = {};
+    vendors.forEach(v => { collected[v.vendor_id] = vals[v.vendor_id].trim(); });
+    await saveConfig({ vendor_emails: { ...cur, ...collected } });
+    setBusy(false);
+    onSaved(collected);
+  };
+
+  return (
+    <Modal title={vendors.length > 1 ? 'A few vendor emails are needed first' : 'One vendor email is needed first'}
+      onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={!allValid || busy} onClick={save}>
+          <Icon name="mail" size={13}/>{busy ? 'Sending…' : 'Save & send RFQ'}</button></>}>
+      <div className="tiny muted mb-2">Saved on the vendor for next time — you won't be asked again.</div>
+      {vendors.map(v => (
+        <div className="field mb-2" key={v.vendor_id}>
+          <label className="field-label">{v.name}</label>
+          <input className="input" type="email" placeholder="vendor@example.com" autoFocus={vendors[0].vendor_id === v.vendor_id}
+            value={vals[v.vendor_id] || ''} onChange={e => setVals(s => ({ ...s, [v.vendor_id]: e.target.value }))}/>
+        </div>
+      ))}
+    </Modal>
   );
 }
 

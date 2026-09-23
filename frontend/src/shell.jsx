@@ -326,6 +326,7 @@ function NotificationsDrawer({ onClose, role }) {
                    else if (n.kind === 'overdue') navigate('collections');
                    else if (n.kind === 'match') navigate('three-way');
                    else if (n.kind === 'sourcing') navigate('sourcing');
+                   else if (n.kind === 'client-request') navigate('client-requests');
                    else navigate('inbox');
                    onClose();
                  }}>

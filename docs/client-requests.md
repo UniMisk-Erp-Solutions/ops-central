@@ -102,6 +102,37 @@ can override any of them from a dropdown before converting.
 From here on it is the existing machinery, completely unchanged: procurement,
 RFQ, vendor PO, GRN, dispatch, client review, close.
 
+### UX polish for a non-technical order desk
+
+Four small things, added together, aimed at Client Facing specifically —
+someone whose job is talking to a client, not operating software:
+
+- **Recommendations lead, typing is the fallback.** "Quick add — ordered
+  before" renders as a grid of tappable cards, above the free-text form, not
+  below it. Tapping one needs no typing and Purchase never has to map it — it
+  already carries its `product_id`. A customer with no history yet gets a
+  one-line explanation instead of nothing, so the empty state doesn't read as
+  broken. The free-text section is explicitly labelled "Can't find it above?
+  Type it in" once there is something to compare it against.
+- **The requester is told, not just Purchase.** Converting a request already
+  notified Purchase; it now also writes a `user_id`-targeted notification to
+  whoever sent the request. That is their only passive signal — they have no
+  "My Tasks" page — and the topbar bell/drawer (`shell.jsx`) was already
+  unconditional for every role, so this needed no new UI, only the missing
+  write. Clicking it opens Item Requests.
+- **Status reads as a sentence, not a system state.** `clientReqStatusCopy()`
+  is the one function the list badge, its hover text and the detail page's
+  status line all read from — "Sent" became **Being matched** ("Purchase is
+  matching your items… usually done within a day"), "Converted" became
+  **Order placed**.
+- **A delivery challan can be shared in one tap.** `CustomerChallanModal`
+  (`screens-scm.jsx`) gained WhatsApp and Email buttons next to Print — a
+  plain-text summary (challan number, order, line items, transport), since
+  neither channel can carry the printable HTML without a file host. WhatsApp
+  pre-fills the customer's own chat when their `phone` is a 10-digit number
+  (given the country code); without one it opens the picker instead of
+  failing.
+
 ### "View Sales Order" goes wherever that role can actually see it
 
 A `Converted` request shows a "View Sales Order" button. It does not send
