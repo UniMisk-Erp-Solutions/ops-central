@@ -468,6 +468,34 @@ function ClientRequestDetail({ reqId }) {
       if (error) { setBusy(false); toast('Could not save the new item(s): ' + error.message); return; }
     }
 
+    // Every SO line needs a real category — screens-so.jsx's Line Items tab
+    // (and several others: screens-billing.jsx, screens-sourcing.jsx,
+    // store.jsx, screens-dashboard.jsx) call getCategory(l.category_id) and
+    // read .name/.hsn off it unconditionally, the same assumption every other
+    // path that builds an SO (SalesOrderNew, the sheet importer) already
+    // satisfies. Reuse an existing category by name (case-insensitive) so a
+    // client typing the same wording twice does not spawn a duplicate; only
+    // create a new one when nothing matches — the identical pattern the sheet
+    // importer uses for "one category per Type of Equipment."
+    const madeCategories = [];
+    const catFor = {};
+    (req.items || []).forEach((i, idx) => {
+      const label = i.text.trim();
+      const existing = (state.categories || []).find(c => c.name && c.name.toLowerCase() === label.toLowerCase());
+      if (existing) { catFor[i.id] = existing.id; return; }
+      if (catFor[label]) return;   // two items with the same wording share one category
+      const cid = 'cat-creq-' + stamp + '-' + idx;
+      catFor[i.id] = cid; catFor[label] = cid;
+      const pid = idFor[i.id] || (matches[i.id] && matches[i.id].product_id);
+      const p = getProduct(pid) || madeProducts.find(mp => mp.id === pid) || {};
+      madeCategories.push({ id: cid, name: label, hsn: p.hsn || '', gst: Number(p.gst) || 18, bundle_desc: label });
+    });
+    (req.items || []).forEach(i => { if (!catFor[i.id] && catFor[i.text.trim()]) catFor[i.id] = catFor[i.text.trim()]; });
+    if (madeCategories.length && window.OPC_SB) {
+      const { error } = await window.OPC_SB.from('categories').insert(madeCategories);
+      if (error) { setBusy(false); toast('Could not save the new item type(s): ' + error.message); return; }
+    }
+
     const lines = (req.items || []).map((i, idx) => {
       const pid = idFor[i.id] || (matches[i.id] && matches[i.id].product_id);
       const p = getProduct(pid) || madeProducts.find(mp => mp.id === pid) || {};
@@ -481,10 +509,28 @@ function ClientRequestDetail({ reqId }) {
         // invoiced at all, regardless of what its items were actually priced
         // at — the same bundle_qty*component-sell rollup lineSellOf() already
         // gives the sheet importer and EditSOModal.
-        id: 'l-' + stamp + '-' + idx, bundle_qty: 1, unit_price: lineSellOf(components, getProduct),
+        id: 'l-' + stamp + '-' + idx, category_id: catFor[i.id] || '', bundle_qty: 1,
+        unit_price: lineSellOf(components, getProduct),
         client_name: i.text, customer_ref: { desc: i.text }, components,
       };
     });
+
+    // A reusable recipe for the category just created, so "Add line item"
+    // later offers the same product again — the sheet importer's exact
+    // pattern. state.boms is a MAP { category_id: components[] } (store.jsx
+    // converts the DB's rows on load), not an array — mirror that shape
+    // locally so the merge below matches every other reader of it.
+    // Best-effort: the order exists either way even if this fails.
+    const madeBoms = {};
+    madeCategories.forEach(c => {
+      const line = lines.find(l => l.category_id === c.id);
+      if (line) madeBoms[c.id] = line.components.map(cm => ({ product_id: cm.product_id, qty: cm.qty }));
+    });
+    if (Object.keys(madeBoms).length && window.OPC_SB) {
+      const payload = Object.keys(madeBoms).map(cid => ({ category_id: cid, components: madeBoms[cid] }));
+      const { error } = await window.OPC_SB.from('boms').insert(payload);
+      if (error) console.warn('[OPC] BOM save skipped:', error.message);
+    }
 
     const newSO = {
       id: 'so-' + stamp, so_no: num, customer_id: req.customer_id, customer_po: poRef.trim(),
@@ -495,6 +541,13 @@ function ClientRequestDetail({ reqId }) {
 
     mutate(s => ({
       ...s,
+      // Matches the sheet importer's own merge exactly — without this, a
+      // genuinely new product/category/BOM only reaches local state on the
+      // next full reload, and every screen that reads it in the meantime
+      // (starting with this SO's own Line Items tab) finds nothing there yet.
+      products: madeProducts.length ? [...s.products, ...madeProducts] : s.products,
+      categories: madeCategories.length ? [...s.categories, ...madeCategories] : s.categories,
+      boms: Object.keys(madeBoms).length ? { ...s.boms, ...madeBoms } : s.boms,
       sales_orders: [newSO, ...s.sales_orders],
       client_requests: (s.client_requests || []).map(x => x.id === req.id
         ? { ...x, status: 'Converted', converted_so_id: newSO.id } : x),

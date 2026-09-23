@@ -99,8 +99,12 @@ can override any of them from a dropdown before converting.
    (`nullif(trim(...), '')`), only `product_id` is required. So the next time
    this customer types the same words, it resolves itself.
 
-From here on it is the existing machinery, completely unchanged: procurement,
-RFQ, vendor PO, GRN, dispatch, client review, close.
+From here on it is the existing machinery, completely unchanged: GRN,
+dispatch, client review, close. Procurement itself gets its own door — see
+[so-float-rfq.md](./so-float-rfq.md): since converting a request never
+creates a Sourcing/inquiry record, Purchase floats RFQ straight from the SO's
+own Procurement tab instead of the main flow's Sourcing screen, and can turn
+a vendor's reply into a Vendor PO in one click.
 
 ### UX polish for a non-technical order desk
 
@@ -174,6 +178,20 @@ screen here to protect.
 
 ## Traps
 
+- **Every SO line needs a real `category_id`, and `convert()` originally
+  never set one.** `screens-so.jsx`'s Line Items tab (and several other
+  screens — billing, sourcing, the store, the dashboard) call
+  `getCategory(l.category_id)` and read `.name`/`.hsn` off it
+  unconditionally, the same assumption `SalesOrderNew` and the sheet importer
+  already satisfy by always assigning one. A converted request's line never
+  had one — opening that tab crashed outright ("Cannot read properties of
+  undefined (reading 'name')"), on a real live order. Fixed by giving
+  `convert()` the sheet importer's own pattern: reuse an existing category by
+  name (case-insensitive), or create one on the fly, plus a matching BOM so
+  "Add line item" can reuse it later. The same pass also fixed newly-made
+  products/categories/BOMs never reaching **local** state after conversion —
+  they saved to Supabase correctly, but nothing on screen could see them
+  until the next full reload.
 - **A role's `primary` route must never be workflow-gated.** Client Facing's
   `primary` was briefly set to `client-requests` itself — reads naturally, "the
   role's main page is the one it exists for" — but that route is blocked by

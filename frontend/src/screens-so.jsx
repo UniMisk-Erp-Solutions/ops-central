@@ -1217,6 +1217,167 @@ function SalesOrderDetail({ soId }) {
   );
 }
 
+// ===========================================================================
+// Float RFQ straight from the Sales Order — for an organization with no
+// Sourcing/inquiry step in front of it (see docs/client-requests.md: the
+// client sends a request, Purchase converts it directly into an SO, so there
+// is never a Sourcing record to float RFQ from the way Pre-sales does in the
+// main flow). Same edge function, same vendor-quote email + link, same
+// config.vendor_emails as Sourcing's own Float RFQ — the only difference is
+// what src_id points at: this SO's own id, not an inquiry's.
+// ===========================================================================
+
+// Build a real Vendor PO directly from a vendor's submitted RFQ quote — one
+// click, no retyping a single price. Mirrors CreateVendorPOModal's own PO
+// shape exactly (amount threshold, MD approval, SO status advance), so a PO
+// created this way is indistinguishable from one created by hand.
+function createPOFromRFQQuote(so, vendorEntry, ctx) {
+  const { state, mutate, toast, getVendor } = ctx;
+  const items = (vendorEntry.items || [])
+    .map(it => ({ product_id: it.product_id, qty: Number(it.qty) || 0, rate: Number((vendorEntry.prices || {})[it.product_id]) || 0 }))
+    .filter(it => it.qty > 0 && it.rate > 0);
+  if (!items.length) { if (toast) toast('This vendor has not priced anything yet'); return null; }
+  const amount = items.reduce((s, i) => s + i.qty * i.rate, 0);
+  const mdT = state.config.vendor_po_md_threshold != null ? state.config.vendor_po_md_threshold : 500000;
+  const needsMD = amount > mdT;
+  const po = { id: 'po-' + Date.now(), po_no: vendorPoNo(state, TODAY), so_id: so.id, vendor_id: vendorEntry.vendor_id,
+    date: TODAY, expected: TODAY, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items, ebill: {}, source: 'rfq' };
+  const vname = (getVendor(vendorEntry.vendor_id) || {}).name || vendorEntry.name;
+  mutate(s => ({
+    ...s,
+    vendor_pos: [po, ...s.vendor_pos],
+    sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x),
+    notifications: [{ id: 'n-po-' + Date.now(), kind: 'po',
+      text: `${po.po_no} ${needsMD ? 'awaiting MD approval' : 'issued'} → ${vname} for ${so.so_no} · ${inrK(amount)} · from their RFQ quote`,
+      date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
+  }), { action: 'create', entity: 'VendorPO', entity_id: po.id, detail: `From RFQ quote · ${vname} · ${so.so_no}` });
+  if (toast) toast(`${po.po_no} created from ${vname}'s quote${needsMD ? ' · sent to MD' : ''}`, 'success');
+  return po;
+}
+window.createPOFromRFQQuote = createPOFromRFQQuote;
+
+function SORfqPanel({ so }) {
+  const { state, mutate, saveConfig, getProduct, getCustomer, getVendor, getUser, currentUser } = useStore();
+  const toast = useToast();
+  const role = getUser(currentUser)?.role;
+  const canProcure = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
+  const [sel, setSel] = React.useState({});             // { vendor_id: true } -- who to float to next
+  const [busy, setBusy] = React.useState(false);
+  const [missingEmails, setMissingEmails] = React.useState(null);
+  const cust = getCustomer(so.customer_id);
+
+  const rfq = (state.rfqs || []).find(r => r && r.so_id === so.id);
+  const items = procComponentList(so);
+  const floatedIds = new Set(((rfq && rfq.vendors) || []).map(v => v.vendor_id));
+  const pickable = (state.vendors || []).filter(v => !sel[v.id]);
+
+  if (!canProcure) return null;
+
+  const toggleVendor = (vid) => setSel(s => { const n = { ...s }; if (n[vid]) delete n[vid]; else n[vid] = true; return n; });
+
+  const doFloat = async (overrideEmails) => {
+    const vids = Object.keys(sel).filter(id => sel[id]);
+    if (!vids.length) { toast('Pick at least one vendor'); return; }
+    if (!items.length) { toast('Nothing left to quote — every item is already on a vendor PO'); return; }
+    const emails = { ...((state.config && state.config.vendor_emails) || {}), ...(overrideEmails || {}) };
+    const vendorsPayload = vids.map(vid => ({ vendor_id: vid, name: (getVendor(vid) || {}).name || vid, email: (emails[vid] || '').trim() }));
+    const missing = vendorsPayload.filter(v => !v.email);
+    if (missing.length) { setMissingEmails(missing.map(v => ({ vendor_id: v.vendor_id, name: v.name }))); return; }
+
+    setBusy(true);
+    const itemsPayload = items.map(it => { const p = getProduct(it.product_id) || {}; return { product_id: it.product_id, name: p.name || it.product_id, code: p.code || '', qty: it.qty }; });
+    try {
+      const SB = (window.OPC_ENV && window.OPC_ENV.SUPABASE_URL) || '';
+      const ANON = (window.OPC_ENV && window.OPC_ENV.SUPABASE_ANON_KEY) || '';
+      const r = await fetch(SB + '/functions/v1/main/float-rfq', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON },
+        body: JSON.stringify({ src_id: so.id, src_no: so.so_no, customer_name: (cust && cust.name) || '', org_name: (state.org && state.org.name) || '', vendors: vendorsPayload, items: itemsPayload }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) {
+        const okc = (j.sent || []).filter(x => x.ok).length;
+        toast(`RFQ floated · emailed ${okc}/${vendorsPayload.length} vendor(s) · quotes appear here as they reply`, okc ? 'success' : '');
+        setSel({});
+        mutate(s => s, { action: 'float-rfq', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser,
+          detail: `Floated RFQ to ${okc} vendor(s) · ${so.so_no}` });
+      } else { toast(j.error || 'Could not float RFQ (is the mailer configured?)'); }
+    } catch (e) { toast('Network error floating RFQ'); }
+    setBusy(false);
+  };
+
+  const submittedVendors = ((rfq && rfq.vendors) || []).filter(v => v.status === 'submitted');
+  const pendingVendors = ((rfq && rfq.vendors) || []).filter(v => v.status !== 'submitted');
+
+  return (
+    <div className="card mb-2" style={{ borderLeft: '3px solid var(--accent)' }}>
+      <div className="card-header">
+        <div>
+          <h3 className="card-title">Float RFQ to vendors</h3>
+          <div className="tiny muted">Pick vendors, email them a private quote link — no login needed on their side — and their prices land back here.</div>
+        </div>
+      </div>
+      <div className="card-body">
+        {items.length === 0 ? (
+          <div className="empty">Nothing left to quote — every item on this order is already on a vendor PO.</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+              {(state.vendors || []).map(v => {
+                const already = floatedIds.has(v.id);
+                return (
+                  <button key={v.id} className={sel[v.id] ? 'btn btn-primary btn-sm' : 'btn btn-sm'}
+                    onClick={() => toggleVendor(v.id)} title={already ? 'Already floated to this vendor — pick again to re-send' : ''}>
+                    {sel[v.id] && <Icon name="check" size={11}/>}{v.name}{already && <span className="tiny" style={{ marginLeft: 4, opacity: .7 }}>· floated</span>}
+                  </button>
+                );
+              })}
+              {!pickable.length && !state.vendors.length && <span className="tiny muted">No vendors yet — add one from Vendors.</span>}
+            </div>
+            <button className="btn btn-primary btn-sm" disabled={busy || !Object.keys(sel).length} onClick={() => doFloat()}>
+              <Icon name="mail" size={12}/>{busy ? 'Sending…' : `Float RFQ · ${items.length} item(s) · ${Object.keys(sel).length || 0} vendor(s)`}
+            </button>
+          </>
+        )}
+
+        {rfq && (pendingVendors.length > 0 || submittedVendors.length > 0) && (
+          <div className="mt-2">
+            <table className="t">
+              <thead><tr><th>Vendor</th><th>Status</th><th className="num">Quoted total</th><th></th></tr></thead>
+              <tbody>
+                {submittedVendors.map(v => {
+                  const total = (v.items || []).reduce((s, it) => s + (Number(it.qty) || 0) * (Number((v.prices || {})[it.product_id]) || 0), 0);
+                  return (
+                    <tr key={v.vendor_id}>
+                      <td>{(getVendor(v.vendor_id) || {}).name || v.name}</td>
+                      <td><span className="badge success dot">Quoted</span></td>
+                      <td className="num mono">{inr(total)}</td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button className="btn btn-primary btn-sm" onClick={() => createPOFromRFQQuote(so, v, { state, mutate, toast, getVendor })}>
+                          <Icon name="cart" size={12}/>Create Vendor PO
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {pendingVendors.map(v => (
+                  <tr key={v.vendor_id}>
+                    <td>{(getVendor(v.vendor_id) || {}).name || v.name}</td>
+                    <td><span className="badge dot">Waiting on reply</span></td>
+                    <td className="num muted">—</td><td></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {missingEmails && (
+        <MissingVendorEmailsModal vendors={missingEmails} onClose={() => setMissingEmails(null)}
+          onSaved={(collected) => { setMissingEmails(null); doFloat(collected); }}/>
+      )}
+    </div>
+  );
+}
+window.SORfqPanel = SORfqPanel;
+
 function ProcurementTab({ so }) {
   const { state, navigate, currentUser, getUser, getProduct, getVendor, mutate } = useStore();
   const toast = useToast();
@@ -1252,9 +1413,14 @@ function ProcurementTab({ so }) {
           </div>
         </div>
       )}
+      {/* No Sourcing/inquiry means no RFQ path exists for this SO yet — offer
+          the SO's own one. Where a Sourcing record already exists (the usual
+          case for an organization with a Pre-sales inquiry step), that
+          screen's own Float RFQ is the one to use; this stays out of the way. */}
+      {!sourcing && <SORfqPanel so={so}/>}
       {canProcure && (
         <div className="card"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div className="grow"><strong className="small">Procure for this SO</strong><div className="tiny muted">{sourcing ? 'Vendor chosen during the inquiry — raise the Vendor PO.' : 'Raise a Vendor PO for this order.'}</div></div>
+          <div className="grow"><strong className="small">Procure for this SO</strong><div className="tiny muted">{sourcing ? 'Vendor chosen during the inquiry — raise the Vendor PO.' : 'Raise a Vendor PO for this order — pick a vendor and fill in prices yourself, or use Float RFQ above and let a vendor quote.'}</div></div>
           <button className="btn btn-primary" onClick={() => setShowPO(true)}><Icon name="cart" size={13}/>Create Vendor PO</button>
         </div></div>
       )}
