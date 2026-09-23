@@ -1,12 +1,14 @@
-# Float RFQ straight from a Sales Order
+# Vendor comparison & Float RFQ for an SO with no inquiry step
 
 **Who:** Purchase (and PM/Org Admin) — for an organization with no Sourcing/
 inquiry step in front of the SO
-**Where:** the SO detail page → Procurement tab, above "Create Vendor PO"
-**Code:** `SORfqPanel`, `createPOFromRFQQuote` in `frontend/src/screens-so.jsx`;
-the `/float-rfq`, `/quote-load`, `/quote-submit` edge function routes in
-`supabase/functions/main/index.ts` (unchanged except the org-lookup fallback
-below); `rfqs` table
+**Where:** the SO detail page → Procurement tab → "Compare vendors & Float
+RFQ," which opens the same per-item vendor comparison screen Pre-sales
+already uses
+**Code:** the linked-Sourcing block in `ClientRequestDetail.convert()`
+(`frontend/src/screens-client-requests.jsx`); the `canGenerate`/"Compare
+vendors" additions to `ProcurementTab` (`frontend/src/screens-so.jsx`); the
+org-lookup fallback in `supabase/functions/main/index.ts`
 **Test:** `scripts/uitest/so-rfq-check.js`
 
 ---
@@ -14,119 +16,124 @@ below); `rfqs` table
 ## What it is
 
 In the main flow, Pre-sales floats RFQ from a **Sourcing** record (an
-inquiry) — email a shortlist of vendors a private quote link, they price the
-items with no login needed, and their numbers land back on the Sourcing
-screen for comparison.
+inquiry): a per-item grid comparing every candidate vendor's price —
+estimated, or real once quoted — cheapest first, with the chosen vendor
+highlighted; "Add vendor & quote" for a price typed in by hand; "Float RFQ"
+to email a shortlist a private quote link (no login needed on their side);
+their reply lands back in the same grid automatically.
 
-Demo Org's flow has no Sourcing step at all: the client sends a request,
-Purchase converts it **directly** into a Sales Order (see
-[client-requests.md](./client-requests.md)). There was never an inquiry
-record to float RFQ from, so Purchase had no way to email vendors for
-quotes from inside this app at all — this closes that gap, on the SO
-itself: pick vendors, float RFQ, vendors reply, one click turns a reply into
-a real Vendor PO.
+Demo Org's flow has no Sourcing step: the client sends a request, Purchase
+converts it **directly** into a Sales Order (see
+[client-requests.md](./client-requests.md)). There was never an inquiry for
+Purchase to compare vendors or float RFQ from — this gives them the exact
+same screen anyway, by linking a real Sourcing record to the SO the moment
+it is created.
 
 ## How it works
 
-### Floating
+### One real screen, not a second one
 
-`SORfqPanel` (mounted in `ProcurementTab`, gated on `!sourcing` — see below)
-lists every vendor and every item still required on the SO
-(`procComponentList(so)`, the same list `CreateVendorPOModal` already reads).
-Purchase ticks vendors, presses **Float RFQ**, and it calls the *exact* same
-edge function endpoint Sourcing's own Float RFQ calls
-(`POST /functions/v1/main/float-rfq`) — same vendor-quote email, same
-`config.vendor_emails` (an email missing here opens the same
-`MissingVendorEmailsModal` Sourcing's screen built, reused rather than
-copied), same `rfqs` table row. The only thing that differs is what `src_id`
-points at: **this SO's own `id`**, not an inquiry's.
+`ClientRequestDetail.convert()` builds a `sourcings` row alongside the new
+SO — same `lines` shape an SO's own bundle lines already use (`{bundle_qty,
+components: [{product_id, qty}]}`, so every existing reader of a Sourcing's
+lines needs no change at all) — and sets `converted_so_id` to the new SO's
+id. `soSourcing(state, soId)` (`screens-procurement.jsx`) already finds a
+Sourcing by exactly that field; nothing about that lookup is dm-specific.
 
-### Where the response lands
+Two things make it a genuine **workspace**, not a second customer-facing
+inquiry:
 
-A vendor's reply is stored on the `rfqs` row exactly as it always has been
-(`vendors[].prices`, `vendors[].status`). `SORfqPanel` reads
-`state.rfqs.find(r => r.so_id === so.id)` directly — there is no
-Sourcing-specific reconciliation step to wire up, because the row was never
-tied to a Sourcing record to begin with. A vendor who has replied shows their
-quoted total and a **Create Vendor PO** button; one still waiting shows
-"Waiting on reply."
+- **`status: 'Vendor Sourcing'`, never `'Converted'`.** `locked = src.status
+  === 'Converted'` (`screens-sourcing.jsx`) hides every action button —
+  Add vendor & quote, Float RFQ, Allocate, Save quotation — the instant a
+  Sourcing is marked Converted. Using any other status keeps the whole
+  screen live.
+- **Purchase is not in `canConvert`** (`['Sales', 'Pre-sales', 'Org
+  Admin']`), so there is no path from this screen back through "Convert to
+  SO" a second time — the real SO already exists.
 
-### One click, real prices
+From the SO's Procurement tab, a **"Compare vendors & Float RFQ"** card
+appears whenever the linked Sourcing exists and nothing has been picked on
+it yet, opening `sourcing/<id>` — the identical screen shown for the main
+flow's own inquiries. Purchase can tick a different vendor **per line
+item** there exactly as Pre-sales already can, either by typing a price in
+("Add vendor & quote") or by floating RFQ and waiting for a reply.
 
-`createPOFromRFQQuote(so, vendorEntry, ctx)` builds the Vendor PO straight
-from what the vendor actually typed (`vendorEntry.items` × `vendorEntry.prices`)
-— the exact same shape `CreateVendorPOModal.submit()` builds by hand: the MD
-threshold, `Procurement Started` advance on the SO, the same notification
-target. The only difference is `source: 'rfq'` on the PO, so it stays
-distinguishable from one typed in manually. A vendor who has not priced
-anything yet is refused outright rather than handed a ₹0 PO.
+### One click, per vendor, from whatever was picked
 
-### The manual path is untouched
+Once vendors are chosen (`sourcing.picks[product_id] = vendor_id`, one pick
+per item — different items can go to different vendors) or split across
+several (`sourcing.alloc`), the Procurement tab's **"Generate N Vendor
+PO(s)"** button calls the exact function the main flow already uses,
+unmodified: `generateVendorPOsFromSourcing` groups every required product by
+its chosen vendor and raises **one PO per vendor**, each carrying only that
+vendor's items, at the price captured on the Sourcing — the same MD-approval
+threshold and SO-status advance every other Vendor PO already gets.
 
-"Create Vendor PO" — pick a vendor, type prices by hand — is offered right
-next to this panel, unchanged. Float RFQ is not a replacement for it; it is
-another way to get to the same place, useful when Purchase does not already
-know what a vendor will charge.
+### Falling back gracefully
+
+`canGenerate` now also allows the SO to be at `'Draft'` — where a converted
+request's SO sits until its first Vendor PO exists (see
+[client-requests.md](./client-requests.md)'s note on the approval stage
+being bypassed by design). Every organization that creates SOs at `'Pending
+Approval'` directly (`SalesOrderNew`) never has one sitting at `Draft`, so
+this changes nothing for them. The manual **"Create Vendor PO"** button —
+pick one vendor, type prices by hand — stays right next to all of this,
+completely unchanged; Float RFQ is another door into the same room, not a
+replacement.
 
 ## Why it is that way
 
-**Why extend the existing edge function instead of writing a second one?**
-Because the vendor-facing half — the emailed link, the quote form, "no login
-needed," buyer-locked fields — is identical either way; only the question
-"which organization does this belong to" needed a second answer. The
-function already derives the organization from whatever `src_id` points at
-(never from the request body, which is never trusted for tenancy); it now
-tries `sourcings` first — **every existing caller, on every organization, is
-completely unaffected** — and only falls back to `sales_orders` when that
-comes back empty, which only happens when `src_id` was never a Sourcing id in
-the first place.
+**Why link a real Sourcing instead of building a smaller RFQ panel directly
+on the SO?** The first attempt at this was exactly that — a compact panel
+with its own vendor-selection state, calling the Float RFQ edge function
+directly. It worked, but it was a second, thinner implementation of
+something the app already does well: per-item vendor comparison, multiple
+vendors at once, a price typed in or a real quote either way. Linking a real
+Sourcing record means Purchase gets the *exact* screen shown in the main
+flow — the same layout, the same "cheapest first" ordering, the same "Add
+vendor & quote" — for the cost of one object built at conversion time, and
+any future improvement to that screen reaches dm for free too.
 
-**Why does `SORfqPanel` step aside when a Sourcing record already exists for
-the SO?** Because that organization already has a working Float RFQ screen
-for that inquiry, and showing a second one on the SO itself would just be two
-places quoting the same vendors for the same items. `!sourcing` is the exact
-condition "does an RFQ path already exist for this order" — for the main
-flow, where every SO comes from a converted Sourcing, this naturally never
-shows; for dm, where none do, it is the only path there is.
+**Why does the edge function still have the `sales_orders` org-lookup
+fallback, if RFQ is always floated from a real Sourcing now?** It is no
+longer on the critical path for this feature — a real Sourcing id resolves
+through the original `sourcings` lookup exactly like any other inquiry — but
+the fallback is harmless (only reached when that lookup already returned
+nothing) and worth keeping as a safety net for whatever floats RFQ from
+something else next.
 
-**Why is `createPOFromRFQQuote` a stand-alone function rather than a button
-that just opens `CreateVendorPOModal` pre-filled?** Because "in one click" was
-the actual request — pre-filling a modal still asks Purchase to open it,
-check it, and press Create. Building the PO directly, with the same shape and
-the same safety checks (MD threshold, a vendor who quoted nothing is refused)
-gets there in the one click it says it does, without a second, thinner copy
-of `CreateVendorPOModal`'s own logic to keep in sync.
+**Why is `order_type`/`implementation` left off the linked Sourcing's
+object, when `SourcingNew` sets them?** They are not real columns on
+`sourcings` — checked directly against the live schema. `SourcingNew`
+setting them costs nothing (the sync layer silently drops columns that
+don't exist), but there is no reason to carry fields that mean nothing here.
 
 ## Where the code is
 
 | Thing | Where |
 |---|---|
-| `SORfqPanel` — vendor pick, float, response table | `frontend/src/screens-so.jsx` |
-| `createPOFromRFQQuote` — one-click PO from a quote | `frontend/src/screens-so.jsx` |
-| Mounted in `ProcurementTab`, gated on `!sourcing` | `frontend/src/screens-so.jsx` |
-| `MissingVendorEmailsModal` (shared, not duplicated) | `frontend/src/screens-sourcing.jsx`, exported on `window` |
-| The org-lookup fallback | `supabase/functions/main/index.ts`, `/float-rfq` |
-| `rfqs` table (unchanged schema) | `supabase/migrations/` (pre-existing) |
+| The linked Sourcing, built at conversion | `ClientRequestDetail.convert()`, `frontend/src/screens-client-requests.jsx` |
+| `soSourcing`, `vendorPOGroups`, `generateVendorPOsFromSourcing` (unmodified, reused) | `frontend/src/screens-procurement.jsx` |
+| `canGenerate`'s `'Draft'` allowance, "Compare vendors & Float RFQ" entry point | `ProcurementTab`, `frontend/src/screens-so.jsx` |
+| The vendor comparison grid, "Add vendor & quote," Float RFQ (unmodified, reused) | `SourcingDetail`, `frontend/src/screens-sourcing.jsx` |
+| The org-lookup fallback (defensive, not on the critical path) | `supabase/functions/main/index.ts`, `/float-rfq` |
 | Checks | `scripts/uitest/so-rfq-check.js` |
 
 ## Traps
 
-- **`procComponentList` shows the SO's full required quantity, not what is
-  still remaining after existing vendor POs** — the same characteristic
-  `CreateVendorPOModal` already has. Floating RFQ a second time after some
-  items are already on a PO will ask vendors to quote the full amount again,
-  not the shortfall. Not a regression introduced here; consistent with the
-  screen it sits next to. Worth revisiting if it becomes a real point of
-  confusion, but changing it touches `CreateVendorPOModal` too.
-- **The edge function's org-lookup order matters.** The `sourcings` fallback
-  must run — and fail — before the `sales_orders` one is even attempted, or a
-  `src_id` that happens to collide between the two id spaces would resolve to
-  the wrong organization's data. Both use `id text`, and Sourcing ids
-  (`src-…`) and SO ids (`so-…`) do not overlap in practice, but the order is
-  deliberate, not incidental.
-- **Deploying this required restarting the shared SO-PO edge-functions
-  container** (`scripts/ssh-deploy-rfq-edge.py`), which serves Float RFQ for
-  every organization, not only dm. The change itself is additive (a new
-  fallback branch only reached when the existing lookup already returned
-  nothing), and the restart only affects the SO-PO service — verified healthy
-  immediately after via the script's own health probe.
+- **`locked` is keyed on the literal string `'Converted'`.** Any other
+  status value keeps the screen fully interactive — which is exactly what
+  makes this workspace pattern possible, but also means a typo in the
+  status string here would silently either lock a workspace that should
+  stay open, or leave a *genuinely* converted inquiry editable. `'Vendor
+  Sourcing'` is deliberately not a status any other part of the app writes.
+- **`sourcings.lines` and an SO's `lines` share a shape, not a table.**
+  They are independent copies from the moment `convert()` runs — editing
+  one does not touch the other. That is correct here (the Sourcing is a
+  point-in-time comparison workspace, not a live mirror of the order), but
+  is worth remembering if the SO's own lines are edited later.
+- **`order_type` and `implementation` are not real `sourcings` columns** —
+  confirmed against the live schema (`information_schema.columns`), not
+  assumed from `SourcingNew`'s own object literal, which sets them anyway
+  (harmlessly filtered out by the sync layer before the write).

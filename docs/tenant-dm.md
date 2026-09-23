@@ -186,15 +186,21 @@ an earlier version of this flow where Client Facing imported the customer's
 own sheet directly (`canImportSheet` briefly admitted `Client Facing` — it no
 longer does).
 
-Purchase then floats RFQ to vendors by email from the Sourcing module — the
-same "vendor selection + Float RFQ" feature Sales/Pre-sales use elsewhere,
-reused here as an **internal vendor-comparison workspace**, not as a customer
-quote. Purchase can create the Sourcing record itself (a per-organization
-`createSourcing` grant — see below); it never converts one into a second Sales
-Order (`canConvert` stays `['Sales','Pre-sales','Org Admin']`, deliberately
-unchanged, because the SO already exists — the client already ordered).
-Vendor responses land in `sourcings.prices`, exactly as everywhere else the
-feature is used.
+Purchase then compares vendors and floats RFQ by email from the Sourcing
+module — the same per-item comparison grid and Float RFQ Sales/Pre-sales use
+elsewhere, reused here as an **internal vendor-comparison workspace**, not a
+customer quote. Since client-requests.md's design (the client sends a
+request; Purchase converts it directly into the SO), Purchase no longer
+creates this Sourcing record by hand — `ClientRequestDetail.convert()`
+creates and links one automatically, at the moment the SO itself is created
+(see [so-float-rfq.md](./so-float-rfq.md)). It never converts through to a
+second Sales Order (`canConvert` stays `['Sales','Pre-sales','Org Admin']`,
+deliberately unchanged — the SO already exists). Vendor responses land in
+`sourcings.prices`, exactly as everywhere else the feature is used, and
+Purchase raises the Vendor PO(s) straight from the SO's own Procurement tab
+in one click, per vendor.
+`createSourcing` (below) remains as a fallback for a request converted
+before this existed, or any inquiry Purchase wants to start by hand.
 
 Purchase picks a vendor per line and raises the Vendor PO from the real SO via
 `VendorAllocator` — the same screen, same layout, same e-Bill template every

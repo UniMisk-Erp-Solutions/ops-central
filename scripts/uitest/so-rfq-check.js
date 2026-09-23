@@ -1,27 +1,35 @@
 #!/usr/bin/env node
 /**
- * OP Central — Float RFQ straight from a Sales Order, no Sourcing/inquiry
- * record required
+ * OP Central — vendor comparison & Float RFQ for a Sales Order with no
+ * Sourcing/inquiry step in front of it
  * ---------------------------------------------------------------------------
- * Built for dm: the client sends a request, Purchase converts it directly
- * into an SO (see docs/client-requests.md) -- there is never a Sourcing
- * record for Purchase to float RFQ from the way Pre-sales does in the main
- * flow. This reuses the exact same edge function, vendor-quote email/link and
- * config.vendor_emails as Sourcing's own Float RFQ; only src_id changes, from
- * an inquiry's id to the SO's own id.
+ * dm's flow: the client sends a request, Purchase converts it directly into
+ * a Sales Order (see docs/client-requests.md) -- there is never a Sourcing
+ * record for Purchase to compare vendors or float RFQ from, the way
+ * Pre-sales does in the main flow. Rather than build a second, thinner copy
+ * of that screen, convert() links a REAL Sourcing record to the new SO --
+ * purely an internal vendor-comparison workspace, never converted a second
+ * time -- so Purchase gets the exact same per-item vendor comparison grid,
+ * "Add vendor & quote," and Float RFQ that Pre-sales already has, and
+ * generateVendorPOsFromSourcing places the Vendor PO(s) in one click from
+ * whatever was picked, per item, across possibly different vendors. See
+ * docs/so-float-rfq.md.
  *
- *   NO SOURCING, NO PROBLEM     SORfqPanel only needs procComponentList(so)
- *                                and the SO's own id/so_no
- *   ONE CLICK, REAL PRICES      createPOFromRFQQuote builds the PO straight
- *                                from what the vendor actually typed --
- *                                same shape (MD threshold, status, SO
- *                                advance) as CreateVendorPOModal's own PO
- *   THE MANUAL PATH STAYS       "Create Vendor PO" (pick a vendor, type
- *                                prices by hand) is untouched, offered
- *                                alongside, not replaced
- *   THE OLD PATH IS UNCHANGED   where a Sourcing record already exists for
- *                                the SO, this panel steps aside entirely --
- *                                that screen's own Float RFQ is the one to use
+ *   ONE SCREEN, NOT TWO          no parallel RFQ implementation -- the SO
+ *                                 gets a real Sourcing row, `converted_so_id`
+ *                                 pointed at it, and soSourcing() finds it
+ *   NEVER LOCKED                 status is 'Vendor Sourcing', not
+ *                                 'Converted' -- every action button on the
+ *                                 Sourcing screen (`locked = status ===
+ *                                 'Converted'`) stays live
+ *   NEVER RE-CONVERTED           Purchase is not in canConvert
+ *                                 (['Sales','Pre-sales','Org Admin']), so
+ *                                 there is no way to send this workspace
+ *                                 sourcing through "Convert to SO" a second
+ *                                 time
+ *   PER-ITEM VENDORS, ONE CLICK  generateVendorPOsFromSourcing groups by
+ *                                 vendor from `sourcing.picks` (one pick per
+ *                                 product) and raises one PO per vendor
  *
  * Usage: node scripts/uitest/so-rfq-check.js [path-to-frontend]
  */
@@ -70,63 +78,67 @@ const check = (label, got, want) => {
   else console.log(`  ok  ${label}`);
 };
 
-console.log('\n[1] the edge function resolves an organization from the SO too, not only a Sourcing record');
-const idxTs = fs.readFileSync(path.join(dir, '..', 'supabase', 'functions', 'main', 'index.ts'), 'utf8');
-check('the sourcings lookup is still tried first -- every existing caller is unaffected',
-  /sourcings\?id=eq\.".*encodeURIComponent\(src_id\).*organization_id/.test(idxTs), true);
-check('a sales_orders fallback exists for when src_id is not a Sourcing at all',
-  /sales_orders\?id=eq\.".*encodeURIComponent\(src_id\).*organization_id/.test(idxTs), true);
-check('the fallback only runs after the sourcings lookup already failed (still inside the same !orgId guard)',
-  idxTs.indexOf('sales_orders?id=eq.') > idxTs.indexOf('sourcings?id=eq.'), true);
-
-console.log('\n[2] createPOFromRFQQuote builds the exact same PO shape CreateVendorPOModal does');
-const PRODUCTS = [{ id: 'p1', code: 'SW-24', name: '24-Port Switch', sell: 45000, buy: 32000 }];
-const so = { id: 'so-1', so_no: 'SO/DM/2026/0004', status: 'Procurement Started', lines: [] };
-const vendorEntry = {
-  vendor_id: 'v1', name: 'Cisco Systems',
-  items: [{ product_id: 'p1', qty: 2, name: '24-Port Switch' }],
-  prices: { p1: 31000 },
-  status: 'submitted',
-};
-let st = { config: {}, vendor_pos: [], sales_orders: [so], notifications: [], audit: [] };
-const mutate = (fn, audit) => { st = fn(st); if (audit) st.audit = [...st.audit, audit]; };
-const getVendor = id => ({ v1: { id: 'v1', name: 'Cisco Systems' } })[id];
-const toasts = [];
-const po = sandbox.createPOFromRFQQuote(so, vendorEntry, { state: st, mutate, toast: (m, k) => toasts.push([m, k]), getVendor });
-check('the PO is created', !!po, true);
-check('amount is qty × the vendor\'s OWN quoted rate, not the catalogue price', po.amount, 62000);
-check('items carry the quoted rate', po.items, [{ product_id: 'p1', qty: 2, rate: 31000 }]);
-check('it is tagged so it is distinguishable from a manually-typed PO', po.status === 'Issued', true);
-check('source is "rfq"', st.vendor_pos[0].source, 'rfq');
-check('the SO advances out of Draft/Approved the same way manual PO creation does',
-  st.sales_orders[0].status, 'Procurement Started');
-check('a high-value quote goes to MD, exactly like the manual path', (() => {
-  let bigSt = { config: { vendor_po_md_threshold: 10000 }, vendor_pos: [], sales_orders: [{ ...so, id: 'so-2' }], notifications: [], audit: [] };
-  const bigMutate = (fn, a) => { bigSt = fn(bigSt); if (a) bigSt.audit = [...bigSt.audit, a]; };
-  const p = sandbox.createPOFromRFQQuote({ ...so, id: 'so-2' }, vendorEntry, { state: bigSt, mutate: bigMutate, toast: () => {}, getVendor });
-  return p.status;
-})(), 'Pending MD Approval');
-check('a vendor who has not priced anything yet is refused, not given a ₹0 PO', (() => {
-  const emptyVendor = { vendor_id: 'v1', name: 'Cisco', items: [{ product_id: 'p1', qty: 2 }], prices: {}, status: 'submitted' };
-  let st2 = { config: {}, vendor_pos: [], sales_orders: [so], notifications: [], audit: [] };
-  const m2 = (fn) => { st2 = fn(st2); };
-  const r = sandbox.createPOFromRFQQuote(so, emptyVendor, { state: st2, mutate: m2, toast: () => {}, getVendor });
-  return r;
-})(), null);
-
-console.log('\n[3] wired into the screen, offered alongside (not instead of) the manual path');
+const crJsx = fs.readFileSync(path.join(dir, 'src', 'screens-client-requests.jsx'), 'utf8');
 const soJsx = fs.readFileSync(path.join(dir, 'src', 'screens-so.jsx'), 'utf8');
-check('SORfqPanel is mounted in the Procurement tab', /\{!sourcing && <SORfqPanel so=\{so\}\/>\}/.test(soJsx), true);
-check('it steps aside when a Sourcing record already exists for this SO',
-  soJsx.indexOf('{!sourcing && <SORfqPanel') < soJsx.indexOf("Create Vendor PO</button>"), true);
-check('the manual "Create Vendor PO" button is still there, untouched',
-  /Create Vendor PO<\/button>/.test(soJsx), true);
-check('it reuses the SAME MissingVendorEmailsModal Sourcing already built, not a second copy',
-  /window\.MissingVendorEmailsModal = MissingVendorEmailsModal;/.test(fs.readFileSync(path.join(dir, 'src', 'screens-sourcing.jsx'), 'utf8')), true);
-check('the panel calls the SAME edge function endpoint Sourcing\'s Float RFQ calls',
-  /\/functions\/v1\/main\/float-rfq/.test(soJsx), true);
-check('src_id sent is the SO\'s own id, not an inquiry id',
-  /src_id: so\.id, src_no: so\.so_no/.test(soJsx), true);
 
-console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - Purchase can float RFQ straight from an SO with no inquiry, and place the vendor PO in one click from their reply');
+console.log('\n[1] convert() links a real Sourcing record, not a second RFQ implementation');
+check('a Sourcing is built alongside the SO', /const linkedSourcing = \{/.test(crJsx), true);
+check('it points at the new SO via converted_so_id -- the same field soSourcing() reads',
+  /converted_so_id: newSO\.id/.test(crJsx), true);
+check('lines are passed through unchanged -- same {bundle_qty, components} shape an SO already uses',
+  /lines, picks: \{\}, prices: \{\}, alloc: \{\}, margin: \{\}, quote_vendors: \[\]/.test(crJsx), true);
+check('status is NOT Converted -- that would lock every action button on the Sourcing screen',
+  /status: 'Vendor Sourcing'/.test(crJsx), true);
+check('it is pushed into sourcings the same way products/categories/boms already are',
+  /sourcings: \[linkedSourcing, \.\.\.\(s\.sourcings \|\| \[\]\)\]/.test(crJsx), true);
+check('no order_type/implementation fields -- those are not real sourcings columns (verified against the live schema)',
+  /created_by: currentUser \|\| null,\s*\n\s*lines, picks: \{\}/.test(crJsx), true);
+
+console.log('\n[2] "Vendor Sourcing" behaves exactly like any other unlocked Sourcing record');
+const srcJsx = fs.readFileSync(path.join(dir, 'src', 'screens-sourcing.jsx'), 'utf8');
+check('locked is keyed on status === Converted specifically, so "Vendor Sourcing" is never locked',
+  /const locked = src\.status === 'Converted';/.test(srcJsx), true);
+check('Purchase is not in canConvert -- cannot send this workspace sourcing through "Convert to SO" a second time',
+  /const canConvert = \['Sales', 'Pre-sales', 'Org Admin'\]\.includes\(role\);/.test(srcJsx), true);
+check('the vendor comparison table only needs lines to have content, which it always does here',
+  /const hasSupply = \(src\.lines \|\| \[\]\)\.length > 0;/.test(srcJsx), true);
+
+console.log('\n[3] the SO Procurement tab finds it and offers one-click PO generation, per vendor');
+check('soSourcing() is unchanged -- finds by converted_so_id, nothing dm-specific needed', (() => {
+  const state = { sourcings: [{ id: 'src-1', converted_so_id: 'so-1' }, { id: 'src-2', converted_so_id: 'so-2' }] };
+  return sandbox.soSourcing(state, 'so-2').id;
+})(), 'src-2');
+check("canGenerate now also allows 'Draft' -- where a converted request's SO sits until its first Vendor PO exists",
+  /const canGenerate = canProcure && sourcing && linkedPOs\.length === 0 && \['Draft', 'Approved', 'Procurement Started'\]\.includes\(so\.status\)/.test(soJsx), true);
+check('every existing status this already worked for is still covered', /'Draft', 'Approved', 'Procurement Started'/.test(soJsx), true);
+check('an entry point to the comparison screen shows before anything has been picked yet',
+  /Compare vendors &amp; Float RFQ/.test(soJsx), true);
+check('the manual "Create Vendor PO" path is still offered alongside, untouched',
+  /Create Vendor PO<\/button>/.test(soJsx), true);
+
+console.log('\n[4] generateVendorPOsFromSourcing really does place one PO per vendor, from per-item picks');
+const so = { id: 'so-1', so_no: 'SO/DM/2026/0004', status: 'Draft', lines: [
+  { id: 'l1', bundle_qty: 1, components: [{ product_id: 'p1', qty: 2 }] },
+  { id: 'l2', bundle_qty: 1, components: [{ product_id: 'p2', qty: 1 }] },
+] };
+const sourcing = {
+  id: 'src-1', converted_so_id: 'so-1',
+  picks: { p1: 'v1', p2: 'v2' },              // two DIFFERENT vendors, one per item
+  prices: { p1: { v1: 30000 }, p2: { v2: 9000 } },
+  alloc: {},
+};
+const getProduct = id => ({ p1: { id: 'p1', buy: 32000 }, p2: { id: 'p2', buy: 9500 } })[id];
+let st = { config: {}, vendor_pos: [], sales_orders: [so], notifications: [] };
+const mutate = (fn, a) => { st = fn(st); };
+sandbox.generateVendorPOsFromSourcing(so, sourcing, { state: st, mutate, toast: () => {}, navigate: () => {}, getProduct });
+check('one PO per vendor -- two vendors, two POs', st.vendor_pos.length, 2);
+check('each PO carries only ITS vendor\'s item(s)', st.vendor_pos.map(p => p.items.length).sort(), [1, 1]);
+check('rates come from the quote captured on the sourcing, not the catalogue', (() => {
+  const p1po = st.vendor_pos.find(p => p.vendor_id === 'v1');
+  return p1po.items[0].rate;
+})(), 30000);
+check('the SO advances out of Draft the same way a manually-created PO already does',
+  st.sales_orders[0].status, 'Procurement Started');
+
+console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - Purchase gets the exact same per-item vendor comparison and Float RFQ screen the main flow already has, from an SO with no inquiry of its own');
 process.exit(bad ? 1 : 0);

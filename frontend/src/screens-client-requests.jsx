@@ -539,6 +539,30 @@ function ClientRequestDetail({ reqId }) {
       lines, notes: req.notes || '', extra: { from_client_request: req.id },
     };
 
+    // A linked Sourcing record — purely an internal vendor-comparison
+    // workspace, never a second customer-facing inquiry. This SO has no
+    // Pre-sales step in front of it, so there is otherwise nowhere for
+    // Purchase to compare vendors per item or float RFQ at all; this gives
+    // them the exact same screen the main flow already has, for free.
+    // `lines` is passed through unchanged — a Sourcing's own components
+    // read the identical {bundle_qty, components:[{product_id, qty}]}
+    // shape a Sales Order's lines already use. `converted_so_id` links it
+    // to the real SO (read by soSourcing() in screens-procurement.jsx) —
+    // status is deliberately NOT 'Converted', which would lock every
+    // action on the screen; see docs/so-float-rfq.md.
+    const sourcingId = 'src-creq-' + stamp;
+    const linkedSourcing = {
+      id: sourcingId,
+      src_no: `INQ/FY26/${String(1 + (state.sourcings || []).length).padStart(4, '0')}`,
+      customer_id: req.customer_id, ref: req.request_no, date: TODAY,
+      status: 'Vendor Sourcing',
+      client_req_price: null, our_price: null,
+      notes: `Vendor comparison for ${num} — from ${req.request_no}`,
+      created_by: currentUser || null,
+      lines, picks: {}, prices: {}, alloc: {}, margin: {}, quote_vendors: [],
+      converted_so_id: newSO.id,
+    };
+
     mutate(s => ({
       ...s,
       // Matches the sheet importer's own merge exactly — without this, a
@@ -549,6 +573,7 @@ function ClientRequestDetail({ reqId }) {
       categories: madeCategories.length ? [...s.categories, ...madeCategories] : s.categories,
       boms: Object.keys(madeBoms).length ? { ...s.boms, ...madeBoms } : s.boms,
       sales_orders: [newSO, ...s.sales_orders],
+      sourcings: [linkedSourcing, ...(s.sourcings || [])],
       client_requests: (s.client_requests || []).map(x => x.id === req.id
         ? { ...x, status: 'Converted', converted_so_id: newSO.id } : x),
       notifications: [{
