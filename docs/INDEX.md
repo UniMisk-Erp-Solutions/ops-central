@@ -29,7 +29,7 @@ _Last updated: 2026-09-23_
 | [item-name-mapping.md](./item-name-mapping.md) | The three-name chain | Customer name → our item → vendor part number. Where each is used, how it is learned, batch matching. |
 | [vendor-po-pricing.md](./vendor-po-pricing.md) | Buying and pricing | Assign vendors by group, price history, client price beside vendor price, margin. |
 | [receiving-grn.md](./receiving-grn.md) | Goods in | Stores confirms → Purchase accepts, the receive dialog, VG tracking columns, GRN visibility. |
-| [dispatch-invoicing.md](./dispatch-invoicing.md) | Goods out and billing | Partial dispatch, delivery challan, invoice on dispatch, invoices in the customer's own item names. |
+| [dispatch-invoicing.md](./dispatch-invoicing.md) | Goods out and billing | The Stores Out "ready to dispatch" queue, partial dispatch, delivery challan, invoice on dispatch, invoices in the customer's own item names. |
 | [documents.md](./documents.md) | What we print | PO e-Bill, delivery challan, tax invoice — columns, numbering, preview-equals-paper. |
 | [po-tax.md](./po-tax.md) | Tax on a purchase order | Several taxes stacked per line (GST + TDS + TCS), in bulk or per PO; why the sign and the base matter. |
 | [document-numbering.md](./document-numbering.md) | Every document number | `PO202609001`, `DC…`, `INV…`, `EB…`, the client invoice from their order number, and why numbers cannot collide. |
