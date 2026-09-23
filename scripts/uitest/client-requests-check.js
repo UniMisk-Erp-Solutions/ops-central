@@ -212,5 +212,23 @@ check('soReviewStillOpen is off (never blocks) for every organization without cl
 check('and it does not block when nothing has been dispatched yet -- nothing to review, nothing to block',
   /if \(!r\.items\.length\) return false;/.test(utilsSrc2), true);
 
+console.log('\n[11] every converted line gets a real category — every SO line consumer assumes one exists');
+// screens-so.jsx's Line Items tab calls getCategory(l.category_id).name/.hsn
+// unconditionally (so does screens-billing.jsx, screens-sourcing.jsx,
+// store.jsx, screens-dashboard.jsx) -- the same assumption SalesOrderNew and
+// the sheet importer already satisfy. A live conversion that predated this
+// fix crashed the Line Items tab outright: "Cannot read properties of
+// undefined (reading 'name')".
+check('convert() assigns a category_id on every line, reusing one by name before creating a new one',
+  /const existing = \(state\.categories \|\| \[\]\)\.find\(c => c\.name && c\.name\.toLowerCase\(\) === label\.toLowerCase\(\)\)/.test(crJsx), true);
+check('a new category is created with the sheet importer\'s own id scheme (cat-creq-*)',
+  /const cid = 'cat-creq-' \+ stamp \+ '-' \+ idx/.test(crJsx), true);
+check('the line itself carries category_id, not an empty default forever',
+  /category_id: catFor\[i\.id\] \|\| ''/.test(crJsx), true);
+check('a matching BOM is written too, so "Add line item" can reuse the same recipe later',
+  /const madeBoms = \{\};/.test(crJsx) && /boms: Object\.keys\(madeBoms\)\.length \? \{ \.\.\.s\.boms, \.\.\.madeBoms \} : s\.boms/.test(crJsx), true);
+check('newly-made products/categories/BOMs reach LOCAL state immediately, not only after the next reload',
+  /products: madeProducts\.length \? \[\.\.\.s\.products, \.\.\.madeProducts\] : s\.products/.test(crJsx), true);
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the client sends a request, Purchase maps it and creates the SO, and every other organization never sees any of it');
 process.exit(bad ? 1 : 0);

@@ -1478,3 +1478,7 @@ window.AllocateVendorsModal = AllocateVendorsModal;
 window.SourcingList = SourcingList;
 window.SourcingNew = SourcingNew;
 window.SourcingDetail = SourcingDetail;
+// Reused by the Sales Order's own Float RFQ panel (screens-so.jsx) — an
+// organization can float RFQ straight from the SO, with no inquiry record at
+// all. Same modal, same config.vendor_emails, one definition.
+window.MissingVendorEmailsModal = MissingVendorEmailsModal;
