@@ -1,7 +1,7 @@
 # The check suite
 
 ```bash
-for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering boq keyboard reach roles client-review client-requests; do
+for t in render boot import alloc pricing receive receipt-engine dispatch-invoice status numbering boq keyboard reach roles client-review client-requests dm-ux; do
   node scripts/uitest/$t-check.js frontend
 done
 ```
@@ -47,6 +47,7 @@ broken.
 | `reach-check` | that all 34 screens render **with real work in the tenant**, that nothing carrying a pointer cursor is left out of the tab order, that Down moves on every screen with rows, and that a tab strip is one stop | the engine was right in isolation while the arrows did nothing on half the app. Its first run found two page-whiting crashes: a `const` read above its declaration in `SourcingDetail`, and `new Date(undefined).toISOString()` on an invoice with no date |
 | `boq-check` | free quantity per billing group, oldest-first dispatch allocation, seven-of-ten raises nothing, one invoice per BOQ ever, the Final sweep, and that the expanded per-item figures sum to the summary row | a BOQ that bills twice, or one closed by goods belonging to an earlier BOQ, is money out of the door |
 | `client-requests-check` | that Client Facing's base capabilities carry no `createSO`/`editOwnDraft`, that Purchase's only door into creating an SO is `convertClientRequest`, that the whole route is invisible with `client_order_requests` off (same discipline as `client_acceptance`), that recommendations rank by frequency then recency and never leak across customers, and that document numbering follows the one shared scheme | the client-creates-the-SO design was reversed mid-project — the sheet importer briefly admitted Client Facing, and Client Facing's base `can` briefly carried `createSO` — and a role's `primary` route pointing at a workflow-gated route it could not actually open broke `roles-check`'s "no role lands on a screen it may not open" |
+| `dm-ux-check` | that "ordered before" recommendations render ahead of the free-text fallback in the source, not after it; that one function (`clientReqStatusCopy`) is the only place a request's status is put into words, read by both the list badge and the detail page; that converting a request notifies the specific person who sent it, by `user_id`, not only Purchase; that the WhatsApp/email share links on a delivery challan carry a real text summary and a country-coded number; and that a missing vendor email opens an inline prompt rather than a toast naming a screen the user has to go find | none of these were bugs — they were the "suggest a feature" follow-up to the production-readiness audit, added so the next round of UX polish cannot silently regress once it exists |
 
 ## How to write one
 
