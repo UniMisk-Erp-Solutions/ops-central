@@ -1,10 +1,13 @@
 # Client review — accept or reject what actually arrived
 
 **Who:** Client Facing decides; Purchase watches and closes
-**Where:** the SO detail page's Line Items tab, below the Bill of Materials
+**Where:** the SO detail page's Line Items tab (and SCM Tracking, for a role
+that cannot reach that page — see below)
 **Code:** `frontend/src/screens-client-review.jsx`, the `client_acceptance`
-workflow key, `soClientReview`/`soDispatchedQty` in `frontend/src/utils.jsx`
-**Test:** `scripts/uitest/client-review-check.js`
+workflow key, `soClientReview`/`soDispatchedQty`/`soReviewStillOpen` in
+`frontend/src/utils.jsx`
+**Test:** `scripts/uitest/client-review-check.js`,
+`scripts/uitest/client-requests-check.js` (the invoicing-vs-review ordering)
 
 ---
 
@@ -127,6 +130,7 @@ was a one-line change with no new logic to get wrong.
 | Thing | Where |
 |---|---|
 | `soDispatchedQty`, `soClientReview` | `frontend/src/utils.jsx` |
+| `soReviewStillOpen` — is there still something for the client to decide | `frontend/src/utils.jsx` |
 | `soRejectedOutstanding` — how much more to order | `frontend/src/utils.jsx` |
 | `soUnfulfilled` — how much the client is still owed | `frontend/src/utils.jsx` |
 | `soApplyClientReview`, `soAcceptWholeOrder`, `ClientReviewPanel` | `frontend/src/screens-client-review.jsx` |
@@ -166,6 +170,24 @@ was a one-line change with no new logic to get wrong.
   `soRejectedOutstanding` figure onto both would double it. It is consumed
   from a shared pool as rows are built, oldest first — the same pattern
   `allocBuildRows` already uses for `onPO`/`pooled`.
+- **Invoicing can legitimately outrun the review, and four different places
+  used to let it win permanently.** An organization can run
+  `invoice_on_dispatch` alongside `client_acceptance` — dm does — so an
+  invoice can raise the instant goods leave, before the client has looked at
+  anything. `buildDispatchInvoice`/`buildInvoice`/`buildBoqInvoice`/
+  `buildBoqFinalInvoice` (`screens-billing.jsx`) all force the SO's *stored*
+  status to `'Invoiced'` once an invoice fully covers the order — and because
+  `soAdvanceStatus` only ever moves forward, once `so.status` itself said
+  `'Invoiced'` (later in `SO_LIFECYCLE` than `Pending Client Acceptance`),
+  `soDerivedStatus`'s own review check could never be reached again for that
+  order, no matter how open the review still was. An actual end-to-end run —
+  client request → convert → vendor PO → GRN → dispatch — caught it directly:
+  the status strip jumped straight from "Ready to Dispatch" to "Invoiced,"
+  skipping the review stage entirely even though nothing had been reviewed
+  yet. `soReviewStillOpen(state, so)` is the one function all four now check
+  first; every other organization is unaffected, since it returns `false`
+  immediately when `client_acceptance` is off, or when nothing has been
+  dispatched yet (nothing to review, so nothing to block).
 
 ## After a rejection — Purchase re-procures through the tools they already use
 

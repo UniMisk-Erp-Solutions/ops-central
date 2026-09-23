@@ -166,5 +166,51 @@ check('SCM Tracking accepts a soId to pre-select, rather than always defaulting 
 check("app.jsx wires a scm/:id route",
   /parts\[0\] === 'scm' && parts\[1\]\) Content = <SCMTracking soId=\{parts\[1\]\}\/>/.test(appJsx), true);
 
+console.log('\n[9] a converted SO can actually be invoiced -- unit_price is a real rollup, not 0');
+// _soBilled/buildDispatchInvoice (screens-billing.jsx) read line.unit_price,
+// NOT the component's own sell value, to decide how much of the order is
+// billable. convert() used to hard-code unit_price: 0 on every line -- the
+// component carried the real price, the LINE did not -- so _soSub(so) was
+// always 0 and no client-request-converted order could ever be invoiced, no
+// matter how its items were priced. lineSellOf is the same bundle_qty*sell
+// rollup the sheet importer and EditSOModal already use.
+check('convert() prices the line from its components, not a hard-coded 0',
+  /unit_price: lineSellOf\(components, getProduct\)/.test(crJsx), true);
+check('the old bug pattern is gone', /unit_price: 0, client_name: i\.text/.test(crJsx), false);
+const realComponents = [{ product_id: 'p1', qty: 2, sell: 45000 }];
+check('lineSellOf actually rolls up to a non-zero price for a real item',
+  sandbox.lineSellOf(realComponents, id => ({ sell: 45000 })), 90000);
+const newItemComponents = [{ product_id: 'p2', qty: 1, sell: 0 }];
+check('a brand-new item created on the fly correctly prices at 0, not invented',
+  sandbox.lineSellOf(newItemComponents, id => ({ sell: 0 })), 0);
+
+console.log('\n[10] invoicing at dispatch does not silently outrun an open client review');
+// Discovered by actually running the whole flow end to end: dm runs
+// invoice_on_dispatch AND client_acceptance together, so an invoice can raise
+// the INSTANT goods leave, before the client has looked at anything.
+// buildDispatchInvoice/buildInvoice/buildBoqInvoice/buildBoqFinalInvoice all
+// used to force the SO's STORED status to 'Invoiced' the moment an invoice
+// fully covered the order -- and because soAdvanceStatus only ever moves
+// forward, once so.status itself said 'Invoiced' (later in SO_LIFECYCLE than
+// Pending Client Acceptance), soDerivedStatus's own review check could never
+// be reached again for that order, no matter how open the review still was.
+// A live end-to-end run (client request -> convert -> vendor PO -> GRN ->
+// dispatch) showed the status strip jump straight from "Ready to Dispatch" to
+// "Invoiced" -- skipping the review stage the org had switched on -- because
+// of exactly this.
+const billingJsx = fs.readFileSync(path.join(dir, 'src', 'screens-billing.jsx'), 'utf8');
+check('every invoice-building function checks soReviewStillOpen before forcing status to Invoiced',
+  (billingJsx.match(/\(fully && !soReviewStillOpen\(state, so\)\)/g) || []).length, 4);
+check('no build*Invoice function still force-writes Invoiced unconditionally',
+  /status: fully \? 'Invoiced' : so\.status/.test(billingJsx), false);
+const utilsSrc2 = fs.readFileSync(path.join(dir, 'src', 'utils.jsx'), 'utf8');
+check('soDerivedStatus checks the review BEFORE the invoiced/paid checks, not after',
+  utilsSrc2.indexOf('soReviewStillOpen(state, so)) return \'Pending Client Acceptance\'')
+    < utilsSrc2.indexOf("if (invoiced && paid > 0) return 'Payment Pending'"), true);
+check('soReviewStillOpen is off (never blocks) for every organization without client_acceptance',
+  /if \(!\(typeof wfOn === 'function' && wfOn\('client_acceptance'\)\)\) return false;/.test(utilsSrc2), true);
+check('and it does not block when nothing has been dispatched yet -- nothing to review, nothing to block',
+  /if \(!r\.items\.length\) return false;/.test(utilsSrc2), true);
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the client sends a request, Purchase maps it and creates the SO, and every other organization never sees any of it');
 process.exit(bad ? 1 : 0);

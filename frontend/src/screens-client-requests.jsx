@@ -471,11 +471,18 @@ function ClientRequestDetail({ reqId }) {
     const lines = (req.items || []).map((i, idx) => {
       const pid = idFor[i.id] || (matches[i.id] && matches[i.id].product_id);
       const p = getProduct(pid) || madeProducts.find(mp => mp.id === pid) || {};
+      const components = [{ product_id: pid, qty: Number(i.qty) || 0, sell: Number(p.sell) || 0,
+                             customer_ref: { desc: i.text, unit: p.uom || '' } }];
       return {
-        id: 'l-' + stamp + '-' + idx, bundle_qty: 1, unit_price: 0, client_name: i.text,
-        customer_ref: { desc: i.text },
-        components: [{ product_id: pid, qty: Number(i.qty) || 0, sell: Number(p.sell) || 0,
-                       customer_ref: { desc: i.text, unit: p.uom || '' } }],
+        // unit_price is the bundle's own price — _soBilled/buildDispatchInvoice
+        // (screens-billing.jsx) read THIS, not the component sell values, to
+        // decide how much of the order is billable. Leaving it at 0 (as an
+        // earlier version of this code did) meant the order could never be
+        // invoiced at all, regardless of what its items were actually priced
+        // at — the same bundle_qty*component-sell rollup lineSellOf() already
+        // gives the sheet importer and EditSOModal.
+        id: 'l-' + stamp + '-' + idx, bundle_qty: 1, unit_price: lineSellOf(components, getProduct),
+        client_name: i.text, customer_ref: { desc: i.text }, components,
       };
     });
 
