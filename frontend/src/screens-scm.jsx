@@ -110,9 +110,12 @@ function scmStatusChips(r) {
 // ===========================================================================
 // SCM Tracking — the whole cycle for one SO, quantity by quantity
 // ===========================================================================
-function SCMTracking() {
+function SCMTracking({ soId: soIdFromRoute } = {}) {
   const { state, navigate, getProduct, getCustomer, getSO, getUser, currentUser } = useStore();
-  const [soId, setSoId] = React.useState('');
+  // A link into a specific order (e.g. "View Sales Order" on a converted
+  // client request, for a role that cannot open the SO detail page itself)
+  // pre-selects it here instead of always defaulting to the first order.
+  const [soId, setSoId] = React.useState(soIdFromRoute || '');
   const [q, setQ] = React.useState('');
   const [showDispatch, setShowDispatch] = React.useState(false);
   const [viewDC, setViewDC] = React.useState(null);

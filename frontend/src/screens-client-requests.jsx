@@ -487,7 +487,12 @@ function ClientRequestDetail({ reqId }) {
         )}
         {req.status === 'Converted' && (
           <div className="page-actions">
-            <button className="btn" onClick={() => navigate(`sales-orders/${req.converted_so_id}`)}>
+            {/* Client Facing cannot open the SO detail page (see
+                docs/client-acceptance.md) — send them to SCM Tracking,
+                pre-selected on this order, where the review panel lives too.
+                Every other role goes to the full detail page as before. */}
+            <button className="btn" onClick={() => navigate(role === 'Client Facing'
+              ? `scm/${req.converted_so_id}` : `sales-orders/${req.converted_so_id}`)}>
               <Icon name="arrowRight" size={13}/>View Sales Order
             </button>
           </div>

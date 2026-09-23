@@ -155,5 +155,16 @@ check('viewCustomers survives', sandbox.canDo('Client Facing', 'viewCustomers'),
 check('viewProducts survives', sandbox.canDo('Client Facing', 'viewProducts'), true);
 check('logFollowup survives', sandbox.canDo('Client Facing', 'logFollowup'), true);
 
+console.log('\n[8] "View Sales Order" on a converted request goes somewhere the viewer can actually open');
+const crJsx = fs.readFileSync(path.join(dir, 'src', 'screens-client-requests.jsx'), 'utf8');
+check("Client Facing (who cannot open the SO detail page) is sent to SCM Tracking instead",
+  /navigate\(role === 'Client Facing'\s*\n?\s*\? `scm\/\$\{req\.converted_so_id\}`/.test(crJsx), true);
+check('every other role still gets the full SO detail page',
+  /: `sales-orders\/\$\{req\.converted_so_id\}`/.test(crJsx), true);
+check('SCM Tracking accepts a soId to pre-select, rather than always defaulting to the first order',
+  /function SCMTracking\(\{ soId: soIdFromRoute \}/.test(fs.readFileSync(path.join(dir, 'src', 'screens-scm.jsx'), 'utf8')), true);
+check("app.jsx wires a scm/:id route",
+  /parts\[0\] === 'scm' && parts\[1\]\) Content = <SCMTracking soId=\{parts\[1\]\}\/>/.test(appJsx), true);
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the client sends a request, Purchase maps it and creates the SO, and every other organization never sees any of it');
 process.exit(bad ? 1 : 0);

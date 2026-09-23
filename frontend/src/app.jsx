@@ -65,6 +65,7 @@ function App() {
   else if (route === 'inbox') Content = <ApprovalInbox/>;
   else if (route === 'platform') Content = <PlatformConsole/>;
   else if (route === 'scm') Content = <SCMTracking/>;
+  else if (parts[0] === 'scm' && parts[1]) Content = <SCMTracking soId={parts[1]}/>;
   else if (route === 'mapping') Content = <ItemMapping/>;
   else if (route === 'sales-orders') Content = <SalesOrdersList/>;
   else if (route === 'sales-orders/new') Content = <SalesOrderNew/>;
