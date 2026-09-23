@@ -218,5 +218,43 @@ if (frac && frac.invoice.lines.length) {
   check('nothing received yet, so no fraction invoice (naming covered above)', true, true);
 }
 
-console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - dispatch bills what shipped, in the customer own words');
+console.log('\n[11] a client rejection, re-procured and re-dispatched, never bills the customer twice');
+// r2.so (from [3]) is the SO/FY26/0001 fixture, fully dispatched and fully
+// invoiced (300000, both DCs). The client now rejects 4 of the PSUs Just
+// shipped; Purchase re-orders and re-dispatches exactly 4 replacements.
+// This order was already billed for its full 300000 the first time round --
+// the replacement physical units do not make the customer owe any more, so
+// dispatching them must raise NO second invoice. See docs/client-acceptance.md.
+{
+  sandbox.__opcWorkflow = { client_acceptance: true };
+  // soClientReview sums state.outward_dispatches for "how much ever shipped"
+  // -- sections 1-3 above never bothered populating it (buildDispatchInvoice
+  // only needs the challan passed to it directly), so it has to be filled in
+  // here explicitly with both challans that actually went out, or nothing
+  // reads as dispatched and a reject request has nothing to clamp against.
+  let stRej = { ...STATE2, sales_orders: [r2.so], outward_dispatches: [DC1, DC2] };
+  const mutateRej = (fn) => { stRej = fn(stRej); };
+  sandbox.soApplyClientReview('so-1', { 'p-psu': { accept: 3, reject: 1 } },
+    { mutate: mutateRej, currentUser: 'u1', getUser, toast: () => {}, state: stRej });
+  const soRejected = stRej.sales_orders[0];
+  check('1 PSU is owed back to the client', sandbox.soRejectedOutstanding(stRej, soRejected), { 'p-psu': 1 });
+
+  const dcReplacement = { id: 'dc-4', so_id: 'so-1', dc_no: 'DC/OUT/0004',
+    items: [{ product_id: 'p-psu', qty: 1, name: 'PSU', cust_name: 'POWER SUPPLY 2000W' }] };
+  const rReplacement = sandbox.buildDispatchInvoice(soRejected,
+    { ...stRej, outward_dispatches: [dcReplacement] }, dcReplacement, 'u1', getUser, getProduct);
+  check('no invoice is raised for the replacement dispatch -- the customer already paid for this unit once',
+    rReplacement, null);
+
+  // Purchase places the replacement Vendor PO -- soRejectedOutstanding clears,
+  // independent of whether the invoice question above changes at all.
+  const stReordered = { ...stRej, sales_orders: [soRejected],
+    vendor_pos: [{ id: 'po-orig', so_id: 'so-1', status: 'Issued', items: [{ product_id: 'p-psu', qty: 4 }] },
+                 { id: 'po-replace', so_id: 'so-1', status: 'Issued', items: [{ product_id: 'p-psu', qty: 1 }] }] };
+  check('once the replacement is ordered, nothing more is owed',
+    sandbox.soRejectedOutstanding(stReordered, soRejected), {});
+}
+sandbox.__opcWorkflow = null;
+
+console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - dispatch bills what shipped, in the customer own words, and a rejection re-procured never bills them twice for the same unit');
 process.exit(bad ? 1 : 0);
