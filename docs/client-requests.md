@@ -99,12 +99,14 @@ can override any of them from a dropdown before converting.
    (`nullif(trim(...), '')`), only `product_id` is required. So the next time
    this customer types the same words, it resolves itself.
 
+`convert()` also links a real Sourcing record to the new SO — purely an
+internal vendor-comparison workspace, never converted a second time — so
+Purchase gets the exact per-item vendor comparison grid and Float RFQ the
+main flow already has, even though this order never went through an inquiry.
+See [so-float-rfq.md](./so-float-rfq.md).
+
 From here on it is the existing machinery, completely unchanged: GRN,
-dispatch, client review, close. Procurement itself gets its own door — see
-[so-float-rfq.md](./so-float-rfq.md): since converting a request never
-creates a Sourcing/inquiry record, Purchase floats RFQ straight from the SO's
-own Procurement tab instead of the main flow's Sourcing screen, and can turn
-a vendor's reply into a Vendor PO in one click.
+dispatch, client review, close.
 
 ### UX polish for a non-technical order desk
 
