@@ -698,7 +698,10 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
     subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
-  const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices), status: fully ? 'Invoiced' : so.status };
+  // See soReviewStillOpen() in utils.jsx — don't force the stored status to
+  // 'Invoiced' while the client review is still open.
+  const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices),
+                   status: (fully && !soReviewStillOpen(state, so)) ? 'Invoiced' : so.status };
   return { so: nextSO, invoice, fully };
 }
 
@@ -852,9 +855,13 @@ function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
     subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
+  // Don't force the STORED status to 'Invoiced' while the client review is
+  // still open — see soReviewStillOpen() in utils.jsx. Matters here because
+  // invoice_on_dispatch fires the instant goods leave, potentially before
+  // anyone has looked at what arrived.
   const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY,
                    invoice_amount: _nonConsolidatedTotal(invoices),
-                   status: fully ? 'Invoiced' : so.status };
+                   status: (fully && !soReviewStillOpen(state, so)) ? 'Invoiced' : so.status };
   return { so: nextSO, invoice, fully };
 }
 
@@ -921,7 +928,9 @@ function buildBoqInvoice(so, state, boq, currentUser, getUser, getProduct) {
   const nextSO = {
     ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY,
     invoice_amount: _nonConsolidatedTotal(invoices),
-    status: fully ? 'Invoiced' : so.status,
+    // See soReviewStillOpen() in utils.jsx — a BOQ can complete (and bill) at
+    // dispatch time, same as the direct dispatch-invoice path.
+    status: (fully && !soReviewStillOpen(state, so)) ? 'Invoiced' : so.status,
     // Stamp the invoice onto the BOQ so it can never bill twice.
     extra: { ...(so.extra || {}), boqs: ((so.extra && so.extra.boqs) || []).map(
       b => b.id === boq.id ? { ...b, invoice_no: invoice.no, invoice_id: invoice.id, invoiced_date: TODAY } : b) },
@@ -991,9 +1000,10 @@ function buildBoqFinalInvoice(so, state, currentUser, getUser, getProduct) {
     subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
+  // See soReviewStillOpen() in utils.jsx.
   return { so: { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY,
                  invoice_amount: _nonConsolidatedTotal(invoices),
-                 status: fully ? 'Invoiced' : so.status },
+                 status: (fully && !soReviewStillOpen(state, so)) ? 'Invoiced' : so.status },
            invoice, fully, final: true };
 }
 

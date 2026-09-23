@@ -143,16 +143,23 @@ function soDerivedStatus(state, so) {
   const fullyPaid = invoicedTotal > 0 && paid >= invoicedTotal - 1;
 
   if (fullyPaid) return 'Fully Paid';
-  if (invoiced && paid > 0) return 'Payment Pending';
-  if (invoiced) return 'Invoiced';
   // The client reviewing what arrived sits between delivery and invoicing —
   // and only for an organization that has switched it on. Off, this block
   // never runs and the order behaves exactly as it always has.
-  if (typeof wfOn === 'function' && wfOn('client_acceptance') && anyDispatched) {
-    const review = soClientReview(state, so);
-    if (review.items.length && review.allReviewed && !review.anyRejected) return 'Client Accepted';
-    return 'Pending Client Acceptance';
-  }
+  //
+  // Checked BEFORE invoiced/paid, not after: an organization can legitimately
+  // run invoice_on_dispatch and client_acceptance together (invoicing fires
+  // the moment goods leave, before anyone has looked at what arrived), and
+  // the original ordering here checked `invoiced` first — so the strip jumped
+  // straight to "Invoiced" and a real, unreviewed rejection was never visible
+  // in the status at all, on any order, for as long as billing kept moving.
+  // A review that is still open outranks how far billing has gotten; only a
+  // CLEAN review (or the flag being off) falls through to the billing checks
+  // below.
+  if (anyDispatched && soReviewStillOpen(state, so)) return 'Pending Client Acceptance';
+  if (invoiced && paid > 0) return 'Payment Pending';
+  if (invoiced) return 'Invoiced';
+  if (typeof wfOn === 'function' && wfOn('client_acceptance') && anyDispatched) return 'Client Accepted';
   if (allDispatched) return 'Fully Delivered';
   if (anyDispatched) return 'Partially Delivered';
   if (allReceived) return 'Ready to Dispatch';
@@ -206,6 +213,26 @@ function soClientReview(state, so) {
     anyReviewed: items.some(i => i.accepted > 0.0001 || i.rejected > 0.0001),
     anyRejected: items.some(i => i.rejected > 0.0001),
   };
+}
+
+// Is there still something on this order for the client to decide? Off (or
+// nothing dispatched yet) is never "open" — the same "flag off means exactly
+// as before" rule every client_acceptance consumer follows.
+//
+// Every place that forces an SO's STORED status to 'Invoiced' the moment an
+// invoice fully covers the order has to check this first, on an organization
+// running client_acceptance: soAdvanceStatus only ever moves forward, so once
+// so.status itself says 'Invoiced' — later in SO_LIFECYCLE than Pending
+// Client Acceptance — soDerivedStatus's own review check can never be reached
+// again for that order, no matter how open the review still is. An
+// organization can legitimately invoice at dispatch, before anyone has
+// looked at what arrived (invoice_on_dispatch + client_acceptance together),
+// so this is not a hypothetical ordering.
+function soReviewStillOpen(state, so) {
+  if (!(typeof wfOn === 'function' && wfOn('client_acceptance'))) return false;
+  const r = soClientReview(state, so);
+  if (!r.items.length) return false;   // nothing dispatched yet — nothing to review, so nothing to block
+  return !(r.allReviewed && !r.anyRejected);
 }
 
 // A rejected unit still owes the client one, until it is replaced and
