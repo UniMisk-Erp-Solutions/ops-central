@@ -113,7 +113,14 @@ checks their relative order is unchanged.
 **Why is the panel unconditionally mounted, gated inside itself, rather than
 gated at the call site?** The same reason `BOQPanel` was written that way — one
 place decides whether the feature is on, so there is exactly one thing to get
-right, not one per mount point.
+right, not one per mount point. This paid off directly: the panel is now
+mounted in **two** places — the SO detail page, and `SCMTracking` — and
+neither call site had to know or care whether the feature is on. A role whose
+entire nav is Item Requests and SCM Tracking (Client Facing on a split-stores
+organization) has no way to open an SO detail page at all, so without the
+second mount point `client_acceptance` would have been unreachable for the one
+role it exists for. Because the panel gates itself, adding the second mount
+was a one-line change with no new logic to get wrong.
 
 ## Where the code is
 
@@ -126,6 +133,7 @@ right, not one per mount point.
 | The two new lifecycle stages | `SO_LIFECYCLE` in `frontend/src/utils.jsx` |
 | The gated status-strip badges | `frontend/src/screens-so.jsx` |
 | Confirm & Close (gated on `soUnfulfilled`) | `frontend/src/screens-so.jsx`, next to Hold/Resume |
+| The panel, also mounted on SCM Tracking (for a role that cannot reach the SO detail page) | `frontend/src/screens-scm.jsx`, inside `SCMTracking` |
 | The reappearing row, and its badge | `allocBuildRows`, `VendorAllocator` in `frontend/src/screens-alloc.jsx` |
 | Checks | `scripts/uitest/client-review-check.js` |
 

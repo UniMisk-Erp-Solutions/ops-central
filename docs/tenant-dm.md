@@ -74,6 +74,25 @@ only — re-running it is safe and never touches Microlink or OP Central Demo.
 Re-apply with `SSH_PASSWORD='...' python scripts/ssh-apply-sql.py
 scripts/sql/dm-dummy-test-data.sql`.
 
+Three more scripts, same idempotent/dm-only pattern, each fills a hole the
+first pass left for testing:
+
+- **`scripts/sql/dm-vendor-emails-and-aliases.sql`** — an email per vendor, on
+  the `.example` domain (RFC 2606, reserved, never resolves), so **Float RFQ**
+  can be exercised without any risk of a real inbox being emailed; and a
+  vendor-scope `item_aliases` row per (vendor, product) — each vendor's own
+  invented part number — so a Vendor PO prints real vendor part numbers
+  (`po_item_language: 'vendor'`) instead of falling back to ours with every
+  line flagged "unmapped".
+- **`scripts/sql/dm-historical-orders.sql`** — 3 `Closed` Sales Orders, one
+  each for 3 of the 5 customers, so `clientPastItems()`
+  (`screens-client-requests.jsx`) has something to recommend the very first
+  time someone tries the Item Requests screen — a customer with zero past
+  orders correctly shows zero recommendations, which means the feature could
+  never be demonstrated on a brand-new tenant without this.
+- **`scripts/sql/dm-purchase-invoicing-access.sql`** — the expanded Purchase
+  override, see below.
+
 ## The login
 
 ```
@@ -220,29 +239,101 @@ now reads `canDo(role, 'createSourcing')`, which is what let Purchase be granted
 the capability for this organization alone (below) and have the button actually
 appear.
 
-## Purchase's one extra capability, scoped to this organization only
+## Purchase's extra capabilities, scoped to this organization only
 
-Purchase needs `createSourcing` to float RFQ here, and **only** here — granting
-it in the shared `PERMISSIONS` table would hand every organization's Purchase
-role a "New Inquiry" button that makes no sense in their flow. Instead it is
-written into Demo Org's own `config` row (`config.data.permissions.Purchase`),
-the same per-organization override mechanism the Settings → "Screen access by
-role" editor already uses:
+Purchase does three things here that the base `PERMISSIONS.Purchase` in the
+shared code does not grant — each deliberately kept OUT of the shared table,
+because granting it there would hand every organization's Purchase role a
+button that makes no sense in their own flow:
+
+- **`createSourcing`** — to float RFQ, since this org has no Pre-sales.
+- **`raiseInvoice`, `generateEWB`, `logFollowup`, `viewCustomers`**, plus
+  `invoices` and `collections` in `nav` — dm has no Billing, Collections or
+  Managing Director role, and Client Facing's own nav is deliberately just two
+  pages (below), so with `invoice_on_dispatch` + `e_invoice` +
+  `partial_invoicing` all on, nobody could see, e-invoice or chase a bill that
+  raised itself automatically until this was added. Purchase already "watches
+  and closes" the order (see [client-acceptance.md](./client-acceptance.md));
+  this lets that same role see it through to payment.
+
+All of it lives in Demo Org's own `config` row
+(`config.data.permissions.Purchase`), the same per-organization override
+mechanism the Settings → "Screen access by role" editor already uses:
 
 ```sql
--- config.data.permissions.Purchase.can, for this organization's config row only
-{"createRFQ": true, "selectVendor": true, "createVendorPO": true,
- "doSourcing": true, "viewVendors": true, "viewCost": true,
- "viewProducts": true, "createSourcing": true}
+-- config.data.permissions.Purchase, for this organization's config row only
+{"can": {"createRFQ": true, "selectVendor": true, "createVendorPO": true,
+         "doSourcing": true, "viewVendors": true, "viewCost": true,
+         "viewProducts": true, "createSourcing": true,
+         "convertClientRequest": true,
+         "raiseInvoice": true, "generateEWB": true, "logFollowup": true,
+         "viewCustomers": true},
+ "nav": ["dashboard","inbox","client-requests","sourcing","sales-orders",
+         "godown","transfers","rfq","vendor-pos","grn","vendors","pool",
+         "products","invoices","collections"]}
 ```
 
-One trap in `perm()`'s merge rule made this easy to get wrong: **`can` is a
-whole-object override, not a merge.** Write only `{"createSourcing": true}` and
-every other capability Purchase had disappears — `doSourcing`, `selectVendor`,
-the lot. The override above repeats Purchase's entire base `can` object and adds
-the one new key. `roles-check` asserts the base `PERMISSIONS.Purchase` in the
-shared code carries **no** `createSourcing` — proving this grant lives only in
-Demo Org's own row, never in anything another organization could inherit.
+Two traps, one already learned the hard way here and one just repeated:
+
+- **`can` and `nav` are both whole-object overrides, not a merge.** Write only
+  `{"createSourcing": true}` and every other capability Purchase had
+  disappears — `doSourcing`, `selectVendor`, the lot. Both blocks above repeat
+  Purchase's entire base shape and add only the new keys.
+- **An override freezes at whatever the base role had the day it was
+  written, and silently falls behind every capability added to the base role
+  afterward.** This is exactly what happened: the original `createSourcing`
+  grant above pre-dated `convertClientRequest` being added to the base
+  `PERMISSIONS.Purchase.can`, so Purchase silently lost the only door into
+  converting a client's request into a Sales Order — the "Create Sales Order"
+  button never appeared, for no error a person could see. `roles-check`
+  asserts the base `PERMISSIONS.Purchase` in the shared code carries none of
+  Demo Org's org-specific extras — proving this grant lives only in Demo
+  Org's own row — but it cannot catch THIS class of bug, because the base role
+  gaining a capability is not itself a code change to this org's files.
+  `scripts/ssh-audit-permission-drift.py` exists for exactly that: run it
+  after adding any capability to a base role, and it reports every
+  organization whose override is now missing something the base role has —
+  read-only, for a human to judge (an override can also be a *deliberate*
+  restriction, which only a human can tell apart from an accident).
+
+## Two more gaps a full read-only audit found
+
+An end-to-end walk of every role against the live tenant (not just the code)
+surfaced two more things worth recording.
+
+**Client Facing's two pages didn't include anywhere to review a delivery.**
+`client_acceptance` is on for dm — the client accepts or rejects what arrived,
+and that panel has always lived on the SO detail page. But Client Facing's nav
+is deliberately just `client-requests` and `scm` (below), and `sales-orders`
+is not one of them — so the review panel, and the "View Sales Order" button on
+a Converted request, both led somewhere Client Facing could not open.
+`ClientReviewPanel` is self-gated (see
+[client-acceptance.md](./client-acceptance.md)), so the fix was one line:
+mount it a second time, inside `SCMTracking`. Every other organization is
+unaffected — the panel still renders nothing unless `client_acceptance` is on.
+
+**Dispatch had no capability check at all.** The "Out for delivery" button on
+SCM Tracking opened straight to `OutwardDispatchModal` for any role that could
+merely open the screen — true on every organization, not only this one, and
+harmless everywhere else because only Purchase, Stores, Org Admin and Managing
+Director (`SCM_ROLES`) could reach the screen in the first place. Once Client
+Facing gained SCM Tracking, that stopped being harmless: a desk with
+deliberately no cost, no margin and no operational authority could physically
+ship inventory. `screens-scm.jsx` now gates the button on
+`canDo(role,'dispatch') || SCM_ROLES.includes(role) || Org Admin` —
+`SCM_ROLES` unchanged, so Microlink and OP Central Demo see no difference at
+all; Stores Out reaches it through its own `dispatch` capability; Client
+Facing and Stores In (receiving is not dispatching) do not.
+
+**The formal SO approval stage is bypassed here, and that is correct for this
+org.** An SO from the sheet importer or a converted client request starts at
+`Draft`; nothing in the app moves `Draft → Pending Approval → Approved` —
+Purchase goes straight to the Procurement tab and raises a Vendor PO, and the
+status label self-corrects to `Procurement Started` once that PO exists
+(`soDerivedStatus` in `utils.jsx`). This has always been true for the sheet
+importer too. dm has no Project Manager or Sales role, so there is no one who
+would ever press an "Approve" button anyway — the bypass matches the org's
+own role structure rather than working around it.
 
 ## Traps
 
