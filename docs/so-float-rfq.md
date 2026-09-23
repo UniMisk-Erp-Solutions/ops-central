@@ -157,3 +157,13 @@ don't exist), but there is no reason to carry fields that mean nothing here.
   confirmed against the live schema (`information_schema.columns`), not
   assumed from `SourcingNew`'s own object literal, which sets them anyway
   (harmlessly filtered out by the sync layer before the write).
+- **Every hook `SourcingDetail` owns must be declared before its `if (!src)
+  return <div>...` guard, with no exception.** The component has that one
+  early return partway through its body; a hook added anywhere after it (as
+  `genBusy` briefly was, next to `generateFromHere`) is skipped on every
+  render until `src` loads, then suddenly called once it does — React throws
+  "Rendered more hooks than during the previous render" and the page whites
+  out, every single refresh. `so-rfq-check.js` section [7] statically checks
+  this: no `React.use*()` call may appear in the component's source after
+  that guard. Add new state to the hook block already sitting at the top of
+  the component, never further down near the feature that uses it.

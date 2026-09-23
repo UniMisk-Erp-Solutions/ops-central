@@ -495,6 +495,11 @@ function SourcingDetail({ srcId }) {
   const [showConvert, setShowConvert] = React.useState(false);
   const [showAddVendor, setShowAddVendor] = React.useState(false);
   const [rfqBusy, setRfqBusy] = React.useState(false);
+  // Must sit before the `if (!src) return` below, not next to generateFromHere —
+  // a hook declared after that early return is skipped until src loads, then
+  // suddenly called once it does, which is a "rendered more hooks than during
+  // the previous render" crash on every real refresh.
+  const [genBusy, setGenBusy] = React.useState(false);
   const [floatModal, setFloatModal] = React.useState(null);   // { vendors, itemsPayload, distinctItems, isRefloat, names }
   // Vendors Float RFQ found with no email on file: { vendor_id, name }[] — filled
   // in right here instead of a dead-end toast pointing at a screen the user has
@@ -726,7 +731,6 @@ function SourcingDetail({ srcId }) {
   // the SO's own Procurement tab button calls, so doing it from either screen
   // ends up in the identical place. Saves the vendor picks first, the same way
   // "Save vendor quotation" already does, so nothing typed here is lost.
-  const [genBusy, setGenBusy] = React.useState(false);
   const isSoWorkspace = !!src.converted_so_id;
   const generateFromHere = () => {
     const so = getSO(src.converted_so_id);

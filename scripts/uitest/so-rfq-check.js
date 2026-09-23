@@ -177,5 +177,19 @@ check('two vendors picked, two POs raised', st2.vendor_pos.length, 2);
 check('vendor v1 got the item priced at v1\'s own quote', st2.vendor_pos.find(p => p.vendor_id === 'v1').amount, 11760);
 check('vendor v2 got the item priced at v2\'s own quote', st2.vendor_pos.find(p => p.vendor_id === 'v2').amount, 5600);
 
+console.log('\n[7] every hook SourcingDetail owns comes before its early `if (!src) return` -- a hook declared after it is skipped until src loads then suddenly called once it does ("Rendered more hooks than during the previous render")');
+{
+  const start = srcJsx.indexOf('function SourcingDetail(');
+  const nextFn = srcJsx.indexOf('\nfunction ', start + 1);
+  const body = srcJsx.slice(start, nextFn === -1 ? undefined : nextFn);
+  // Not just /if \(!src\) return/ -- that also matches the guard clauses inside
+  // a useEffect and a helper function further up, which return `;`/`{}` and are
+  // not component-level exits. Only the real early return renders JSX.
+  const earlyReturn = body.search(/if \(!src\) return <div/);
+  check('SourcingDetail has the early-return guard this check depends on', earlyReturn > -1, true);
+  const hooksAfter = [...body.slice(earlyReturn).matchAll(/React\.use(State|Effect|Memo|Callback|Ref|Reducer|Context)\(/g)];
+  check('no React.use*() call appears after the early return', hooksAfter.length, 0);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - Purchase gets the exact same per-item vendor comparison and Float RFQ screen the main flow already has, from an SO with no inquiry of its own');
 process.exit(bad ? 1 : 0);
