@@ -108,6 +108,75 @@ function scmStatusChips(r) {
 }
 
 // ===========================================================================
+// Ready to dispatch — the outward twin of PendingReceiptsPanel (screens-
+// godown.jsx). Receiving already lands a role on a queue of exactly what
+// needs action; dispatch only ever had a per-SO drilldown with a plain
+// dropdown defaulting to whichever order happened to load first — nothing
+// told a dispatcher WHICH order actually had stock sitting in the VG. A
+// role that only dispatches (never opens Sales Orders to go hunting) could
+// open SCM Tracking, land on an unrelated/closed order, and reasonably
+// conclude there was no way to dispatch anything at all.
+//
+// Scoped to `role === 'Stores Out'` specifically — the explicit dispatch-
+// only role a split-stores organization creates for this — rather than
+// canDispatch's broader SCM_ROLES list. Purchase/Stores/Org Admin/Managing
+// Director already had a working path to "Out for delivery" on every
+// organization before this existed, so leaving them exactly as they were
+// (no new panel on their screen) means this changes nothing for any
+// organization that does not use the Stores Out role, including Microlink
+// (procurement_only, no Stores Out user, no permissions override at all).
+function ReadyToDispatchPanel({ role, onDispatch }) {
+  const { state, getCustomer, getProduct } = useStore();
+  if (role !== 'Stores Out') return null;
+
+  const ready = [];
+  (state.sales_orders || []).filter(so => so.status !== 'Cancelled').forEach(so => {
+    const rows = scmLineTotals(state, so).filter(r => r.inVG > 0);
+    if (rows.length) ready.push({ so, rows });
+  });
+  if (!ready.length) return null;
+
+  return (
+    <div className="card mb-2" style={{ borderColor: 'var(--info)' }}>
+      <div className="card-header">
+        <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon name="package" size={14} color="var(--info)"/>
+          Ready to dispatch
+          <span className="badge info dot">{ready.length}</span>
+        </div>
+        <div className="tiny muted">In the Virtual Godown, waiting to go out — pick items and quantity on the next screen</div>
+      </div>
+      <div className="card-body flush">
+        <table className="t">
+          <thead><tr><th>Sales order</th><th>Customer</th><th>Items in stock</th><th className="num">Units</th><th></th></tr></thead>
+          <tbody>
+            {ready.map(({ so, rows }) => {
+              const cust = getCustomer(so.customer_id);
+              const units = rows.reduce((a, r) => a + r.inVG, 0);
+              return (
+                <tr key={so.id}>
+                  <td className="mono small">{so.so_no}</td>
+                  <td className="small">{cust ? cust.name : '—'}</td>
+                  <td className="small" style={{ maxWidth: 380 }}>
+                    {rows.map(r => `${qty(r.inVG)}× ${(getProduct(r.product_id) || {}).name || r.product_id}`).join(', ')}
+                  </td>
+                  <td className="num mono">{units}</td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button className="btn btn-sm btn-primary" onClick={() => onDispatch(so)}>
+                      <Icon name="package" size={12}/>Dispatch</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+window.ReadyToDispatchPanel = ReadyToDispatchPanel;
+
+// ===========================================================================
 // SCM Tracking — the whole cycle for one SO, quantity by quantity
 // ===========================================================================
 function SCMTracking({ soId: soIdFromRoute } = {}) {
@@ -168,6 +237,8 @@ function SCMTracking({ soId: soIdFromRoute } = {}) {
           {so && canDispatch && <button className="btn btn-primary" onClick={() => setShowDispatch(true)}><Icon name="package" size={13}/>Out for delivery</button>}
         </div>
       </div>
+
+      <ReadyToDispatchPanel role={role} onDispatch={pick => { setSoId(pick.id); setShowDispatch(true); }}/>
 
       {!so ? <div className="card"><div className="empty">No orders yet.</div></div> : (
         <>
