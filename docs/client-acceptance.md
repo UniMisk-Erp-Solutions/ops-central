@@ -11,7 +11,9 @@ workflow key, `soClientReview`/`soDispatchedQty`/`soReviewStillOpen`/
 Inbox task in `buildTasks` (`frontend/src/permissions.jsx`)
 **Test:** `scripts/uitest/client-review-check.js`,
 `scripts/uitest/client-requests-check.js` (the invoicing-vs-review ordering),
-`scripts/uitest/so-rfq-check.js` (`canGenerate` reopening after a rejection)
+`scripts/uitest/so-rfq-check.js` (`canGenerate` reopening after a rejection),
+`scripts/uitest/dispatch-invoice-check.js` (a rejection's replacement never
+re-bills the customer)
 
 ---
 
@@ -279,6 +281,24 @@ itself ordered, dispatch is capped by what currently sits in the Virtual
 Godown, and `soDispatchedQty`/`soClientReview` already sum **every** challan
 ever raised — so a third delivery for a product that has shipped twice before
 is visible, and reviewable, exactly like the first.
+
+### The replacement never re-bills the customer
+
+An organization running `invoice_on_dispatch` (dm does) raises the client
+invoice the moment goods leave — including, potentially, before the client
+has reviewed anything. That means the units that later got rejected were
+**already invoiced** the first time they shipped. When Purchase re-procures
+and re-dispatches the replacement, `buildDispatchInvoice` (`screens-
+billing.jsx`) caps every invoice at what the *order* is still owed
+(`_soBilled(so, state) - invoicedSub`) — not at what a specific challan is
+worth — so once an order's full value has been invoiced, every dispatch
+after that, replacement or not, raises **no invoice at all**. The
+`OutwardDispatchModal` toast says so plainly: *"nothing left to invoice on
+this order."* This is correct, not a gap: the client already owes exactly
+the order's contracted value, once; a rejection swaps which physical units
+satisfy it, it never creates a reason to bill twice. Proven directly in
+`dispatch-invoice-check.js` section 11: a fully-invoiced order, a rejection,
+a replacement dispatch, and `buildDispatchInvoice` returns `null`.
 
 ## Still undecided, tracked elsewhere
 

@@ -99,7 +99,9 @@ is why documents already issued still read correctly.
   panel
 - **partial dispatch → Partial invoice**; the last one closes as **Final**
 - **capped** at what is still uninvoiced — a fat-fingered dispatch cannot bill
-  more than the order is worth
+  more than the order is worth. This is also what stops a client-review
+  rejection's replacement shipment from ever billing the customer twice —
+  see [client-acceptance.md](./client-acceptance.md#the-replacement-never-re-bills-the-customer)
 - the **same challan can never be billed twice** (`dc_id` on the invoice)
 - an **unpriced** order raises **no** invoice, not a ₹0 one, and the toast says
   which of the two happened
