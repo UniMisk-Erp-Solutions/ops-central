@@ -83,23 +83,34 @@ item** there exactly as Pre-sales already can, either by typing a price in
 Once vendors are chosen (`sourcing.picks[product_id] = vendor_id`, one pick
 per item — different items can go to different vendors) or split across
 several (`sourcing.alloc`), the Procurement tab's **"Generate N Vendor
-PO(s)"** button calls the exact function the main flow already uses,
-unmodified: `generateVendorPOsFromSourcing` groups every required product by
-its chosen vendor and raises **one PO per vendor**, each carrying only that
+PO(s)"** button calls the exact function the main flow already uses:
+`generateVendorPOsFromSourcing` groups every OUTSTANDING product by its
+chosen vendor and raises **one PO per vendor**, each carrying only that
 vendor's items, at the price captured on the Sourcing — the same MD-approval
 threshold and SO-status advance every other Vendor PO already gets.
+
+"Outstanding" — not "originally required" — since
+[client-acceptance.md](./client-acceptance.md): `vendorPOGroups` now nets the
+order's requirement against whatever is already on a vendor PO for it, then
+adds `soRejectedOutstanding` on top, via `soOutstandingProcurement`. This is
+what lets this exact screen run a **second time** for a client rejection —
+the group's quantity is only ever what is genuinely still owed, never the
+order's full original amount all over again.
 
 ### Falling back gracefully
 
 `canGenerate` now also allows the SO to be at `'Draft'` — where a converted
 request's SO sits until its first Vendor PO exists (see
 [client-requests.md](./client-requests.md)'s note on the approval stage
-being bypassed by design). Every organization that creates SOs at `'Pending
-Approval'` directly (`SalesOrderNew`) never has one sitting at `Draft`, so
-this changes nothing for them. The manual **"Create Vendor PO"** button —
-pick one vendor, type prices by hand — stays right next to all of this,
-completely unchanged; Float RFQ is another door into the same room, not a
-replacement.
+being bypassed by design) — **or** at any later status, if a client
+rejection has left something genuinely outstanding
+(`soRejectedOutstanding(state, so)` is non-empty). Every organization that
+creates SOs at `'Pending Approval'` directly (`SalesOrderNew`), and every
+organization not running `client_acceptance`, never triggers either
+exception, so this changes nothing for them. The manual **"Create Vendor
+PO"** button — pick one vendor, type prices by hand — stays right next to
+all of this, completely unchanged; Float RFQ is another door into the same
+room, not a replacement.
 
 ## Why it is that way
 
@@ -133,12 +144,13 @@ don't exist), but there is no reason to carry fields that mean nothing here.
 | Thing | Where |
 |---|---|
 | The linked Sourcing, built at conversion | `ClientRequestDetail.convert()`, `frontend/src/screens-client-requests.jsx` |
-| `soSourcing`, `vendorPOGroups`, `generateVendorPOsFromSourcing` (unmodified, reused) | `frontend/src/screens-procurement.jsx` |
-| `canGenerate`'s `'Draft'` allowance, "Compare vendors & Float RFQ" entry point | `ProcurementTab`, `frontend/src/screens-so.jsx` |
+| `soSourcing`, `vendorPOGroups`, `generateVendorPOsFromSourcing` (reused) | `frontend/src/screens-procurement.jsx` |
+| `soOutstandingProcurement` — nets `vendorPOGroups`'s requirement against existing Vendor POs, plus `soRejectedOutstanding` | `frontend/src/screens-procurement.jsx` |
+| `canGenerate`'s `'Draft'` allowance and rejection reopening, "Compare vendors & Float RFQ" entry point | `ProcurementTab`, `frontend/src/screens-so.jsx` |
 | The vendor comparison grid, "Add vendor & quote," Float RFQ (unmodified, reused) | `SourcingDetail`, `frontend/src/screens-sourcing.jsx` |
 | `isSoWorkspace`, `generateFromHere` — "Create Vendor PO(s)" in place of "Send to Sales" | `SourcingDetail`, `frontend/src/screens-sourcing.jsx` |
 | The org-lookup fallback (defensive, not on the critical path) | `supabase/functions/main/index.ts`, `/float-rfq` |
-| Checks | `scripts/uitest/so-rfq-check.js` |
+| Checks | `scripts/uitest/so-rfq-check.js`, `scripts/uitest/client-review-check.js` (the rejection re-procurement cycle) |
 
 ## Traps
 

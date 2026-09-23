@@ -328,5 +328,118 @@ check('the importer is Purchase/Org Admin only -- Client Facing sends a request 
 check('the panel is ALSO mounted on SCM Tracking -- a role whose only two pages are Item Requests and SCM Tracking still has somewhere to decide',
   /ClientReviewPanel\s+so=\{so\}/.test(fs.readFileSync(path.join(dir, 'src', 'screens-scm.jsx'), 'utf8')), true);
 
-console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the client can accept or reject what shipped, a rejection can be re-procured, and no other org ever sees any of it');
+console.log('\n[14] the SAME Float RFQ / Vendor PO cycle a rejection needs to reuse -- not just soRejectedOutstanding in isolation');
+// allocBuildRows (VendorAllocator, the older manual bulk-assign tool) already
+// had this wired up. dm's real flow is the linked-Sourcing / SO Procurement
+// tab / Float RFQ cycle instead (see docs/so-float-rfq.md) -- this section
+// proves THAT path re-procures a rejection correctly too, through
+// vendorPOGroups / generateVendorPOsFromSourcing, the exact functions
+// SourcingDetail's "Create Vendor PO(s)" and the SO Procurement tab's
+// "Generate N Vendor PO(s)" both call.
+{
+  const so14 = { id: 'so-14', so_no: 'SO/FY26/0014', customer_id: 'c1', status: 'Procurement Started',
+    lines: [{ id: 'l1', bundle_qty: 1, unit_price: 0, components: [{ product_id: 'p1', qty: 10, sell: 0 }] }],
+    invoices: [], extra: {} };
+  const sourcing14 = { id: 'src-14', converted_so_id: 'so-14', picks: { p1: 'v1' }, prices: { p1: { v1: 100 } }, alloc: {} };
+  let st14 = { products: PRODUCTS, sales_orders: [so14], sourcings: [sourcing14], vendor_pos: [],
+    outward_dispatches: [], notifications: [], audit: [], config: {}, payments: [] };
+  sandbox.__opcWorkflow = ON;
+  const mutate14 = (fn) => { st14 = fn(st14); };
+  const genCtx = () => ({ state: st14, mutate: mutate14, toast: () => {}, navigate: () => {}, getProduct });
+
+  const groupsBefore = sandbox.vendorPOGroups(st14, so14, sourcing14, getProduct);
+  check('before anything is on a PO, the full original 10 is what would be raised',
+    groupsBefore.length && groupsBefore[0].items[0].qty, 10);
+
+  sandbox.generateVendorPOsFromSourcing(so14, sourcing14, genCtx());
+  check('the first PO carries exactly the original 10, at the sourced price',
+    st14.vendor_pos.length === 1 && st14.vendor_pos[0].items[0].qty === 10 && st14.vendor_pos[0].amount, 1000);
+
+  const groupsAfterFullyOrdered = sandbox.vendorPOGroups(st14, so14, sourcing14, getProduct);
+  check('immediately after, nothing more is outstanding -- groups is empty, not the same 10 all over again',
+    groupsAfterFullyOrdered.length, 0);
+
+  // Dispatch all 10, client accepts 6 and rejects 4.
+  st14 = { ...st14, outward_dispatches: [{ id: 'dc14', so_id: 'so-14', items: [{ product_id: 'p1', qty: 10 }] }] };
+  const revCtx = { mutate: mutate14, currentUser: 'u1', getUser, toast: () => {}, get state() { return st14; } };
+  sandbox.soApplyClientReview('so-14', { p1: { accept: 6, reject: 4 } }, revCtx);
+
+  // so14 (the closure captured before soApplyClientReview ran) has no
+  // extra.client_review on it -- must read the freshly-mutated order out of
+  // state, the same way every real caller does.
+  const owed14 = sandbox.soRejectedOutstanding(st14, st14.sales_orders[0]);
+  check('4 units are owed on p1', owed14, { p1: 4 });
+
+  const groupsAfterReject = sandbox.vendorPOGroups(st14, st14.sales_orders[0], sourcing14, getProduct);
+  check('vendorPOGroups now offers exactly the 4 rejected -- not 10 again, not 14',
+    groupsAfterReject.length === 1 && groupsAfterReject[0].items[0].qty, 4);
+  check('it reuses the SAME vendor already picked on this Sourcing -- no re-typing needed',
+    groupsAfterReject[0].vendor_id, 'v1');
+
+  sandbox.generateVendorPOsFromSourcing(st14.sales_orders[0], sourcing14, genCtx());
+  // generateVendorPOsFromSourcing prepends new POs ([...pos, ...s.vendor_pos])
+  // so the just-created replacement is now index 0, the original 10 index 1.
+  check('a SECOND Vendor PO now exists, for exactly the replacement quantity',
+    st14.vendor_pos.length === 2 && st14.vendor_pos[0].items[0].qty, 4);
+  check('the original PO is untouched', st14.vendor_pos[1].items[0].qty, 10);
+
+  const owedAfterReorder = sandbox.soRejectedOutstanding(st14, st14.sales_orders[0]);
+  check('once the replacement PO exists, nothing more is owed', owedAfterReorder, {});
+  const groupsAfterReorder = sandbox.vendorPOGroups(st14, st14.sales_orders[0], sourcing14, getProduct);
+  check('and vendorPOGroups agrees -- back to empty, the cycle closes cleanly',
+    groupsAfterReorder.length, 0);
+}
+
+console.log('\n[15] Purchase sees it land in their own Inbox, not only as a one-time notification');
+{
+  const so15 = { id: 'so-15', so_no: 'SO/FY26/0015', customer_id: 'c1', status: 'Procurement Started',
+    lines: [{ id: 'l1', bundle_qty: 1, unit_price: 0, components: [{ product_id: 'p1', qty: 10, sell: 0 }] }],
+    invoices: [], extra: {} };
+  const withReject = { products: PRODUCTS, customers: [{ id: 'c1', name: 'Acme Corp' }],
+    sales_orders: [so15], sourcings: [], vendor_pos: [], outward_dispatches: [
+      { id: 'dc15', so_id: 'so-15', items: [{ product_id: 'p1', qty: 10 }] },
+    ], notifications: [], audit: [], config: {}, payments: [],
+    // buildTasks walks every one of these for its OTHER task blocks too --
+    // omitting any collection it reads (unrelated to this section) throws
+    // "filter is not a function" deep inside a task this test never asked
+    // for, not a clean failure of the thing actually being checked here.
+    rfqs: [], transfer_requests: [], vendor_invoices: [], vendors: [], users: [getUser()] };
+  sandbox.__opcWorkflow = ON;
+  const mutate15 = (fn2) => { st15 = fn2(st15); };
+  let st15 = withReject;
+  const rev15 = { mutate: mutate15, currentUser: 'u1', getUser, toast: () => {}, get state() { return st15; } };
+  sandbox.soApplyClientReview('so-15', { p1: { accept: 6, reject: 4 } }, rev15);
+
+  // status is 'Procurement Started', which ALSO matches buildTasks' older
+  // "Material Receipt" task block for the same SO -- find() by refId alone
+  // would silently return THAT task instead. kind uniquely picks out this one.
+  const findRejectTask = (tasks) => tasks.find(x => x.kind === 'Rejected — re-order' && x.refId === 'so-15');
+  const tasks15 = sandbox.tasksForRole(st15, 'Purchase', () => {}, () => {}, () => {});
+  const t = findRejectTask(tasks15);
+  check('a task exists for Purchase, naming the order and what was rejected', !!t, true);
+  check('it names the item and quantity', /4× Catalyst/.test(t.detail), true);
+
+  // Purchase raises the replacement -- the task must clear on its own, not
+  // need to be dismissed by hand. soRejectedOutstanding nets the replacement
+  // against onPO BEYOND the original requirement, so the fixture needs the
+  // order's original covering PO (10) present too, same as section [9]'s
+  // ORIGINAL_AND_REPLACEMENT_PO -- a lone +4 PO with no original 10 reads as
+  // "still short of the order's own requirement", not "rejection replaced".
+  st15 = { ...st15, vendor_pos: [
+    { id: 'po-orig15', so_id: 'so-15', status: 'Issued', items: [{ product_id: 'p1', qty: 10 }] },
+    { id: 'po-r15', so_id: 'so-15', status: 'Issued', items: [{ product_id: 'p1', qty: 4 }] },
+  ] };
+  const tasksAfter = sandbox.tasksForRole(st15, 'Purchase', () => {}, () => {}, () => {});
+  check('once the replacement PO exists, the task is gone -- nothing left to remind Purchase about',
+    !!findRejectTask(tasksAfter), false);
+
+  const offSt = { ...st15 };
+  sandbox.__opcWorkflow = OFF;
+  const tasksOff = sandbox.tasksForRole(offSt, 'Purchase', () => {}, () => {}, () => {});
+  check('with the flag off, this task never exists for any organization',
+    tasksOff.some(x => x.id && x.id.indexOf('task-reject-reorder') === 0), false);
+  sandbox.__opcWorkflow = ON;
+}
+
+console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the client can accept or reject what shipped, a rejection can be re-procured through the exact Float RFQ / Vendor PO cycle already used, Purchase is put on notice in their own Inbox, and no other org ever sees any of it');
 process.exit(bad ? 1 : 0);

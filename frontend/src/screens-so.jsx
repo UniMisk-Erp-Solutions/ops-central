@@ -1240,9 +1240,27 @@ function ProcurementTab({ so }) {
   // organization that creates SOs at 'Pending Approval' instead (the sheet
   // importer aside) never has one sitting at Draft, so this changes nothing
   // for them.
+  //
+  // A client rejection reopens this even on an order long past that early
+  // window — status could be 'Pending Client Acceptance' or later by the
+  // time the client has actually looked at anything and rejected some of it.
+  // rejectedOutstanding (soRejectedOutstanding, gated on client_acceptance —
+  // {} everywhere else) is exactly "does Purchase still owe a replacement
+  // order", independent of how far the order's own status has moved on.
   const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
   const groups = sourcing && window.vendorPOGroups ? window.vendorPOGroups(state, so, sourcing, getProduct) : [];
-  const canGenerate = canProcure && sourcing && linkedPOs.length === 0 && ['Draft', 'Approved', 'Procurement Started'].includes(so.status);
+  const rejectedOutstanding = window.soRejectedOutstanding ? window.soRejectedOutstanding(state, so) : {};
+  const hasRejectedOutstanding = Object.keys(rejectedOutstanding).length > 0;
+  // linkedPOs.length === 0 used to be the only guard against re-raising a PO
+  // for the same requirement twice — but that also permanently hid this card
+  // the instant the FIRST Vendor PO existed, which is exactly when a
+  // replacement for a rejection needs it most. groups is now already netted
+  // against every Vendor PO already on this SO (see soOutstandingProcurement
+  // in screens-procurement.jsx), so an empty groups list is itself the
+  // correct "nothing left to raise" signal — linkedPOs no longer needs to
+  // gate this at all.
+  const canGenerate = canProcure && sourcing &&
+    (['Draft', 'Approved', 'Procurement Started'].includes(so.status) || hasRejectedOutstanding);
   const doGenerate = () => window.generateVendorPOsFromSourcing(so, sourcing, { state, mutate, toast, navigate, getProduct });
 
   return (
@@ -1254,6 +1272,11 @@ function ProcurementTab({ so }) {
               <div>
                 <strong className="small">Vendors already selected <span className="mono">{sourcing.src_no}</span></strong>
                 <div className="tiny muted">No retyping needed — generate the Vendor PO(s) below at the compared prices, then receive material as usual.</div>
+                {hasRejectedOutstanding && (
+                  <div className="tiny" style={{ color: 'var(--warning)', marginTop: 2 }}>
+                    Includes {Object.entries(rejectedOutstanding).map(([pid, q]) => `${qty(q)}× ${(getProduct(pid) || {}).name || pid}`).join(', ')} to replace what the client rejected
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn" onClick={() => navigate(`sourcing/${sourcing.id}`)}><Icon name="arrowLeftRight" size={13}/>Compare more / Float RFQ</button>
@@ -1270,13 +1293,25 @@ function ProcurementTab({ so }) {
       )}
       {/* A linked Sourcing exists but nothing has been picked on it yet — the
           entry point into vendor comparison / Float RFQ, for an order that
-          has no Pre-sales inquiry step of its own. */}
-      {sourcing && groups.length === 0 && canProcure && (
+          has no Pre-sales inquiry step of its own.
+          groups.length === 0 alone is not enough to gate this: once
+          soOutstandingProcurement nets against existing Vendor POs, an
+          order that is simply fully covered ALSO has an empty groups list —
+          that is the normal, correct "nothing left to buy" end state, not a
+          reason to invite Purchase back into vendor comparison. Only offer
+          it when there is genuinely something to pick a vendor for: the
+          order's very first pass (no Vendor PO exists yet at all) or a
+          fresh rejection reopening the need. */}
+      {sourcing && groups.length === 0 && canProcure && (linkedPOs.length === 0 || hasRejectedOutstanding) && (
         <div className="card mb-2" style={{ borderLeft: '3px solid var(--accent)' }}>
           <div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <div className="grow">
               <strong className="small">Compare vendors &amp; Float RFQ <span className="mono">{sourcing.src_no}</span></strong>
-              <div className="tiny muted">Pick a vendor per item, or email vendors a quote link and let them price it — same screen either way.</div>
+              <div className="tiny muted">
+                {hasRejectedOutstanding
+                  ? `Client rejected ${Object.entries(rejectedOutstanding).map(([pid, q]) => `${qty(q)}× ${(getProduct(pid) || {}).name || pid}`).join(', ')} — pick a vendor for the replacement, or email vendors a quote link.`
+                  : 'Pick a vendor per item, or email vendors a quote link and let them price it — same screen either way.'}
+              </div>
             </div>
             <button className="btn btn-primary" onClick={() => navigate(`sourcing/${sourcing.id}`)}><Icon name="arrowLeftRight" size={13}/>Open vendor comparison</button>
           </div>

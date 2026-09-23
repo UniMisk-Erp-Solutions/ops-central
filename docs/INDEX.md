@@ -21,7 +21,7 @@ _Last updated: 2026-09-23_
 | File | Topic | What it covers |
 |---|---|---|
 | [tenant-dm.md](./tenant-dm.md) | The `dm` tenant | Demo Org: five roles including a stores team split inward/outward, the `split_stores` profile, how it was provisioned and proved empty, and how to add the next company. |
-| [client-acceptance.md](./client-acceptance.md) | Client review | The client accepts or rejects delivered quantities, item by item or the whole order at once, gated entirely behind a workflow key that is off everywhere else. |
+| [client-acceptance.md](./client-acceptance.md) | Client review | The client accepts or rejects delivered quantities, item by item or the whole order at once; a rejection puts a task in Purchase's Inbox and reopens Float RFQ / Vendor PO generation for exactly the replacement quantity. Gated entirely behind a workflow key that is off everywhere else. |
 | [client-requests.md](./client-requests.md) | The client's own request | The client types a list of what they want instead of creating the SO themselves; Purchase matches it to the catalogue and creates the order. Gated behind the same kind of workflow key, off everywhere else. |
 | [so-float-rfq.md](./so-float-rfq.md) | Float RFQ with no inquiry step | Purchase floats RFQ straight from a Sales Order and creates the Vendor PO in one click from a vendor's reply — for an organization with no Sourcing/inquiry record in front of the SO. Reuses the main flow's own edge function and vendor-quote link. |
 | [microlink-procurement-flow.md](./microlink-procurement-flow.md) | The whole flow | Import → SO → vendor PO → in transit → GRN → VG → dispatch → invoice, and the two hard parts. |

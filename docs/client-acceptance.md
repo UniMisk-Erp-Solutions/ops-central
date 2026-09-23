@@ -1,13 +1,17 @@
 # Client review — accept or reject what actually arrived
 
-**Who:** Client Facing decides; Purchase watches and closes
+**Who:** Client Facing decides; Purchase re-procures a rejection and closes
 **Where:** the SO detail page's Line Items tab (and SCM Tracking, for a role
-that cannot reach that page — see below)
+that cannot reach that page — see below); a rejection also lands in
+Purchase's Inbox and reopens the SO Procurement tab / linked Sourcing
 **Code:** `frontend/src/screens-client-review.jsx`, the `client_acceptance`
-workflow key, `soClientReview`/`soDispatchedQty`/`soReviewStillOpen` in
-`frontend/src/utils.jsx`
+workflow key, `soClientReview`/`soDispatchedQty`/`soReviewStillOpen`/
+`soRejectedOutstanding`/`soUnfulfilled` in `frontend/src/utils.jsx`,
+`soOutstandingProcurement` in `frontend/src/screens-procurement.jsx`, the
+Inbox task in `buildTasks` (`frontend/src/permissions.jsx`)
 **Test:** `scripts/uitest/client-review-check.js`,
-`scripts/uitest/client-requests-check.js` (the invoicing-vs-review ordering)
+`scripts/uitest/client-requests-check.js` (the invoicing-vs-review ordering),
+`scripts/uitest/so-rfq-check.js` (`canGenerate` reopening after a rejection)
 
 ---
 
@@ -78,10 +82,13 @@ anyDispatched, everything decided,
                                               (stays — Purchase needs to look)
 ```
 
-A rejection is not remediated automatically — there is no return/replace flow
-here yet. It is recorded with a quantity and an optional note, the order stays
-at `Pending Client Acceptance` so it keeps Purchase's attention, and Purchase
-decides what to do about it outside the system for now.
+A rejection is not remediated automatically, but it is not a dead end
+either: it is recorded with a quantity and an optional note, the order stays
+at `Pending Client Acceptance` so it keeps Purchase's attention, and — see
+["After a rejection" below](#after-a-rejection--purchase-re-procures-through-the-tools-they-already-use)
+— it lands in Purchase's own Inbox and reopens the exact Float RFQ / Vendor
+PO screens they already used for the original order, not a manual process
+outside the system.
 
 ### Confirm & Close
 
@@ -138,8 +145,11 @@ was a one-line change with no new logic to get wrong.
 | The gated status-strip badges | `frontend/src/screens-so.jsx` |
 | Confirm & Close (gated on `soUnfulfilled`) | `frontend/src/screens-so.jsx`, next to Hold/Resume |
 | The panel, also mounted on SCM Tracking (for a role that cannot reach the SO detail page) | `frontend/src/screens-scm.jsx`, inside `SCMTracking` |
-| The reappearing row, and its badge | `allocBuildRows`, `VendorAllocator` in `frontend/src/screens-alloc.jsx` |
-| Checks | `scripts/uitest/client-review-check.js` |
+| The reappearing row, and its badge (no linked Sourcing) | `allocBuildRows`, `VendorAllocator` in `frontend/src/screens-alloc.jsx` |
+| `soOutstandingProcurement` — the linked-Sourcing path's version of "how much more, right now" | `frontend/src/screens-procurement.jsx`, feeding `vendorPOGroups` |
+| `canGenerate` reopening the SO Procurement tab's Float RFQ / Generate cards past their normal status window | `ProcurementTab` in `frontend/src/screens-so.jsx` |
+| The Purchase Inbox task, clearing itself once re-ordered | `buildTasks` in `frontend/src/permissions.jsx` |
+| Checks | `scripts/uitest/client-review-check.js` (sections 9–10 for `soRejectedOutstanding`/`soUnfulfilled`/`allocBuildRows`, 14–15 for the linked-Sourcing cycle and the Inbox task), `scripts/uitest/so-rfq-check.js` |
 
 ## Traps
 
@@ -188,17 +198,43 @@ was a one-line change with no new logic to get wrong.
   first; every other organization is unaffected, since it returns `false`
   immediately when `client_acceptance` is off, or when nothing has been
   dispatched yet (nothing to review, so nothing to block).
+- **`generateVendorPOsFromSourcing` prepends, it does not append** —
+  `vendor_pos: [...pos, ...s.vendor_pos]`. A replacement PO for a rejection
+  always lands at index 0, ahead of the original order it is replacing part
+  of, not after it. Fine for every real reader (everything here is looked up
+  by `so_id`/`product_id`, never by array position) but `client-review-
+  check.js`'s own fixtures had to account for it explicitly, and any future
+  test asserting "the Nth Vendor PO" needs to as well.
 
 ## After a rejection — Purchase re-procures through the tools they already use
 
 A reject is not a dead end. The item's status badge in this panel reads
 **Rejected** (or **Partly rejected**) to whoever is looking — Purchase
-included — and from there Purchase does exactly what they would for any other
-outstanding requirement: float RFQ, or pick a vendor directly and place the PO
-again, through the same Procurement / Vendor Allocation screen every order
-uses. Nothing about *that* screen is specific to a rejection — it is specific
-to this: the row for a fully-covered item **reappears**, because a rejection
-is treated as one more unit the order needs.
+included — a notification goes to Purchase the moment it is recorded, and a
+task lands in Purchase's own **Inbox** (`buildTasks`, `frontend/src/
+permissions.jsx`) naming the order, the item and the quantity, with a button
+straight into whichever screen actually re-procures it. The task clears
+itself the moment a replacement is ordered — nothing to dismiss by hand.
+
+From there Purchase does exactly what they would for any other outstanding
+requirement, through whichever of these two doors this organization's order
+went through in the first place:
+
+- **A linked Sourcing (dm's flow, [so-float-rfq.md](./so-float-rfq.md))** —
+  the SO Procurement tab's "Vendors already selected" card reappears (with an
+  amber note explaining why — *"Includes N unit(s) to replace what the client
+  rejected"*), pre-priced at the same vendor already chosen, or Purchase can
+  open the linked Sourcing and **float RFQ again** / pick a different vendor
+  through the identical per-item vendor comparison screen used the first
+  time. Nothing about that screen changes for a rejection — it is the same
+  screen, reopened.
+- **No linked Sourcing** — the manual Procurement / Vendor Allocation screen
+  (`VendorAllocator`, `frontend/src/screens-alloc.jsx`) every order can use
+  regardless.
+
+Nothing about either screen is specific to a rejection — it is specific to
+this: the row (or vendor group) for a fully-covered item **reappears**,
+because a rejection is treated as one more unit the order needs.
 
 Two different, deliberately separate questions make this safe:
 
@@ -213,6 +249,21 @@ bundles that product appears in. The row carries `replacementQty`, and
 `VendorAllocator` shows a small amber note — *"includes N unit(s) to replace a
 rejection"* — so Purchase understands why an apparently-fulfilled item is
 asking to be bought again.
+
+**`soOutstandingProcurement(state, so)`** (`frontend/src/screens-procurement.jsx`)
+— the same question for the linked-Sourcing path, since `vendorPOGroups` (what
+`generateVendorPOsFromSourcing` actually raises) had no such netting at all
+before this existed: it grouped the order's raw, original requirement every
+time it was called, with nothing stopping it from re-raising the *entire*
+original quantity a second time. It nets the original requirement against
+whatever is already on a vendor PO for this SO (closing the gap up to that
+original amount) and then adds `soRejectedOutstanding` on top (a replacement
+PO placed *beyond* that original amount) — the two never overlap, so nothing
+is double-subtracted or double-owed. On an SO's very first pass, with no
+vendor PO yet, this returns exactly what `soReqComponents` always did — every
+existing caller of `generateVendorPOsFromSourcing`, on every organization,
+only ever calls it once, so this changes nothing about today's behaviour and
+only matters the second time it runs.
 
 **`soUnfulfilled(state, so)`** — *does the client actually have everything the
 order requires, accepted?* Nets against what the client has **accepted**, not

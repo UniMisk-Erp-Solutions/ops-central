@@ -108,8 +108,13 @@ check('soSourcing() is unchanged -- finds by converted_so_id, nothing dm-specifi
   const state = { sourcings: [{ id: 'src-1', converted_so_id: 'so-1' }, { id: 'src-2', converted_so_id: 'so-2' }] };
   return sandbox.soSourcing(state, 'so-2').id;
 })(), 'src-2');
-check("canGenerate now also allows 'Draft' -- where a converted request's SO sits until its first Vendor PO exists",
-  /const canGenerate = canProcure && sourcing && linkedPOs\.length === 0 && \['Draft', 'Approved', 'Procurement Started'\]\.includes\(so\.status\)/.test(soJsx), true);
+// linkedPOs.length === 0 was dropped from this gate in the rejection-reorder
+// fix (see client-acceptance-check.js) -- canGenerate no longer goes false
+// forever the instant the first Vendor PO exists, since groups itself (now
+// netted against existing POs) already answers "is there still something to
+// raise a PO for".
+check("canGenerate now also allows 'Draft' -- where a converted request's SO sits until its first Vendor PO exists -- and a fresh client rejection, at any later status",
+  /const canGenerate = canProcure && sourcing &&\s*\n\s*\(\['Draft', 'Approved', 'Procurement Started'\]\.includes\(so\.status\) \|\| hasRejectedOutstanding\)/.test(soJsx), true);
 check('every existing status this already worked for is still covered', /'Draft', 'Approved', 'Procurement Started'/.test(soJsx), true);
 check('an entry point to the comparison screen shows before anything has been picked yet',
   /Compare vendors &amp; Float RFQ/.test(soJsx), true);
