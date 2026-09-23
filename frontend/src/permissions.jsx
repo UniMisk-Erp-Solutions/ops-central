@@ -794,6 +794,7 @@ window.featureBlocks = featureBlocks;
 window.workflowBlocks = workflowBlocks;
 window.canAccess = canAccess;
 window.SCM_ROUTES_SET = { scm: true, mapping: true };
+window.SCM_ROLES = SCM_ROLES;
 window.FEATURE_ROUTES = FEATURE_ROUTES;
 window.perm = perm;
 window.canDo = canDo;

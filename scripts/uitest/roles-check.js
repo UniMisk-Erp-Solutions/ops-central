@@ -135,6 +135,30 @@ check('Purchase still can', s.canDo('Purchase', 'viewCost'), true);
 check('Client Facing cannot raise a vendor PO', s.canDo('Client Facing', 'createVendorPO'), false);
 check('and cannot open the vendor list', s.canAccess('Client Facing', 'vendors'), false);
 
+console.log('\n[2b] client review is reachable from the one screen Client Facing has left');
+// client_acceptance is on for this org, so accepting/rejecting what was
+// delivered has to be reachable somewhere in Client Facing's two pages --
+// Sales Orders (where the review panel normally lives) is not one of them.
+const scmJsx = fs.readFileSync(path.join(dir, 'src', 'screens-scm.jsx'), 'utf8');
+check('ClientReviewPanel is mounted on SCM Tracking too, self-gated so every other org is unaffected',
+  /ClientReviewPanel so=\{so\}/.test(scmJsx), true);
+
+console.log('\n[2c] dispatch is a WRITE, and needs its own gate -- not just "can open SCM Tracking"');
+// The "Out for delivery" button used to have no capability check at all: any
+// role that could reach the SCM Tracking route -- which for a split-stores
+// company now includes Client Facing, a desk with deliberately no
+// operational authority -- could physically ship inventory. SCM_ROLES stays
+// exactly as it always has (nothing changes for Microlink or OP Central
+// Demo); dispatch:true is Stores Out's own door.
+check('Stores Out carries the dispatch capability', s.canDo('Stores Out', 'dispatch'), true);
+check('Client Facing does not', s.canDo('Client Facing', 'dispatch'), false);
+check('nor does Stores In -- receiving is not dispatching', s.canDo('Stores In', 'dispatch'), false);
+check('SCM_ROLES is unchanged -- Purchase/Stores/Org Admin/MD keep exactly the access they always had',
+  s.SCM_ROLES ? s.SCM_ROLES.slice().sort() : null,
+  ['Managing Director', 'Org Admin', 'Purchase', 'Stores']);
+check('the button in screens-scm.jsx is gated on it',
+  /so && canDispatch && <button[^>]*onClick=\{\(\) => setShowDispatch\(true\)\}/.test(scmJsx), true);
+
 console.log('\n[3] the existing companies did not move');
 // This is the whole point of the refactor: the historic four roles are exactly
 // what the standard profile still produces.

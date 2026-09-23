@@ -111,11 +111,24 @@ function scmStatusChips(r) {
 // SCM Tracking — the whole cycle for one SO, quantity by quantity
 // ===========================================================================
 function SCMTracking() {
-  const { state, navigate, getProduct, getCustomer, getSO } = useStore();
+  const { state, navigate, getProduct, getCustomer, getSO, getUser, currentUser } = useStore();
   const [soId, setSoId] = React.useState('');
   const [q, setQ] = React.useState('');
   const [showDispatch, setShowDispatch] = React.useState(false);
   const [viewDC, setViewDC] = React.useState(null);
+
+  // Picking up goods and shipping them is a WRITE, not a read of the tracker —
+  // it needs its own gate, separate from who may simply open this screen.
+  // SCM_ROLES stays exactly as it always has (Purchase/Stores/Org
+  // Admin/Managing Director keep the access they already had, on every
+  // organization, unaffected by any per-org customisation); dispatch:true is
+  // the explicit door for a role like Stores Out that is not in that list.
+  // Without this, ANY role that can merely open SCM Tracking — including one
+  // deliberately given no operational authority, like Client Facing on a
+  // split-stores organization — could physically ship inventory.
+  const role = currentUser ? (getUser(currentUser) || {}).role : '';
+  const canDispatch = role === 'Org Admin' || (window.SCM_ROLES && window.SCM_ROLES.includes(role))
+    || (typeof canDo === 'function' && canDo(role, 'dispatch'));
 
   const orders = (state.sales_orders || []).filter(s => s.status !== 'Cancelled');
   const so = soId ? getSO(soId) : (orders[0] || null);
@@ -149,7 +162,7 @@ function SCMTracking() {
           <select className="select" value={so ? so.id : ''} onChange={e => setSoId(e.target.value)} style={{ minWidth: 220 }}>
             {orders.map(o => <option key={o.id} value={o.id}>{o.so_no} · {(getCustomer(o.customer_id) || {}).name || ''}</option>)}
           </select>
-          {so && <button className="btn btn-primary" onClick={() => setShowDispatch(true)}><Icon name="package" size={13}/>Out for delivery</button>}
+          {so && canDispatch && <button className="btn btn-primary" onClick={() => setShowDispatch(true)}><Icon name="package" size={13}/>Out for delivery</button>}
         </div>
       </div>
 
@@ -184,6 +197,14 @@ function SCMTracking() {
             <span className="mono small">{pct}% delivered</span>
             <input className="input" placeholder="Filter items…" value={q} onChange={e => setQ(e.target.value)} style={{ width: 180, height: 28 }}/>
           </div></div>
+
+          {/* Self-gated on wfOn('client_acceptance') — renders null for every
+              organization that has not turned it on. Mounted here (not only on
+              the SO detail page) so a role whose nav is SCM Tracking + Item
+              Requests and nothing else — Client Facing on a split-stores org —
+              can still reach the one screen where they decide anything. See
+              docs/client-acceptance.md. */}
+          {window.ClientReviewPanel && <div className="mb-2"><ClientReviewPanel so={so}/></div>}
 
           <div className="card">
             <div className="card-body flush">

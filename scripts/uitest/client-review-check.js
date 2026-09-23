@@ -325,6 +325,8 @@ const idxHtml = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
 check('the file is actually loaded by the page', /src\/screens-client-review\.jsx/.test(idxHtml), true);
 check('the importer is Purchase/Org Admin only -- Client Facing sends a request instead, see client-requests-check',
   /\['Purchase', 'Org Admin'\]/.test(fs.readFileSync(path.join(dir, 'src', 'screens-import.jsx'), 'utf8')), true);
+check('the panel is ALSO mounted on SCM Tracking -- a role whose only two pages are Item Requests and SCM Tracking still has somewhere to decide',
+  /ClientReviewPanel\s+so=\{so\}/.test(fs.readFileSync(path.join(dir, 'src', 'screens-scm.jsx'), 'utf8')), true);
 
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the client can accept or reject what shipped, a rejection can be re-procured, and no other org ever sees any of it');
 process.exit(bad ? 1 : 0);
