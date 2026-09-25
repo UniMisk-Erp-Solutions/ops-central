@@ -32,7 +32,7 @@ broken.
 | Check | Guards | Written after |
 |---|---|---|
 | `render-check` | every file executes under real Babel; every screen and all 174 role/route combinations render | the app went white on every route — one tenant's partial permissions blob crashed the Sidebar |
-| `boot-check` | boots the real store in jsdom: no demo data on screen, right organization named, nothing written | a tenant saw the demo company's 39 orders and "Brightline" in the topbar |
+| `boot-check` | boots the real store in jsdom: no demo data on screen, right organization named, nothing written; and that `state.users` is exactly this org's own roster — never a user from a mocked "other organization," poisoned into the `.from('users')` fallback specifically to prove the real code path is the org-scoped RPC | a tenant saw the demo company's 39 orders and "Brightline" in the topbar; separately, a master admin's "Act as" role-switcher mixed every organization's users into one flat list, because the bulk user load trusted RLS alone (which correctly gives a master admin everyone) instead of scoping to the org actually being viewed |
 | `import-check` | the real BOQ layout — hierarchy, merged cells, banners, totals, 6 sets vs 36 units | the importer flattened the bill of materials |
 | `alloc-check` | grouping by Po SR, price history, remainders, client price mapping | — |
 | `pricing-check` | price cascade both ways, actual cost beating catalogue, committed vs estimated profit | — |

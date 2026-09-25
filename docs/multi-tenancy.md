@@ -39,6 +39,53 @@ legitimately hold the same product code without colliding.
 
 ---
 
+## Users: one identity, scoped by membership — not by a column on `users`
+
+`public.users` has **no `organization_id` column**. A login's organization(s)
+come entirely from `organization_memberships` (`user_id`, `organization_id`),
+because one email can legitimately belong to more than one org. RLS on
+`users` reflects that: *"see profiles of people you share an org with — a
+master admin sees everyone"* (`shares_org_with`, `021_phase3_tenant_rls.sql`).
+That second half is deliberate — it is what lets the Platform Console assign
+an existing login as a brand-new organization's first admin.
+
+**The trap this created:** the frontend's bulk user load used to be a bare
+`.from('users').select(...)`, trusting RLS alone to scope it. For an ordinary
+single-org user that happened to look fine — but the very first admin
+account ever created automatically becomes a **master admin**
+(`opc_bootstrap_org_for`), and RLS correctly hands a master admin *every*
+active row in the whole platform. That became `state.users` — the array
+`getUser()` and the topbar's "Act as" role-switcher (`shell.jsx`) both read —
+so a master admin's own "test another role" bar showed every organization's
+users mixed into one flat list: initials clashing, a Purchase from one
+tenant sitting next to a Purchase from another.
+
+**Fixed with a scoped RPC, not a stricter RLS policy** — tightening RLS would
+have broken the Platform Console's legitimate cross-org need. Two functions
+now exist (`038_org_scoped_users.sql`):
+
+```
+opc_org_users()        the CALLER's own active_org_id() roster — the new
+                        source for state.users, used everywhere ordinary
+opc_admin_all_users()   every login on the platform, master-admin only —
+                        the one legitimate cross-org read, used ONLY by
+                        NewOrgModal's "assign an existing login as this
+                        org's first admin" picker (screens-platform.jsx),
+                        never leaned on from the general app
+```
+
+Both are scoped through `active_org_id()` / `is_master_admin()`, the same
+functions config/features/workflow already resolve through — "which org am I
+looking at" is answered once, not reinvented per table.
+
+`scripts/uitest/boot-check.js` locks this in: its mocked `.from('users')`
+fallback deliberately answers with a user from a *different* organization
+(`FOREIGN_USER`), and every scenario asserts `state.users` never contains it
+— proving the real code path is the scoped RPC, not the raw table, regardless
+of which mock a future change happens to call.
+
+---
+
 ## Workflow profiles
 
 Behaviour lives in data, so a new kind of company is an INSERT, not a release.

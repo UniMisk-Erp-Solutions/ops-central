@@ -502,7 +502,6 @@ function OrgConfigPanel({ org }) {
 // ---- create organization ----------------------------------------------------
 function NewOrgModal({ onClose, onCreated }) {
   const toast = useToast();
-  const { state } = useStore();
   const [name, setName] = React.useState('');
   const [slug, setSlug] = React.useState('');
   const [sub, setSub] = React.useState('');
@@ -512,6 +511,7 @@ function NewOrgModal({ onClose, onCreated }) {
     Object.fromEntries(PLATFORM_FEATURES.map(f => [f.key, true])));
   const [profile, setProfile] = React.useState('standard');
   const [profiles, setProfiles] = React.useState([]);
+  const [allUsers, setAllUsers] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const baseDomain = (window.OPC_TENANT && window.OPC_TENANT.getAppBaseDomain()) || '';
 
@@ -523,6 +523,22 @@ function NewOrgModal({ onClose, onCreated }) {
       if (!window.OPC_SB) return;
       const r = await window.OPC_SB.rpc('opc_admin_list_workflow_profiles');
       if (!dead && !r.error && Array.isArray(r.data)) setProfiles(r.data);
+    })();
+    return () => { dead = true; };
+  }, []);
+
+  // Every login on the platform, for assigning an EXISTING one as this brand
+  // new org's first admin — deliberately its own dedicated master-admin-only
+  // fetch (opc_admin_all_users), never state.users. state.users is scoped to
+  // the caller's OWN org (see store.jsx / docs/multi-tenancy.md) precisely so
+  // it can never mix another tenant's people into an ordinary screen; this
+  // picker is the one place that legitimately needs the full cross-org list.
+  React.useEffect(() => {
+    let dead = false;
+    (async () => {
+      if (!window.OPC_SB) return;
+      const r = await window.OPC_SB.rpc('opc_admin_all_users');
+      if (!dead && !r.error && Array.isArray(r.data)) setAllUsers(r.data);
     })();
     return () => { dead = true; };
   }, []);
@@ -599,7 +615,7 @@ function NewOrgModal({ onClose, onCreated }) {
       <div className="field mt-2"><label className="field-label">First admin <span className="tiny muted">(optional — an existing login)</span></label>
         <select className="select" value={admin} onChange={e => setAdmin(e.target.value)}>
           <option value="">— assign later —</option>
-          {(state.users || []).map(u => <option key={u.id} value={u.id}>{u.name} · {u.email}</option>)}
+          {allUsers.map(u => <option key={u.id} value={u.id}>{u.name} · {u.email}</option>)}
         </select>
         <div className="tiny muted mt-1">The login must already exist. Create it in Settings → Users, then assign it here.</div>
       </div>
