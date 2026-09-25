@@ -35,6 +35,11 @@ const dir = process.argv[2] || path.join(__dirname, '..', '..', 'frontend');
 // The organization the user actually belongs to — with NOTHING in it.
 const ORG = { id: 'org-ml', name: 'Microlink', slug: 'ml', subdomain: 'ml' };
 const USER = { id: 'u-ml', name: 'ML Admin', email: 'admin@microlink.com', role: 'Org Admin', active: true };
+// A DIFFERENT organization's user. If the app's user-loading ever falls back
+// to (or regresses to) an unscoped `.from('users')` select, this shows up in
+// state.users right alongside USER — exactly the cross-tenant "Act as"
+// switcher clash this file's own mock is set up to catch.
+const FOREIGN_USER = { id: 'u-other-org', name: 'Cross-Tenant Ghost', email: 'ghost@someone-else.com', role: 'Purchase', active: true };
 
 function run(scenario) {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div><div id="probe"></div></body></html>',
@@ -57,9 +62,13 @@ function run(scenario) {
                 intransit_tracking: true, customer_language: true, outward_dispatch: true },
     workflow_profile: 'procurement_only',
   };
+  // opc_org_users is the real call store.jsx now makes for state.users (org-
+  // scoped, not a bare `.from('users')` select) — the mock has to answer it
+  // the same [USER] a `.from('users')` select used to, or the whole app boots
+  // with no current-user profile resolvable at all.
   const rpc = { opc_my_context: CTX, opc_my_features: CTX.features, opc_my_workflow: CTX.workflow,
                 opc_get_config: null, opc_alias_map: {}, opc_admin_list_organizations: [],
-                opc_admin_list_workflow_profiles: [] };
+                opc_admin_list_workflow_profiles: [], opc_org_users: [USER] };
 
   // 'empty-tenant' scenarios: a newly created organization owns nothing.
   // 'populated' : the organization has its OWN rows and must see every one.
@@ -71,7 +80,10 @@ function run(scenario) {
     categories: [{ id: 'own-cat-1', name: 'Microlink Category', hsn: '', gst: 18 }],
     boms: [{ category_id: 'own-cat-1', components: [] }],
   } : {};
-  const rowsFor = (t) => (t === 'users' ? [USER] : (OWN[t] || []));
+  // The `.from('users')` fallback deliberately answers with a DIFFERENT
+  // (wrong) dataset than opc_org_users does — see FOREIGN_USER above. The
+  // real user-loading code must never reach this path at all.
+  const rowsFor = (t) => (t === 'users' ? [USER, FOREIGN_USER] : (OWN[t] || []));
 
   const query = (tableName) => {
     const q = {
@@ -200,6 +212,15 @@ function run(scenario) {
       problems.push(`topbar chip reads "${short}", not this organization`);
     if (writes.length) problems.push(`${writes.length} write(s) to the database: ` +
       writes.slice(0, 3).map(w => `${w.op} ${w.table}`).join(', '));
+    // state.users feeds getUser() everywhere and the "Act as" role-switcher
+    // (shell.jsx) — it must be exactly this org's roster, sourced from
+    // opc_org_users, never the unscoped `.from('users')` fallback this mock
+    // deliberately poisons with FOREIGN_USER.
+    const users = st.users || [];
+    if (users.some(u => u.id === FOREIGN_USER.id))
+      problems.push(`state.users contains a user from a DIFFERENT organization (${FOREIGN_USER.name}) — the "Act as" switcher would show them`);
+    if (!users.some(u => u.id === USER.id))
+      problems.push(`state.users is missing this org's own user (${USER.name})`);
 
     const totalRows = TENANT_TABLES.reduce((a, t) => a + count(st[t]), 0) + count(st.boms);
     // A BOM whose key is a category from seed.js would mean demo data on screen.

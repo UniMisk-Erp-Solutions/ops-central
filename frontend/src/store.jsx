@@ -486,14 +486,22 @@ function StoreProvider({ children }) {
     return () => { cancelled = true; };
   }, [realUserId]);
 
-  // Load user profiles (admin + any created). Members can read all profiles.
+  // Load user profiles — the caller's OWN organization's roster, and only
+  // that org. opc_org_users() is scoped by active_org_id() (the same
+  // function config/features/workflow already resolve through), never a
+  // bare `.from('users')` select: that used to hand back every active row
+  // in the whole platform for a master admin (RLS on users deliberately lets
+  // one see everyone they share NO org with, since a platform admin's own
+  // account is the exception — it is not scoped to any single org). This
+  // array feeds getUser() lookups and the "Act as" role-switcher (shell.jsx)
+  // everywhere in the ordinary app, so it must never mix another tenant's
+  // people into this one's. See docs/multi-tenancy.md.
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!window.OPC_SB || !realUserId) return;
       try {
-        const { data, error } = await window.OPC_SB
-          .from('users').select('id,email,name,role,initials,active').eq('active', true);
+        const { data, error } = await window.OPC_SB.rpc('opc_org_users');
         if (error || !data || cancelled) return;
         if (data.length) setState(prev => ({ ...prev, users: data }));
       } catch (e) {
