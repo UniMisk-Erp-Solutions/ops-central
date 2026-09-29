@@ -1025,7 +1025,7 @@ function VendorPODetail({ poId }) {
 
 // ===== GRN =====
 function GRNList() {
-  const { state, navigate, getVendor, getProduct, getUser, mutate, addToPool, consumeFromPool, currentUser } = useStore();
+  const { state, navigate, getVendor, getSO, getCustomer, getProduct, getUser, mutate, addToPool, consumeFromPool, currentUser } = useStore();
   const toast = useToast();
   const role = (getUser(currentUser) || {}).role;
   // Per-org: standard = Stores accepts what Purchase marked;
@@ -1034,6 +1034,13 @@ function GRNList() {
   const canAccept = flow.approverRoles.includes(role);
   const [busy, setBusy] = React.useState('');
   const [viewRec, setViewRec] = React.useState(null);
+  // Grouped by SO, same as Vendor POs (screens-procurement.jsx, VendorPOList)
+  // — one project's GRNs were scattered across a single flat list with
+  // nothing to tell them apart at a glance. Only this bottom table changes;
+  // the pending-receipts / Master-Pool panels above are untouched.
+  const [grnSearch, setGrnSearch] = React.useState('');
+  const [grnVendorF, setGrnVendorF] = React.useState('');
+  const [grnGroupBySO, setGrnGroupBySO] = React.useState(true);
   // Receipts marked by Purchase/PM at the Virtual Godown, awaiting Stores' acceptance.
   // Stores accepts → GRN + client invoice are posted (via the same receive engine).
   const pending = [];
@@ -1166,33 +1173,95 @@ function GRNList() {
       {viewRec && <PoolReceiptModal receipt={viewRec.rec} so={viewRec.so} onClose={() => setViewRec(null)}/>}
 
       <div className="card">
-        <div className="card-body flush">
-          <table className="t">
-            <thead><tr>
-              <th>GRN No</th><th>Vendor PO</th><th>Received Date</th><th>LR No</th>
-              <th className="num">Lines</th><th>Status</th><th></th>
-            </tr></thead>
-            <tbody>
-              {state.grns.map(g => {
-                const po = state.vendor_pos.find(p => p.id === g.po_id);
-                return (
-                  <tr key={g.id} onClick={() => navigate(`grn/${g.id}`)} style={{ cursor: 'pointer' }}>
-                    <td><a className="mono">{g.grn_no}</a></td>
-                    <td className="mono">{po?.po_no}</td>
-                    <td className="mono small">{fmtDate(g.date)}</td>
-                    <td className="mono small">{g.lr}</td>
-                    <td className="num">{g.items.length}</td>
-                    <td><span className="badge success dot">Posted</span></td>
-                    <td><Icon name="chevronRight" size={12}/></td>
-                  </tr>
-                );
-              })}
-              {state.grns.length === 0 && (
-                <tr><td colSpan="7"><div className="empty">No GRNs yet — they appear here once material is received against a Vendor PO.</div></td></tr>
-              )}
-            </tbody>
-          </table>
+        <div className="filter-bar">
+          <input className="input search" placeholder="Search GRN no, vendor PO, vendor, SO, customer, LR…"
+            value={grnSearch} onChange={e => setGrnSearch(e.target.value)} style={{ flex: '0 0 260px' }}/>
+          <select className="select" style={{ width: 150 }} value={grnVendorF} onChange={e => setGrnVendorF(e.target.value)}>
+            <option value="">All vendors</option>
+            {state.vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </select>
+          <div className="grow"/>
+          <button className={`btn ${grnGroupBySO ? 'btn-primary' : ''}`} onClick={() => setGrnGroupBySO(g => !g)}>
+            <Icon name="layers" size={13}/>{grnGroupBySO ? 'Grouped by project' : 'Flat list'}</button>
         </div>
+
+        {(() => {
+          const grnRows = state.grns.filter(g => {
+            const po = state.vendor_pos.find(p => p.id === g.po_id);
+            if (grnVendorF && (!po || po.vendor_id !== grnVendorF)) return false;
+            if (grnSearch) {
+              const v = po && getVendor(po.vendor_id);
+              const so = po && getSO(po.so_id);
+              const cust = so && getCustomer(so.customer_id);
+              const blob = `${g.grn_no} ${po?.po_no || ''} ${v?.name || ''} ${so?.so_no || ''} ${cust?.name || ''} ${g.lr || ''}`.toLowerCase();
+              if (!blob.includes(grnSearch.toLowerCase())) return false;
+            }
+            return true;
+          });
+
+          const Row = (g) => {
+            const po = state.vendor_pos.find(p => p.id === g.po_id);
+            const v = po && getVendor(po.vendor_id);
+            const so = po && getSO(po.so_id);
+            const cust = so && getCustomer(so.customer_id);
+            return (
+              <tr key={g.id} onClick={() => navigate(`grn/${g.id}`)} style={{ cursor: 'pointer' }}>
+                <td><a className="mono">{g.grn_no}</a></td>
+                <td className="mono">{po?.po_no}</td>
+                <td>{v ? v.name : '—'}</td>
+                {!grnGroupBySO && <td className="mono small">{so?.so_no}<div className="tiny muted">{cust?.name}</div></td>}
+                <td className="mono small">{fmtDate(g.date)}</td>
+                <td className="mono small">{g.lr}</td>
+                <td className="num">{g.items.length}</td>
+                <td><span className="badge success dot">Posted</span></td>
+                <td><Icon name="chevronRight" size={12}/></td>
+              </tr>
+            );
+          };
+
+          if (state.grns.length === 0) {
+            return <div className="card-body"><div className="empty">No GRNs yet — they appear here once material is received against a Vendor PO.</div></div>;
+          }
+          if (grnRows.length === 0) {
+            return <div className="card-body"><div className="empty">No GRNs match your search.</div></div>;
+          }
+          if (!grnGroupBySO) {
+            return (
+              <div className="table-wrap"><table className="t"><thead><tr>
+                <th>GRN No</th><th>Vendor PO</th><th>Vendor</th><th>For SO · Customer</th><th>Received Date</th><th>LR No</th>
+                <th className="num">Lines</th><th>Status</th><th></th>
+              </tr></thead><tbody>{grnRows.map(Row)}</tbody></table></div>
+            );
+          }
+          // Grouped by SO (project) — same layout VendorPOList already uses,
+          // so a project's receipts and its vendor POs read the same way.
+          const groups = {};
+          grnRows.forEach(g => {
+            const po = state.vendor_pos.find(p => p.id === g.po_id);
+            const key = (po && po.so_id) || '—';
+            (groups[key] = groups[key] || []).push(g);
+          });
+          return Object.entries(groups).map(([soId, grns]) => {
+            const so = soId !== '—' ? getSO(soId) : null;
+            const cust = so ? getCustomer(so.customer_id) : null;
+            const totalLines = grns.reduce((s, g) => s + g.items.length, 0);
+            return (
+              <div key={soId} style={{ borderTop: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', background: 'var(--bg-subtle, var(--surface))' }}>
+                  <div className="small">
+                    <strong className="mono" onClick={() => so && navigate(`sales-orders/${soId}`)} style={{ cursor: so ? 'pointer' : 'default' }}>{so ? so.so_no : 'Unlinked'}</strong>
+                    {cust && <span className="muted"> · {cust.name}</span>} <span className="muted">· {grns.length} GRN(s)</span>
+                  </div>
+                  <div className="small mono">{totalLines} line(s)</div>
+                </div>
+                <div className="table-wrap"><table className="t"><thead><tr>
+                  <th>GRN No</th><th>Vendor PO</th><th>Vendor</th><th>Received Date</th><th>LR No</th>
+                  <th className="num">Lines</th><th>Status</th><th></th>
+                </tr></thead><tbody>{grns.map(Row)}</tbody></table></div>
+              </div>
+            );
+          });
+        })()}
       </div>
     </div>
   );

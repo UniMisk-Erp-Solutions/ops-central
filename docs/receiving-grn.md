@@ -2,7 +2,8 @@
 
 **Who:** Stores confirm, Purchase accept. (Reversed from the standard flow.)
 **Code:** `screens-godown.jsx`, `screens-procurement.jsx`
-**Tests:** `scripts/uitest/receive-check.js`, `scripts/uitest/receipt-engine-check.js`
+**Tests:** `scripts/uitest/receive-check.js`, `scripts/uitest/receipt-engine-check.js`,
+`scripts/uitest/grn-list-check.js` (the grouped-by-project list)
 
 ---
 
@@ -21,6 +22,27 @@ There is **one** code path. The **acceptor** posts the GRN directly (no point
 asking themselves); anyone else raises a request the acceptor approves. Labels,
 notifications, audit lines and waiting states all follow the setting rather than
 the word "Stores".
+
+## Finding a GRN — grouped by project, same as Vendor POs
+
+The GRN screen's own table (below the pending queues, and the Master-Pool
+panels on a split-stores organization) is **grouped by Sales Order by
+default**, laid out identically to `VendorPOList` — the same header row
+(`SO/FY26/0021 · Customer · N GRN(s)`), the same "Grouped by project / Flat
+list" toggle, the same filter bar. One project's GRNs used to sit scattered
+through a single flat table with nothing to tell them apart; now they read
+the same way its Vendor POs already do, right down to clicking the SO number
+to jump to the order.
+
+The search box matches GRN no, vendor PO no, vendor name, SO no, customer
+name, and LR no — one box, not a separate filter per field, same convention
+`VendorPOList`'s search already uses. A vendor filter sits next to it.
+
+This is layout only: which GRNs exist, how one is accepted, and everything
+under [What posting a receipt does](#what-posting-a-receipt-does) is
+untouched. The three pending-queue mounts above this table
+(`PendingReceiptsPanel`) did not move and are not grouped — they are already
+a queue of exactly what needs action, not a browsing list.
 
 ## Where the pending queue appears
 
