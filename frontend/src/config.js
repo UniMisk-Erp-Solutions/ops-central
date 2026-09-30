@@ -12,11 +12,17 @@
 // snippet injected at deploy) wins; otherwise these dev defaults apply. The
 // anon key is a PUBLIC client key (RLS governs access) — safe to ship. The
 // service-role key must NEVER appear here; it lives only server-side.
-// Public Supabase URL via the Cloudflare tunnel (so-po.unimisk.com → SO-PO Kong
-// on the Coolify host at 192.168.0.18, internal :8000). Works from anywhere
-// (Vercel frontend at ops-central.unimisk.com + LAN). Override via window.OPC_ENV.
+// Public Supabase URL via the Cloudflare tunnel (sopo-backend.unimisk.com →
+// SO-PO Kong on the Coolify host at 192.168.0.18, internal :8000). Works from
+// anywhere (Vercel frontend at ops-central.unimisk.com + LAN). Override via
+// window.OPC_ENV.
+//
+// Was so-po.unimisk.com — that host now 502s (the tunnel target moved). Keep
+// frontend/quote.html's own copy of this URL in sync; it is a standalone page
+// (a vendor's Float RFQ quote link) with no build step and cannot read this
+// file.
 window.OPC_ENV = window.OPC_ENV || {
-  SUPABASE_URL: 'https://so-po.unimisk.com',
+  SUPABASE_URL: 'https://sopo-backend.unimisk.com',
   SUPABASE_ANON_KEY: 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc4MDM4NDg2MCwiZXhwIjo0OTM2MDU4NDYwLCJyb2xlIjoiYW5vbiJ9.0AhbGOMbIybN0azUCAuoriNKGtSwdpznBqCQbZDpxZM',
 
   // --- Multi-tenancy -------------------------------------------------------
