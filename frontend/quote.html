@@ -47,7 +47,9 @@
   <script>
     (function () {
       // Public Supabase edge function (anon key is public by design, RLS-protected).
-      var SB = 'https://so-po.unimisk.com';
+      // Kept in sync with frontend/src/config.js's SUPABASE_URL by hand — this
+      // page has no build step and cannot read that file.
+      var SB = 'https://sopo-backend.unimisk.com';
       var ANON = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc4MDM4NDg2MCwiZXhwIjo0OTM2MDU4NDYwLCJyb2xlIjoiYW5vbiJ9.0AhbGOMbIybN0azUCAuoriNKGtSwdpznBqCQbZDpxZM';
       var SBH = { apikey: ANON, Authorization: 'Bearer ' + ANON };
       var qs = new URLSearchParams(location.search);
