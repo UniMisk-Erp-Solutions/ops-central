@@ -221,5 +221,28 @@ console.log('\n[4] a real, priced bundle still invoices 0 while ONE component is
     [lineState.blockedBy[0].have, lineState.blockedBy[0].need], [0, 1]);
 }
 
-console.log(bad ? `\nFAILED - ${bad} check(s)` : "\nPASS - the Invoicing tab explains WHY nothing is invoiced instead of implying the order is settled, worded for this org's own trigger, for both an unpriced order and a priced one blocked on a missing component");
+console.log('\n[5] a legacy single-invoice order is NOT a third "nothing invoiced" case -- it is already invoiced');
+// Four real production orders (OP Central Demo, Closed, real value, real
+// invoice_no/invoice_amount) looked identical to the two bugs above at first
+// glance -- invoices.length === 0 -- until checking so.invoice_no too. They
+// predate the invoices[] array and were invoiced through the older
+// single-invoice field. legacyInvoiced must keep intercepting this BEFORE
+// the "nothing priced" / generic-empty branches this file added, or a
+// perfectly correct closed-and-paid order would start claiming to have no
+// price or to be blocked on a missing component.
+{
+  const [store, so] = makeStore({ priced: true });
+  so.invoices = [];
+  so.invoice_no = 'INV/FY26/0081';
+  so.invoice_amount = 66257;
+  const out = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(sandbox.Store.Provider, { value: store },
+      React.createElement(sandbox.ToastProvider, null, React.createElement(sandbox.SOInvoicingTab, { so }))));
+  check('shows the legacy-invoice notice', out.includes('invoiced via a single full invoice'), true);
+  check('names the real invoice number', out.includes('INV/FY26/0081'), true);
+  check('never claims nothing is priced', out.includes('Nothing to invoice yet'), false);
+  check('never shows the generic "no invoices yet" wording either', /No invoices yet\. Partial invoices auto-appear/.test(out), false);
+}
+
+console.log(bad ? `\nFAILED - ${bad} check(s)` : "\nPASS - the Invoicing tab explains WHY nothing is invoiced instead of implying the order is settled, worded for this org's own trigger, for an unpriced order, one blocked on a missing component, and never confuses either with an order already invoiced the legacy way");
 process.exit(bad ? 1 : 0);
