@@ -150,5 +150,76 @@ console.log('\n[3] a genuinely priced order with nothing invoiced YET still gets
     outReceipt.includes('material is received'), true);
 }
 
-console.log(bad ? `\nFAILED - ${bad} check(s)` : "\nPASS - the Invoicing tab explains WHY nothing is invoiced instead of implying the order is settled, worded for this org's own trigger");
+console.log('\n[4] a real, priced bundle still invoices 0 while ONE component is missing -- and now says which one');
+// Mirrors a real production order: a 9-component "PC kit" bundle, fully
+// priced, eight components received, the keyboard never delivered at all.
+// soInvoiceState correctly refuses to bill an incomplete bundle -- that part
+// already worked. What it never said was WHY, so "0 invoiceable" on a
+// genuinely priced, genuinely valuable order looked identical to the
+// no-price dead end this whole file exists to fix.
+{
+  sandbox.__opcWorkflow = { invoice_on_dispatch: false };
+  const kbProduct = { id: 'p-kb', name: 'Keyboard', sell: 0, buy: 0 };
+  const products = [
+    { id: 'p-cpu', name: 'CPU', sell: 0, buy: 0 },
+    kbProduct,
+  ];
+  const so = {
+    id: 'so-kit', so_no: 'SO/FY26/0035', customer_id: 'c1', status: 'Material Received',
+    lines: [{ id: 'l1', bundle_qty: 150, unit_price: 68650,
+      components: [
+        { product_id: 'p-cpu', qty: 1 },
+        { product_id: 'p-kb', qty: 1 },
+      ] }],
+    invoices: [],
+  };
+  const po = { id: 'po-1', so_id: 'so-kit', status: 'Partially Received',
+    items: [{ product_id: 'p-cpu', qty: 150 }, { product_id: 'p-kb', qty: 150 }] };
+  // Every CPU arrived; not one keyboard ever did.
+  const grn = { id: 'grn-1', po_id: 'po-1', items: [{ product_id: 'p-cpu', accepted: 150 }] };
+  const st = {
+    loaded: true, org: {}, config: {},
+    sales_orders: [so], vendor_pos: [po], grns: [grn], outward_dispatches: [],
+    customers: [{ id: 'c1', name: 'Acme Corp' }], vendors: [], products, categories: [],
+    boms: [], rfqs: [], sourcings: [], notifications: [], audit: [], pool: [], invoices: [],
+    transfer_requests: [], payments: [], vendor_invoices: [], site_updates: [],
+    item_aliases: [], collections: [], client_requests: [],
+    users: [{ id: 'u1', name: 'Test User', role: 'Purchase', active: true }],
+  };
+  const soSubtotal = (x) => x.lines.reduce((s, l) => s + l.bundle_qty * l.unit_price, 0);
+  const store = {
+    state: st, route: 'sales-orders', currentUser: 'u1', authReady: true, loaded: true,
+    navigate: () => {}, mutate: () => {}, saveConfig: () => {}, setRoute: () => {},
+    addToPool: () => {}, consumeFromPool: () => {}, signOut: () => {},
+    syncErrors: [], retrySync: () => {},
+    getCustomer: id => st.customers.find(c => c.id === id),
+    getVendor: id => st.vendors.find(v => v.id === id),
+    getProduct: id => st.products.find(p => p.id === id),
+    getCategory: id => st.categories.find(c => c.id === id),
+    getUser: id => st.users.find(u => u.id === id),
+    getSO: id => st.sales_orders.find(x => x.id === id),
+    soBilledSubtotal: (x) => Math.max(0, soSubtotal(x)), soBillAdjustment: () => 0,
+  };
+
+  const out = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(sandbox.Store.Provider, { value: store },
+      React.createElement(sandbox.ToastProvider, null, React.createElement(sandbox.SOInvoicingTab, { so }))));
+
+  check('does NOT fall into the "nothing priced" message -- this order has real value',
+    out.includes('Nothing to invoice yet'), false);
+  check('the raise-invoice card is offered (real balance > 0)', out.includes('Raise invoice'), true);
+  check('names the actual missing component', out.includes('Keyboard'), true);
+  check('says how much of it has arrived', out.includes('0 of 1 per unit received'), true);
+  check('explains the rule, not just the blocker', out.includes('nothing bills until every component'), true);
+
+  // The underlying computation, isolated from rendering: soInvoiceState itself.
+  const lineState = sandbox.soInvoiceState(so, st, store.getProduct)[0];
+  check('invoiceableNow is correctly 0', lineState.invoiceableNow, 0);
+  check('blockedBy names exactly the short component, not the fully-received one',
+    lineState.blockedBy.map(b => b.product_id), ['p-kb']);
+  check('blockedBy reports what actually arrived (0) vs what one bundle needs (1)',
+    [lineState.blockedBy[0].have, lineState.blockedBy[0].need], [0, 1]);
+}
+
+console.log(bad ? `\nFAILED - ${bad} check(s)` : "\nPASS - the Invoicing tab explains WHY nothing is invoiced instead of implying the order is settled, worded for this org's own trigger, for both an unpriced order and a priced one blocked on a missing component");
 process.exit(bad ? 1 : 0);
