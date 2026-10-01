@@ -114,7 +114,8 @@ posts the GRN directly, anyone else raises a request the acceptor approves.
 | `customer_language` | `true` | customer wording on orders and challans |
 | `outward_dispatch` | `true` | partial dispatch + delivery challan |
 | `supervisor_signoff` | `false` | no site implementation |
-| `auto_invoice_on_grn` | `false` | invoicing happens outside this system |
+| `auto_invoice_on_grn` | `false` | not invoiced on receipt — see below |
+| `invoice_on_dispatch` | `true` | the client invoice raises automatically per delivery challan |
 
 Capabilities **off**: presales, RFQ, implementation, cross-SO transfers,
 partial invoicing, e-invoice, e-way bill, WhatsApp, SMS.
@@ -147,9 +148,27 @@ that nothing else moved.
 
 ---
 
+## Invoicing
+
+Raised automatically per delivery challan (`invoice_on_dispatch`, added by
+`031_invoice_on_dispatch.sql` — this doc went stale on this exact point for a
+while; `auto_invoice_on_grn: false` only means *not on receipt*, not *not
+invoiced at all*). See [dispatch-invoicing.md](./dispatch-invoicing.md) for
+the mechanics: priced from the order's own agreed price, named in the
+customer's own wording, capped at the order's value, partial dispatch =
+partial invoice.
+
+**The one precondition:** every component actually needs a `sell` price —
+either its own, or its catalogue product's. A sheet import that never had
+prices entered leaves every line and component at `sell = 0`/`unit_price: 0`,
+and `buildDispatchInvoice` then correctly raises **no** invoice at all rather
+than a ₹0 one — by design (see `dispatch-invoice-check.js` section 6). From
+the Invoicing tab this used to look identical to a bug: Billed/Invoiced/
+Balance all ₹0 with no explanation. It now says plainly that nothing is
+priced yet and names where to fix it (*Edit line items*).
+
 ## Not built yet
 
 - **SO → "our BOQ" review step.** The import auto-resolves and flags unmatched
   rows, but there is no dedicated screen to sit and approve the conversion.
-- **Invoicing** — deferred; this company invoices outside the system.
 - The catalogue is still demo data pending the real one.

@@ -1196,7 +1196,29 @@ function SOInvoicingTab({ so }) {
             <table className="t"><thead><tr><th>Invoice</th><th>Type</th><th>Date</th><th className="num">Total</th></tr></thead>
               <tbody><tr><td className="mono">{so.invoice_no}</td><td><span className="badge success dot">Full</span></td><td className="mono small">{fmtDate(so.invoice_date)}</td><td className="num"><strong>{inr(so.invoice_amount)}</strong></td></tr></tbody>
             </table>
-          ) : invoices.length === 0 ? <div className="empty">No invoices yet. Partial invoices auto-appear as material is received; or raise one above.</div> : (
+          ) : invoices.length === 0 && billed <= 0.5 ? (
+            // "Balance to invoice" being ₹0 here does NOT mean the order is
+            // settled -- it means nothing on it has ever been priced, so
+            // buildDispatchInvoice/buildBoqInvoice/buildInvoice all correctly
+            // refuse to raise a ₹0 invoice (see dispatch-invoicing.md's "no
+            // invoice, not a zero-rupee one"). The previous message here said
+            // "auto-appear as material is received" unconditionally, which is
+            // both wrong for an org that invoices on DISPATCH
+            // (invoice_on_dispatch) and gave no reason or next step for an
+            // order that had already been dispatched with nothing to show
+            // for it — exactly what made this look like a bug rather than
+            // the missing-price data problem it actually is.
+            <div className="empty">
+              <div className="tiny" style={{ color: 'var(--warning)' }}>
+                Nothing to invoice yet — these items have no price set. Set unit
+                prices in <strong>Edit line items</strong>, and {wfOn('invoice_on_dispatch')
+                  ? 'the next dispatch will invoice automatically.'
+                  : 'the next receipt will invoice automatically.'}
+              </div>
+            </div>
+          ) : invoices.length === 0 ? (
+            <div className="empty">No invoices yet. Partial invoices auto-appear as material is {wfOn('invoice_on_dispatch') ? 'dispatched' : 'received'}; or raise one above.</div>
+          ) : (
             <table className="t">
               <thead><tr><th>Invoice</th><th>Type</th><th className="num">Qty</th><th>Date</th><th className="num">Subtotal</th><th className="num">Total</th></tr></thead>
               <tbody>
