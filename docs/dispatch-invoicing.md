@@ -128,6 +128,20 @@ either way and that fact must not depend on the paperwork.
   Microlink order with every component at `sell = 0` looked exactly like a
   bug from this tab alone — it wasn't; the invoicing engine was correctly
   refusing a ₹0 invoice the whole time.
+- **A fully-priced order can also show 0 invoiceable, for a completely
+  different reason: one missing component blocks the whole bundle.**
+  `soInvoiceState` (`screens-billing.jsx`) only counts a bundle as
+  invoiceable once *every* one of its components has arrived — correct, the
+  same "never bill something incomplete" rule a BOQ uses (see
+  [boq-billing.md](./boq-billing.md)) — but a real `standard`-profile order
+  (`auto_invoice_on_grn`) with nine components per bundle, eight received and
+  the ninth (a keyboard) never delivered at all, sat at `₹0 invoiced` with
+  four GRNs already posted and genuine six-figure value on the line. Same
+  class of problem as the no-price case above: the engine was right, the
+  screen said nothing. `soInvoiceState` now also returns `blockedBy` — which
+  component(s) are short and by how much — and the "By bundle" table prints
+  it directly under the row (*"Waiting on Keyboard (0 of 1 per unit
+  received)…"*) instead of a bare, unexplained `0`.
 - The delivery challan explicitly prints *"not a tax invoice"*. It is proof of
   delivery, not a bill.
 - `ReadyToDispatchPanel` is a **shortcut into the existing modal, not a second

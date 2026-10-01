@@ -500,7 +500,7 @@ function soComponentState(so, state, getProduct) {
 
 // Per-line fulfilment: complete bundles the *not-yet-invoiced* received components
 // support (greedy allocation) → invoiceable bundles now.
-function soInvoiceState(so, state) {
+function soInvoiceState(so, state, getProduct) {
   const recv = soReceivedQty(so, state);
   const invd = soInvoicedComp(so);
   const avail = {};
@@ -509,9 +509,21 @@ function soInvoiceState(so, state) {
     let completable = l.bundle_qty || 0;
     (l.components || []).forEach(c => { const per = c.qty || 0; if (per > 0) completable = Math.min(completable, Math.floor((avail[c.product_id] || 0) / per)); });
     completable = Math.max(0, Math.min(completable, l.bundle_qty || 0));
-    (l.components || []).forEach(c => { avail[c.product_id] = (avail[c.product_id] || 0) - completable * (c.qty || 0); });
     const eff = _effUnit(so, state, l);
-    return { line_id: l.id, category_id: l.category_id, ordered: l.bundle_qty || 0, unit_price: eff, components: l.components || [], invoiceableNow: eff > 0 ? completable : 0, non_billable: eff <= 0 };
+    const invoiceableNow = eff > 0 ? completable : 0;
+    // A real-priced, real-value bundle can still show 0 invoiceable because ONE
+    // of several components hasn't arrived yet — correct (never bill a bundle
+    // that isn't actually complete), but "0" alone reads as a dead end exactly
+    // like the no-price case did. Computed before the avail subtraction below:
+    // when invoiceableNow is 0 that subtraction is a no-op anyway (completable
+    // * qty = 0), so this reflects true availability either way.
+    const blockedBy = invoiceableNow === 0 && eff > 0
+      ? (l.components || []).filter(c => (c.qty || 0) > 0 && (avail[c.product_id] || 0) < c.qty)
+          .map(c => ({ product_id: c.product_id, name: (getProduct ? getProduct(c.product_id) : null)?.name || c.product_id,
+                       have: avail[c.product_id] || 0, need: c.qty }))
+      : [];
+    (l.components || []).forEach(c => { avail[c.product_id] = (avail[c.product_id] || 0) - completable * (c.qty || 0); });
+    return { line_id: l.id, category_id: l.category_id, ordered: l.bundle_qty || 0, unit_price: eff, components: l.components || [], invoiceableNow, non_billable: eff <= 0, blockedBy };
   });
 }
 
@@ -673,7 +685,7 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
     subtotal = remainingBilled;
     lines.push({ kind: 'balance', ref_id: 'balance', label: 'Balance of order', qty: 1, unit_price: Math.round(subtotal), amount: Math.round(subtotal) });
   } else { // bundle
-    soInvoiceState(so, state).forEach(x => {
+    soInvoiceState(so, state, getProduct).forEach(x => {
       const want = sel ? (Number(sel[x.line_id]) || 0) : x.invoiceableNow;
       const qty = Math.max(0, Math.min(want, x.invoiceableNow));
       if (qty > 0) {
@@ -1121,7 +1133,7 @@ function SOInvoicingTab({ so }) {
   const [compSel, setCompSel] = React.useState({});
   const ctx = { mutate, toast, currentUser, getUser, getProduct };
 
-  const st = soInvoiceState(so, state);
+  const st = soInvoiceState(so, state, getProduct);
   const comps = soComponentState(so, state, getProduct);
   const invoices = so.invoices || [];
   const billed = soBilledSubtotal(so) + soImplCharge(so);   // supply + implementation (rate × logged hours)
@@ -1156,12 +1168,25 @@ function SOInvoicingTab({ so }) {
                 <thead><tr><th>Bundle</th><th className="num">Ordered</th><th className="num">Invoiceable now</th><th className="num">Invoice qty</th><th className="num">Amount</th></tr></thead>
                 <tbody>
                   {st.map(x => { const cat = getCategory(x.category_id) || { name: x.category_id }; const q = bundleSel[x.line_id] != null ? bundleSel[x.line_id] : x.invoiceableNow; return (
-                    <tr key={x.line_id}>
-                      <td>{cat.name}</td><td className="num">{x.ordered}</td>
-                      <td className="num">{x.invoiceableNow}</td>
-                      <td className="num"><input type="number" min="0" max={x.invoiceableNow} className="input mono" value={q} onChange={e => setBundleSel(m => ({ ...m, [x.line_id]: e.target.value }))} style={{ width: 64, textAlign: 'right', height: 24 }}/></td>
-                      <td className="num mono">{inr(Math.max(0, Math.min(Number(q) || 0, x.invoiceableNow)) * x.unit_price)}</td>
-                    </tr>
+                    <React.Fragment key={x.line_id}>
+                      <tr>
+                        <td>{cat.name}</td><td className="num">{x.ordered}</td>
+                        <td className="num">{x.invoiceableNow}</td>
+                        <td className="num"><input type="number" min="0" max={x.invoiceableNow} className="input mono" value={q} onChange={e => setBundleSel(m => ({ ...m, [x.line_id]: e.target.value }))} style={{ width: 64, textAlign: 'right', height: 24 }}/></td>
+                        <td className="num mono">{inr(Math.max(0, Math.min(Number(q) || 0, x.invoiceableNow)) * x.unit_price)}</td>
+                      </tr>
+                      {x.blockedBy && x.blockedBy.length > 0 && (
+                        // A priced, real-value bundle can still invoice 0 because
+                        // ONE missing component blocks the whole set — correct
+                        // (never bill an incomplete bundle), but "0" alone looks
+                        // identical to a dead end. Name exactly what is short.
+                        <tr>
+                          <td colSpan="5" className="tiny" style={{ color: 'var(--warning)', paddingTop: 0 }}>
+                            Waiting on {x.blockedBy.map(b => `${b.name} (${qty(b.have)} of ${qty(b.need)} per unit received)`).join(', ')} — nothing bills until every component in the bundle has arrived.
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ); })}
                 </tbody>
               </table>
