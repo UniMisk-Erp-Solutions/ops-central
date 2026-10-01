@@ -3,7 +3,8 @@
 **Who:** Stores / Purchase / Org Admin / Stores Out
 **Where:** SCM Tracking → *Out for delivery*
 **Code:** `screens-scm.jsx`, `screens-billing.jsx`
-**Test:** `scripts/uitest/dispatch-invoice-check.js`, `scripts/uitest/dispatch-queue-check.js`
+**Test:** `scripts/uitest/dispatch-invoice-check.js`, `scripts/uitest/dispatch-queue-check.js`,
+`scripts/uitest/invoicing-tab-check.js` (the SO Invoicing tab's messaging)
 
 ---
 
@@ -114,7 +115,19 @@ either way and that fact must not depend on the paperwork.
 
 - Prices must exist first. On a fresh order the toast reads *"no invoice: these
   items have no price yet"*. Set them in **Edit line items**, or via
-  [vendor-po-pricing.md](./vendor-po-pricing.md).
+  [vendor-po-pricing.md](./vendor-po-pricing.md). That toast is easy to miss —
+  it fires once, at the moment of dispatch. The SO's own **Invoicing tab**
+  (`SOInvoicingTab`, `screens-billing.jsx`) says the same thing persistently:
+  Billed/Invoiced/Balance all reading ₹0 does not mean the order is settled,
+  it means nothing on it has a price, and the empty-state message says so
+  (worded for the org's own trigger — "the next dispatch"/"the next receipt"
+  will invoice automatically) instead of the old unconditional "partial
+  invoices auto-appear as material is received," which was both wrong for a
+  dispatch-triggered org and gave no reason at all once an order had actually
+  been dispatched with nothing to show for it. A real, fully-dispatched
+  Microlink order with every component at `sell = 0` looked exactly like a
+  bug from this tab alone — it wasn't; the invoicing engine was correctly
+  refusing a ₹0 invoice the whole time.
 - The delivery challan explicitly prints *"not a tax invoice"*. It is proof of
   delivery, not a bill.
 - `ReadyToDispatchPanel` is a **shortcut into the existing modal, not a second

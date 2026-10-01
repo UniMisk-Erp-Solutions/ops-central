@@ -11,10 +11,15 @@ Usage:
 import base64, os, sys
 import paramiko
 
-HOST = os.environ.get("SSH_HOST", "192.168.0.18")
-USER = os.environ.get("SSH_USER", "webadmin")
+#   2026-10: SO-PO's Coolify host moved from 192.168.0.18 to 192.168.23.15
+#   (user "olympus"), with a new Supabase service id. The old host no longer
+#   runs these containers at all -- confirmed empty. The new host also runs
+#   taskflow, servicewise and pesowise as SEPARATE Supabase stacks; SID below
+#   is the one and only id this script will ever touch.
+HOST = os.environ.get("SSH_HOST", "192.168.23.15")
+USER = os.environ.get("SSH_USER", "olympus")
 PW = os.environ.get("SSH_PASSWORD", "")
-SID = os.environ.get("SUPABASE_SERVICE_ID", "spfohj2m4ij61p4riaup006i")
+SID = os.environ.get("SUPABASE_SERVICE_ID", "4ds0vmygpalt2b80hwg3ji7s")
 if not PW:
     print("Set SSH_PASSWORD", file=sys.stderr); sys.exit(1)
 files = sys.argv[1:]
