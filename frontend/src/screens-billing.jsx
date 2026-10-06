@@ -1035,7 +1035,10 @@ function invoiceReadyBoqs(soId, ctx) {
     for (let guard = 0; guard < 50; guard++) {
       const ready = (window.boqProgress ? window.boqProgress(s, so) : []).filter(b => b.readyToInvoice);
       if (!ready.length) break;
-      const built = buildBoqInvoice(so, s, ready[0], currentUser, getUser, getProduct);
+      // _invNoFor reads state.sales_orders, not `so` directly — it has to see
+      // every invoice already minted earlier in THIS SAME run, or two BOQs
+      // completing from one dispatch mint the identical invoice number.
+      const built = buildBoqInvoice(so, { ...s, sales_orders: s.sales_orders.map(x => x.id === soId ? so : x) }, ready[0], currentUser, getUser, getProduct);
       if (!built) break;                       // unpriced, or nothing left to bill
       so = built.so;
       made.push(built);
@@ -1046,7 +1049,7 @@ function invoiceReadyBoqs(soId, ctx) {
       });
     }
     // Every BOQ has fired -> close the order out with whatever else shipped.
-    const closing = buildBoqFinalInvoice(so, s, currentUser, getUser, getProduct);
+    const closing = buildBoqFinalInvoice(so, { ...s, sales_orders: s.sales_orders.map(x => x.id === soId ? so : x) }, currentUser, getUser, getProduct);
     if (closing) {
       so = closing.so;
       made.push(closing);
@@ -1072,6 +1075,103 @@ function invoiceReadyBoqs(soId, ctx) {
 window.buildBoqInvoice = buildBoqInvoice;
 window.buildBoqFinalInvoice = buildBoqFinalInvoice;
 window.invoiceReadyBoqs = invoiceReadyBoqs;
+
+// A BOQ organization that also wants every dispatch billed right away — not
+// only once a whole billing group ships. Gated on `boq_partial_on_dispatch`;
+// off everywhere else, where invoiceReadyBoqs() above is what runs instead
+// and this is never called. See docs/boq-billing.md.
+//
+// Bills the dispatch itself exactly like a non-BOQ order already does
+// (buildDispatchInvoice, unchanged) — "partial" means the same thing it
+// always has. Separately, any BOQ that becomes fully dispatched as a
+// result gets its own ₹0 confirmation record, stamped the same way a
+// completed BOQ always has been (boq.invoice_no) — real, separate invoice
+// data to report on, never a second charge for goods the partial already
+// billed.
+function raiseBoqPartialAndCompletion(soId, dc, ctx) {
+  const { mutate, currentUser, getUser, getProduct } = ctx;
+  const result = { partial: null, completions: [] };
+  if (typeof wfOn === 'function' && !wfOn('boq_partial_on_dispatch')) return result;
+  mutate(s => {
+    let so = (s.sales_orders || []).find(x => x.id === soId);
+    if (!so) return s;
+    const notes = [];
+    // _invNoFor reads state.sales_orders, not `so` directly — every number
+    // minted below has to see what was minted earlier in THIS SAME run.
+    const liveState = () => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === soId ? so : x) });
+
+    const built = buildDispatchInvoice(so, liveState(), dc, currentUser, getUser, getProduct);
+    if (built) {
+      // Which BOQ(s), if any, this delivery's items belong to — informational
+      // only, so a partial can be filtered by billing group before its BOQ
+      // ever completes. Never affects what gets billed or how much.
+      const boqNos = new Set();
+      (window.soBoqs ? window.soBoqs(built.so) : []).forEach(b => {
+        if (b.status === 'Cancelled') return;
+        if ((b.items || []).some(it => dc.items.some(di => di.product_id === it.product_id))) boqNos.add(b.no);
+      });
+      const invoice = boqNos.size ? { ...built.invoice, boq_nos: Array.from(boqNos) } : built.invoice;
+      so = { ...built.so, invoices: built.so.invoices.map(i => i.id === invoice.id ? invoice : i) };
+      result.partial = { so, invoice, fully: built.fully };
+      notes.push({
+        id: 'n-dcinv-' + Date.now(), kind: 'invoice',
+        text: `${invoice.no} (${invoice.type}) raised for ${dc.dc_no || 'dispatch'} · ${so.so_no} · ${inrK(invoice.total)}`,
+        date: TODAY, read: false, role: 'Collections',
+      });
+    }
+
+    // Any BOQ that is now fully dispatched but has no completion record yet.
+    (window.boqProgress ? window.boqProgress(s, so) : []).forEach(b => {
+      if (!b.readyToInvoice) return;
+      const boq = ((so.extra && so.extra.boqs) || []).find(x => x.id === b.id);
+      if (!boq) return;
+      const invoice = {
+        id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5) + boq.id,
+        no: _invNoFor(so, liveState()), date: TODAY,
+        type: 'BOQ Complete', mode: 'boq-completion',
+        boq_id: boq.id, boq_no: boq.no,
+        lines: [], comp_consumed: {},
+        subtotal: 0, gst: 0, total: 0, created_by: currentUser || null,
+      };
+      so = {
+        ...so,
+        invoices: [...(so.invoices || []), invoice],
+        extra: { ...(so.extra || {}), boqs: ((so.extra && so.extra.boqs) || []).map(x => x.id === boq.id ? { ...x, invoice_no: invoice.no } : x) },
+      };
+      result.completions.push({ so, invoice });
+      notes.push({
+        id: 'n-boqdone-' + Date.now() + boq.id, kind: 'invoice',
+        text: `${boq.no} fully dispatched · completion confirmed (${invoice.no}, ₹0 — already billed via dispatch) · ${so.so_no}`,
+        date: TODAY, read: false, role: 'Collections',
+      });
+    });
+
+    // Defensive, same as invoiceReadyBoqs above — every dispatch here already
+    // bills everything it carries, BOQ-member or not, so in practice this is
+    // always a no-op once the two loops above have run.
+    const closing = buildBoqFinalInvoice(so, liveState(), currentUser, getUser, getProduct);
+    if (closing) {
+      so = closing.so;
+      result.completions.push({ so, invoice: closing.invoice, final: true });
+      notes.push({
+        id: 'n-boqfin-' + Date.now(), kind: 'invoice',
+        text: `${closing.invoice.no} (Final) raised on ${so.so_no} · ${inrK(closing.invoice.total)} — all BOQs billed`,
+        date: TODAY, read: false, role: 'Collections',
+      });
+    }
+
+    if (!notes.length) return s;
+    const finalSO = so;
+    return {
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === soId ? finalSO : x),
+      notifications: [...notes.reverse(), ...s.notifications],
+    };
+  }, { action: 'boq-partial-dispatch', entity: 'SalesOrder', entity_id: soId,
+       detail: `Partial + completion billing run for ${dc.dc_no || dc.id}` });
+  return result;
+}
+window.raiseBoqPartialAndCompletion = raiseBoqPartialAndCompletion;
 
 // Raise it, against the latest state inside the updater.
 function raiseDispatchInvoice(soId, dc, ctx) {

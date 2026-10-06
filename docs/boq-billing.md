@@ -111,6 +111,37 @@ order there is no remainder, and the last BOQ invoice is itself already typed
 An order with **no** BOQs bills per delivery challan exactly as it did before
 this feature existed. Nothing changed for those orders.
 
+### Partial, per dispatch — an opt-in on top (`boq_partial_on_dispatch`)
+
+Off everywhere by default — every org above is completely unaffected. An
+organization that turns it on (Microlink does) wants **both**: a client
+invoice for whatever ships on every delivery, not only once a billing group
+is complete, *and* still a distinct record marking the moment a BOQ finishes.
+
+`raiseBoqPartialAndCompletion` runs instead of `invoiceReadyBoqs` for these
+orders (`OutwardDispatchModal` picks one or the other, never both, by
+checking the flag first):
+
+1. **Bills the dispatch itself**, exactly like a non-BOQ order already does —
+   `buildDispatchInvoice`, unchanged, so "Partial" means the same thing it
+   always has. The invoice is additionally tagged `boq_nos` with whichever
+   BOQ(s) the delivered items belong to, purely so a partial can be found by
+   billing group before its BOQ ever completes — this never affects what
+   gets billed or how much.
+2. **Separately**, any BOQ that is now fully dispatched gets its own
+   confirmation invoice: real, stamped `boq_id`/`boq_no`, typed `'BOQ
+   Complete'` — and **₹0**. The dispatch invoice above already billed that
+   BOQ's value as it shipped; this is a marker, not a second charge. It
+   stamps `boq.invoice_no` the same way a completed BOQ always has, so every
+   existing reader (`boqProgress`'s `invoiced`/`readyToInvoice`, the "already
+   invoiced" cancel guard, the panel's badge) keeps working without change —
+   it simply now sometimes points at a ₹0 confirmation instead of a
+   full-value invoice.
+
+The two kinds are told apart by `invoice.type`: `'Partial'`/`'Final'` for
+what actually shipped, `'BOQ Complete'` for a closed group. Both are real
+rows in `so.invoices`, so either can be filtered, counted or reported on.
+
 ### Where the numbers come from
 
 `boqNo()` in `utils.jsx`, on the one document-numbering scheme:
@@ -144,6 +175,14 @@ handler is a stale snapshot, and each invoice changes what is left to bill for
 the next one. The whole run happens against the live state, one BOQ at a time.
 This is the trap that produced duplicate invoice numbers before.
 
+**Why is the completion record ₹0 instead of a second real invoice for the
+same goods?** Because the dispatch that completed the BOQ already billed
+those exact units, the moment they shipped. A second non-zero invoice would
+be the customer charged twice for one delivery. The request this answers was
+explicitly for *data* — being able to see and count "this BOQ just closed" as
+its own row — not for a second payment, so the amount is zero by design, not
+an oversight.
+
 ## Where the code is
 
 | Thing | Where |
@@ -151,7 +190,9 @@ This is the trap that produced duplicate invoice numbers before.
 | Engine — free quantity, allocation, progress, per-item detail, value | `frontend/src/screens-boq.jsx` |
 | `BOQPanel`, `CreateBOQModal` | `frontend/src/screens-boq.jsx` |
 | `buildBoqInvoice`, `buildBoqFinalInvoice`, `invoiceReadyBoqs` | `frontend/src/screens-billing.jsx` |
-| Dispatch trigger | `frontend/src/screens-scm.jsx` (`OutwardDispatchModal`) |
+| `raiseBoqPartialAndCompletion` — the `boq_partial_on_dispatch` opt-in | `frontend/src/screens-billing.jsx` |
+| `boq_partial_on_dispatch` workflow key, default `false` | `frontend/src/permissions.jsx` |
+| Dispatch trigger, picks ONE of the two billing engines | `frontend/src/screens-scm.jsx` (`OutwardDispatchModal`) |
 | `boqNo` | `frontend/src/utils.jsx` |
 | Panel mount, beside the BOM | `frontend/src/screens-so.jsx` |
 | Checks | `scripts/uitest/boq-check.js` |
@@ -180,3 +221,17 @@ This is the trap that produced duplicate invoice numbers before.
 - **The invoice cap still applies.** A BOQ invoice is clamped to what the order
   has left to bill, so BOQs that overlap a manual adjustment can never bill more
   than the order is worth.
+- **`_invNoFor` reads `state.sales_orders`, never the `so` it was handed as
+  its first argument.** `invoiceReadyBoqs`'s loop keeps `so` current on every
+  iteration but was passing the ORIGINAL, outer `mutate` snapshot as `state` —
+  so when two BOQs became ready from the same dispatch, the second
+  `buildBoqInvoice` call could not see the first invoice it had just minted
+  and handed out the *same* number twice. Found while building the partial
+  opt-in above, fixed by rebuilding `state.sales_orders` from the live `so`
+  before every number-minting call, in both `invoiceReadyBoqs` and
+  `raiseBoqPartialAndCompletion`. `boq-check.js` section [13] drives exactly
+  this scenario and asserts the two numbers differ.
+- **A BOQ's `invoice_no` now means "billed OR confirmed," not "billed for its
+  full value."** Every existing reader only ever checked it was truthy, never
+  its amount, so this was safe — but anyone adding a NEW reader that assumes
+  a non-zero value behind `invoice_no` needs to check `invoice.type` first.

@@ -230,6 +230,11 @@ const WORKFLOW_FALLBACK = {
   client_acceptance:   false,
   // Off everywhere until an organization turns it on. See docs/client-requests.md.
   client_order_requests: false,
+  // Off everywhere until an organization turns it on — a BOQ org's default
+  // stays "bill only when the whole group ships" (see docs/boq-billing.md).
+  // On, every dispatch bills what shipped right away, AND a BOQ completing
+  // still gets its own ₹0 confirmation record. See docs/boq-billing.md.
+  boq_partial_on_dispatch: false,
 };
 
 function wf(key) {
