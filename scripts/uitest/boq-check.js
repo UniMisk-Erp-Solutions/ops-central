@@ -334,5 +334,104 @@ check('a dispatch triggers BOQ billing', /invoiceReadyBoqs\(/.test(scm), true);
 check('an order with no BOQ still bills per challan, as it always did',
   /raiseDispatchInvoice\(/.test(scm), true);
 
+// A ctx whose mutate() applies synchronously to a boxed state, same
+// convention receipt-engine-check.js uses.
+function makeCtx(state) {
+  const box = { state };
+  return { box, ctx: { mutate: fn => { box.state = fn(box.state); }, currentUser: 'u1', getUser, getProduct } };
+}
+
+console.log('\n[13] two BOQs completing from ONE dispatch must not share an invoice number (regression found while building partial-dispatch billing)');
+{
+  const twoReadySO = withBoqs(baseSO(), [
+    boq('b1', 'BOQ202609001', [{ line_id: 'l1', product_id: 'p-sw', qty: 8 }]),
+    boq('b2', 'BOQ202609002', [{ line_id: 'l1', product_id: 'p-psu', qty: 4 }]),
+  ]);
+  const st13 = stateWith(twoReadySO, [[{ product_id: 'p-sw', qty: 8 }, { product_id: 'p-psu', qty: 4 }]]);
+  const { box: box13, ctx: ctx13 } = makeCtx(st13);
+  const made13 = sandbox.invoiceReadyBoqs(twoReadySO.id, ctx13);
+  check('both BOQs invoiced in one run', made13.length, 2);
+  check('each gets a DIFFERENT invoice number', new Set(made13.map(m => m.invoice.no)).size, 2);
+  check('the second is suffixed, the same scheme every other multi-invoice order already uses',
+    made13.map(m => m.invoice.no), ['INVSOFY260001', 'INVSOFY260001-2']);
+  check('both are actually recorded on the order, not just returned',
+    box13.state.sales_orders[0].invoices.map(i => i.no), ['INVSOFY260001', 'INVSOFY260001-2']);
+}
+
+console.log('\n[14] boq_partial_on_dispatch is OFF everywhere by default -- raiseBoqPartialAndCompletion refuses to run');
+{
+  sandbox.__opcWorkflow = null;
+  const so14 = withBoqs(baseSO(), [boq('b1', 'BOQ202609001', [{ line_id: 'l1', product_id: 'p-sw', qty: 8 }])]);
+  const st14 = stateWith(so14, [[{ product_id: 'p-sw', qty: 8 }]]);
+  const { box: box14, ctx: ctx14 } = makeCtx(st14);
+  const dc14 = { id: 'dc0', so_id: so14.id, dc_no: 'DC0000', items: [{ product_id: 'p-sw', qty: 8 }] };
+  const r14 = sandbox.raiseBoqPartialAndCompletion(so14.id, dc14, ctx14);
+  check('nothing is billed when the flag is off', r14, { partial: null, completions: [] });
+  check('state is completely untouched', box14.state.sales_orders[0].invoices, []);
+}
+
+console.log('\n[15] boq_partial_on_dispatch ON -- bills every dispatch as it ships, and separately confirms BOQ completion without double-billing');
+{
+  sandbox.__opcWorkflow = { boq_partial_on_dispatch: true, invoice_on_dispatch: true };
+  const so15 = withBoqs(baseSO(), [boq('b1', 'BOQ202609001', [{ line_id: 'l1', product_id: 'p-sw', qty: 8 }])]);
+  const { box: box15, ctx: ctx15 } = makeCtx({
+    products: PRODUCTS, sales_orders: [so15], vendor_pos: [], grns: [], pool: [],
+    notifications: [], audit: [], outward_dispatches: [],
+  });
+
+  // First delivery: 5 of the 8 switches. The BOQ is not complete yet.
+  const dc1 = { id: 'dc1', so_id: so15.id, dc_no: 'DC0001', items: [{ product_id: 'p-sw', qty: 5 }] };
+  box15.state.outward_dispatches = [dc1];
+  const r1 = sandbox.raiseBoqPartialAndCompletion(so15.id, dc1, ctx15);
+  check('a partial invoice is raised for exactly what shipped (5 x 100000)', r1.partial.invoice.subtotal, 500000);
+  check('its type is Partial, the same word the non-BOQ flow already uses', r1.partial.invoice.type, 'Partial');
+  check('it is tagged with the BOQ it touches, even though that BOQ is not complete yet',
+    r1.partial.invoice.boq_nos, ['BOQ202609001']);
+  check('no completion fires yet -- the BOQ is still short', r1.completions.length, 0);
+  check('the BOQ itself is not yet marked invoiced',
+    sandbox.boqProgress(box15.state, box15.state.sales_orders[0])[0].invoiced, false);
+
+  // Second delivery: the remaining 3 switches. THIS one completes the BOQ.
+  const dc2 = { id: 'dc2', so_id: so15.id, dc_no: 'DC0002', items: [{ product_id: 'p-sw', qty: 3 }] };
+  box15.state.outward_dispatches = [...box15.state.outward_dispatches, dc2];
+  const r2 = sandbox.raiseBoqPartialAndCompletion(so15.id, dc2, ctx15);
+  check('the second delivery is ALSO billed as its own partial (3 x 100000)', r2.partial.invoice.subtotal, 300000);
+  const completions2 = r2.completions.filter(c => !c.final);
+  check('exactly one completion fires', completions2.length, 1);
+  check('the completion invoice carries NO new charge', completions2[0].invoice.total, 0);
+  check('it is typed distinctly, so reporting can tell a plain partial from a BOQ closing',
+    completions2[0].invoice.type, 'BOQ Complete');
+  check('it names the BOQ it closed', completions2[0].invoice.boq_no, 'BOQ202609001');
+  check('the BOQ is now marked invoiced -- the SAME field every existing BOQ screen already reads',
+    sandbox.boqProgress(box15.state, box15.state.sales_orders[0])[0].invoiced, true);
+  check('a cancelled-guard still works: the BOQ panel would now refuse to cancel it',
+    !!box15.state.sales_orders[0].extra.boqs.find(b => b.id === 'b1').invoice_no, true);
+
+  const allInvoices = box15.state.sales_orders[0].invoices;
+  check('nothing was double-billed: the two partials sum to exactly the switches\' value; the ₹0 completion adds nothing',
+    allInvoices.reduce((a, i) => a + i.subtotal, 0), 800000);
+  check('every invoice minted across both dispatches has its own number',
+    new Set(allInvoices.map(i => i.no)).size, allInvoices.length);
+
+  // A third, unrelated delivery after the BOQ is already closed must not
+  // try to confirm it again.
+  const dc3 = { id: 'dc3', so_id: so15.id, dc_no: 'DC0003', items: [{ product_id: 'p-psu', qty: 4 }] };
+  box15.state.outward_dispatches = [...box15.state.outward_dispatches, dc3];
+  const r3 = sandbox.raiseBoqPartialAndCompletion(so15.id, dc3, ctx15);
+  check('a closed BOQ is never re-confirmed by a later, unrelated dispatch',
+    r3.completions.filter(c => !c.final).length, 0);
+  check('that later dispatch still bills its own items normally', r3.partial.invoice.subtotal, 200000);
+
+  sandbox.__opcWorkflow = null;
+}
+
+console.log('\n[16] the dispatch screen only reaches the new engine behind its own flag');
+{
+  const scm16 = fs.readFileSync(path.join(dir, 'src', 'screens-scm.jsx'), 'utf8');
+  check('OutwardDispatchModal can reach raiseBoqPartialAndCompletion', /raiseBoqPartialAndCompletion\(/.test(scm16), true);
+  check('gated behind boq_partial_on_dispatch, not unconditional',
+    /wfOn\('boq_partial_on_dispatch'\)/.test(scm16), true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a BOQ bills when it is complete, once, and never twice');
 process.exit(bad ? 1 : 0);

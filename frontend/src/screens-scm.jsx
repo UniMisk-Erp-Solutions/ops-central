@@ -407,15 +407,38 @@ function OutwardDispatchModal({ so, onClose }) {
     // If the order has billing groups, THEY decide what is invoiced — a BOQ
     // bills only when its last item is out. An order with no BOQ falls back to
     // billing the challan itself, which is what it did before BOQs existed.
+    // Unless the org has explicitly asked for BOTH: bill every dispatch right
+    // away, AND still mark a BOQ's own completion separately (gated on
+    // boq_partial_on_dispatch — off everywhere else, where the line above
+    // still decides). See docs/boq-billing.md.
     let inv = null;
     let boqInvoices = [];
+    let partialResult = null;
     const hasBoqs = (window.soBoqs ? window.soBoqs(so) : []).filter(b => b.status !== 'Cancelled').length > 0;
-    if (wfOn('invoice_on_dispatch') && hasBoqs && window.invoiceReadyBoqs) {
+    if (wfOn('invoice_on_dispatch') && hasBoqs && wfOn('boq_partial_on_dispatch') && window.raiseBoqPartialAndCompletion) {
+      partialResult = window.raiseBoqPartialAndCompletion(so.id, dc, { state, mutate, currentUser, getUser, getProduct });
+    } else if (wfOn('invoice_on_dispatch') && hasBoqs && window.invoiceReadyBoqs) {
       boqInvoices = window.invoiceReadyBoqs(so.id, { state, mutate, currentUser, getUser, getProduct }) || [];
     } else if (wfOn('invoice_on_dispatch') && window.raiseDispatchInvoice) {
       inv = window.raiseDispatchInvoice(so.id, dc, { mutate, currentUser, getUser, getProduct });
     }
     setBusy(false);
+    if (partialResult) {
+      const bits = [];
+      if (partialResult.partial) bits.push(`invoice ${partialResult.partial.invoice.no} raised for ${inr(partialResult.partial.invoice.total)}`);
+      const boqsDone = partialResult.completions.filter(c => !c.final);
+      if (boqsDone.length) bits.push(`${boqsDone.length} BOQ(s) completed (${boqsDone.map(c => c.invoice.boq_no).join(', ')})`);
+      if (!bits.length) {
+        const priced = (so.lines || []).some(l => (l.components || []).some(c => {
+          const p = getProduct(c.product_id);
+          return (window.compSellOf ? window.compSellOf(c, p) : 0) > 0;
+        }));
+        bits.push(priced ? 'nothing left to invoice on this order' : 'no invoice: these items have no price yet (Edit line items)');
+      }
+      toast(`${dc.dc_no} created · ${units} unit(s) out · ${bits.join(' · ')}`, (partialResult.partial || boqsDone.length) ? 'success' : '');
+      onClose();
+      return;
+    }
     if (boqInvoices.length) {
       toast(`${dc.dc_no} created · ${units} unit(s) out · ${boqInvoices.length} BOQ invoice(s): ${boqInvoices.map(b => b.invoice.no).join(', ')}`, 'success');
       onClose();
