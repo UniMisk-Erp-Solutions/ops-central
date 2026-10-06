@@ -224,8 +224,16 @@ function SOVendorPOsTab({ so }) {
   // GRN/e-Bill/3-way history is ever disturbed. Amount + MD gate recompute live.
   const [expanded, setExpanded] = React.useState({});
   const [addSel, setAddSel] = React.useState({});   // po.id -> product_id to add
+  const [splitOpen, setSplitOpen] = React.useState({});   // "po.id|product_id" -> bool
   const mdThreshold = state.config.vendor_po_md_threshold != null ? state.config.vendor_po_md_threshold : 500000;
   const editablePO = (po) => canProcure && ['Issued', 'In Transit'].includes(po.status) && grnsFor(po.id).length === 0;
+  // A PO that has received SOME of its lines can still have its OTHER,
+  // unreceived lines edited — the lock is per-line, not per-PO. (Vendor
+  // replacement above keeps the strict, zero-GRN-at-all gate: swapping
+  // vendors after any stock has arrived would corrupt the GRN/invoice trail.)
+  const poOpenForEdit = (po) => canProcure && ['Issued', 'In Transit', 'Partially Received'].includes(po.status);
+  const lineReceived = (po, pid) => grnsFor(po.id).some(g => (g.items || []).some(it => it.product_id === pid && (Number(it.accepted) || 0) > 0));
+  const lineEditable = (po, pid) => poOpenForEdit(po) && !lineReceived(po, pid);
   const recalc = (items) => items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
   const savePOItems = (po, items, vendorId) => {
     const amount = Math.round(recalc(items));
@@ -241,6 +249,24 @@ function SOVendorPOsTab({ so }) {
   const removeItem = (po, pid) => savePOItems(po, (po.items || []).filter(it => it.product_id !== pid));
   const addItemToPO = (po) => { const pid = addSel[po.id]; if (!pid || (po.items || []).some(it => it.product_id === pid)) return; const p = getProduct(pid); const rate = window.vendorUnitPrice ? window.vendorUnitPrice(po.vendor_id, p) : (p ? p.buy || 0 : 0); savePOItems(po, [...(po.items || []), { product_id: pid, qty: 1, rate }]); setAddSel(m => ({ ...m, [po.id]: '' })); };
   const changePOVendor = (po, vid) => { if (!vid || vid === po.vendor_id) return; const items = (po.items || []).map(it => { const p = getProduct(it.product_id); const rate = window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : it.rate; return { ...it, rate }; }); savePOItems(po, items, vid); };
+  // Editing which SOs share a line, after the PO already exists — same
+  // so_alloc primitive CreateVendorPOModal writes at creation. Any newly
+  // added SO gets notified and advances to 'Procurement Started', exactly
+  // like today's single-SO "Create PO" already does.
+  const setItemSoAlloc = (po, pid, so_alloc) => {
+    const before = new Set(poLinkedSoIds(po));
+    const items = (po.items || []).map(it => it.product_id === pid ? { ...it, so_alloc } : it);
+    const amount = Math.round(recalc(items));
+    const needsMD = amount > mdThreshold;
+    const after = poLinkedSoIds({ ...po, items });
+    const newlyLinked = after.filter(id => !before.has(id));
+    mutate(s => ({
+      ...s,
+      vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, items, amount, status: needsMD ? 'Pending MD Approval' : po.status } : p),
+      sales_orders: newlyLinked.length ? s.sales_orders.map(x => newlyLinked.includes(x.id) ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x) : s.sales_orders,
+      notifications: [{ id: 'n-posplit-' + Date.now(), kind: 'po', text: `${po.po_no}: ${getProduct(pid)?.name || pid} now split across ${after.length} SO(s)${newlyLinked.length ? ' — ' + newlyLinked.map(id => (state.sales_orders.find(x => x.id === id) || {}).so_no || id).join(', ') + ' notified' : ''}${needsMD ? ' · needs MD approval' : ''}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
+    }), { action: 'po-split', entity: 'VendorPO', entity_id: po.id });
+  };
 
   // Aggregate received / on-PO / required per product across this SO.
   const receivedByProd = {}, onPOByProd = {};
@@ -365,7 +391,7 @@ function SOVendorPOsTab({ so }) {
                 const rec = shared ? grnsFor(po.id).reduce((a, g) => a + (g.items || []).reduce((b, it) => b + grnLineSoQty(it, po, so.id), 0), 0) : grnsFor(po.id).reduce((a, g) => a + (g.items || []).reduce((b, it) => b + (it.accepted || 0), 0), 0);
                 const recPct = ordered > 0 ? Math.round(rec / ordered * 100) : 0;
                 const vis = viFor(po.id); const booked = vis.filter(x => x.status === 'Booked').length;
-                const open = !!expanded[po.id]; const canEdit = editablePO(po);
+                const open = !!expanded[po.id]; const canEdit = editablePO(po); const editOpen = poOpenForEdit(po);
                 return (
                   <Fragment key={po.id}>
                   <tr onClick={() => setExpanded(e => ({ ...e, [po.id]: !open }))} style={{ cursor: 'pointer' }}>
@@ -401,7 +427,7 @@ function SOVendorPOsTab({ so }) {
                       <div style={{ padding: '8px 12px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                           <strong className="small">Line items on {po.po_no} → {v ? v.name : po.vendor_id}</strong>
-                          {canEdit ? <span className="badge accent tiny">editable</span> : <span className="badge tiny" title="Locked once received / awaiting MD">read-only</span>}
+                          {editOpen ? <span className="badge accent tiny">editable</span> : <span className="badge tiny" title="Locked once received / awaiting MD">read-only</span>}
                           <div className="grow"/>
                           {canEdit && (
                             <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -414,34 +440,53 @@ function SOVendorPOsTab({ so }) {
                           <button className="btn btn-sm btn-ghost" onClick={() => navigate(`vendor-pos/${po.id}`)}><Icon name="arrowRight" size={11}/>Open PO</button>
                         </div>
                         <table className="t" style={{ background: 'var(--surface)' }}>
-                          <thead><tr><th>Line item</th><th>Code</th><th className="num">Qty</th><th className="num">Rate ₹</th><th className="num">Line ₹</th><th className="num">Received</th>{canEdit && <th style={{ width: 28 }}></th>}</tr></thead>
+                          <thead><tr><th>Line item</th><th>Code</th><th className="num">Qty</th><th className="num">Rate ₹</th><th className="num">Line ₹</th><th className="num">Received</th>{editOpen && <th style={{ width: 28 }}></th>}</tr></thead>
                           <tbody>
                             {(po.items || []).map(it => {
                               const p = getProduct(it.product_id) || { name: it.product_id, code: it.product_id };
                               const itRec = grnsFor(po.id).reduce((a, g) => a + (g.items || []).filter(y => y.product_id === it.product_id).reduce((b, y) => b + (y.accepted || 0), 0), 0);
+                              const locked = !lineEditable(po, it.product_id);
+                              const shared = Array.isArray(it.so_alloc) && it.so_alloc.length > 1;
+                              const splitKey = po.id + '|' + it.product_id;
                               return (
-                                <tr key={it.product_id}>
-                                  <td><strong>{p.name}</strong></td>
+                                <Fragment key={it.product_id}>
+                                <tr>
+                                  <td><strong>{p.name}</strong>{locked && editOpen && <span className="badge tiny" style={{ marginLeft: 6 }} title="Locked once this item is received">locked</span>}</td>
                                   <td className="mono small muted">{p.code}</td>
-                                  <td className="num">{canEdit ? <input type="number" min="0" className="input mono" value={it.qty} onChange={e => setItemQty(po, it.product_id, e.target.value)} style={{ width: 64, height: 24, textAlign: 'right' }}/> : it.qty}</td>
-                                  <td className="num">{canEdit ? <input type="number" min="0" className="input mono" value={it.rate} onChange={e => setItemRate(po, it.product_id, e.target.value)} style={{ width: 84, height: 24, textAlign: 'right' }}/> : inr(it.rate)}</td>
+                                  <td className="num">{editOpen && !locked ? <input type="number" min="0" className="input mono" value={it.qty} onChange={e => setItemQty(po, it.product_id, e.target.value)} style={{ width: 64, height: 24, textAlign: 'right' }}/> : it.qty}</td>
+                                  <td className="num">{editOpen && !locked ? <input type="number" min="0" className="input mono" value={it.rate} onChange={e => setItemRate(po, it.product_id, e.target.value)} style={{ width: 84, height: 24, textAlign: 'right' }}/> : inr(it.rate)}</td>
                                   <td className="num mono">{inr((Number(it.qty) || 0) * (Number(it.rate) || 0))}</td>
                                   <td className="num">{itRec || <span className="muted">0</span>}</td>
-                                  {canEdit && <td><button className="btn btn-ghost btn-sm" title="Remove item from this PO" onClick={() => removeItem(po, it.product_id)}><Icon name="x" size={11} color="var(--danger)"/></button></td>}
+                                  {editOpen && <td>{!locked && <button className="btn btn-ghost btn-sm" title="Remove item from this PO" onClick={() => removeItem(po, it.product_id)}><Icon name="x" size={11} color="var(--danger)"/></button>}</td>}
                                 </tr>
+                                {editOpen && !locked && (
+                                  <tr><td colSpan={7} style={{ padding: shared || splitOpen[splitKey] ? undefined : '0 8px 6px' }}>
+                                    {!splitOpen[splitKey] && (
+                                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSplitOpen(m => ({ ...m, [splitKey]: true }))}>
+                                        <Icon name="arrowLeftRight" size={11}/>{shared ? `Split across ${it.so_alloc.length} SOs — edit` : 'Split this line across SOs'}
+                                      </button>
+                                    )}
+                                    {splitOpen[splitKey] && (
+                                      <LinePoSplitEditor state={state} po={po} it={it}
+                                        onSave={(so_alloc) => { setItemSoAlloc(po, it.product_id, so_alloc); setSplitOpen(m => ({ ...m, [splitKey]: false })); }}
+                                        onCancel={() => setSplitOpen(m => ({ ...m, [splitKey]: false }))}/>
+                                    )}
+                                  </td></tr>
+                                )}
+                                </Fragment>
                               );
                             })}
-                            {(po.items || []).length === 0 && <tr><td colSpan={canEdit ? 7 : 6}><div className="empty">No items.</div></td></tr>}
+                            {(po.items || []).length === 0 && <tr><td colSpan={editOpen ? 7 : 6}><div className="empty">No items.</div></td></tr>}
                           </tbody>
                         </table>
-                        {canEdit && (
+                        {editOpen && (
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
                             <select className="select" style={{ height: 26, fontSize: 12, width: 240 }} value={addSel[po.id] || ''} onChange={e => setAddSel(m => ({ ...m, [po.id]: e.target.value }))}>
                               <option value="">+ Add line item to this vendor…</option>
                               {state.products.filter(p => !(po.items || []).some(it => it.product_id === p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                             </select>
                             <button className="btn btn-sm" disabled={!addSel[po.id]} onClick={() => addItemToPO(po)}><Icon name="plus" size={11}/>Add</button>
-                            <span className="tiny muted">Edits recompute the PO amount & re-check the MD approval threshold. Received POs are locked.</span>
+                            <span className="tiny muted">Edits recompute the PO amount & re-check the MD approval threshold. A received line is locked; others on the same PO stay editable.</span>
                           </div>
                         )}
                       </div>
@@ -1560,6 +1605,83 @@ function SoSplitEditor({ po, productId, accepted, value, onChange }) {
 }
 window.SoSplitEditor = SoSplitEditor;
 
+// Editing an ALREADY-ISSUED PO line's SO split (Moment 3 — "which SO is this
+// extra qty for?"). Candidates are every other open SO still outstanding for
+// this item (soOutstandingProcurement — the same discovery CreateVendorPOModal
+// uses) PLUS whoever is already on this line's so_alloc, shown even at zero
+// outstanding since this very PO is what already covers them.
+//
+// A member already GRN'd on this PO can never be edited below what it has
+// actually received — "can't un-receive", the same rule this screen already
+// follows for a received PO as a whole.
+function LinePoSplitEditor({ state, po, it, onSave, onCancel }) {
+  const already = {};
+  poLinkedSoIds(po).forEach(soId => { already[soId] = 0; });
+  (state.grns || []).filter(g => g.po_id === po.id).forEach(g => (g.items || []).forEach(gi => {
+    if (gi.product_id !== it.product_id) return;
+    poLinkedSoIds(po).forEach(soId => { already[soId] = (already[soId] || 0) + grnLineSoQty(gi, po, soId); });
+  }));
+  const linkedIds = (it.so_alloc && it.so_alloc.length ? it.so_alloc.map(a => a.so_id) : [po.so_id]);
+  const otherOpen = (state.sales_orders || []).filter(s => s.id !== po.so_id && linkedIds.indexOf(s.id) === -1 && ['Closed', 'Cancelled'].indexOf(s.status) === -1);
+  const otherOutstanding = {};
+  otherOpen.forEach(os => { otherOutstanding[os.id] = (window.soOutstandingProcurement ? window.soOutstandingProcurement(state, os)[it.product_id] : 0) || 0; });
+  const candidateIds = Array.from(new Set([
+    po.so_id, ...linkedIds,
+    ...otherOpen.filter(os => otherOutstanding[os.id] > 0.0001).map(os => os.id),
+  ]));
+
+  const [alloc, setAlloc] = React.useState(() => {
+    const m = {};
+    candidateIds.forEach(id => {
+      const ex = it.so_alloc && it.so_alloc.find(a => a.so_id === id);
+      m[id] = ex ? ex.qty : (id === po.so_id && !(it.so_alloc && it.so_alloc.length) ? it.qty : 0);
+    });
+    return m;
+  });
+  const [picked, setPicked] = React.useState(() => {
+    const m = {}; candidateIds.forEach(id => { m[id] = (alloc[id] || 0) > 0 || (already[id] || 0) > 0; }); return m;
+  });
+
+  const floor = (id) => already[id] || 0;
+  const total = candidateIds.reduce((s, id) => s + (picked[id] ? (Number(alloc[id]) || 0) : 0), 0);
+  const balanced = Math.abs(total - (Number(it.qty) || 0)) < 0.0001;
+
+  const save = () => {
+    const entries = candidateIds.filter(id => picked[id] && (Number(alloc[id]) || 0) > 0).map(id => ({ so_id: id, qty: Number(alloc[id]) || 0 }));
+    onSave(entries.length >= 2 ? entries : undefined);   // 1 survivor -> back to the plain default
+  };
+
+  return (
+    <div style={{ padding: '6px 8px', background: 'var(--bg-subtle)', borderRadius: 4, marginTop: 4 }}>
+      <div className="tiny muted" style={{ marginBottom: 4 }}>Which SO(s) is this line's {qty(it.qty)} for?</div>
+      {candidateIds.map(id => {
+        const so = (state.sales_orders || []).find(s => s.id === id);
+        const min = floor(id);
+        return (
+          <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' }}>
+            <input type="checkbox" checked={!!picked[id]} disabled={min > 0}
+              onChange={e => setPicked(p => ({ ...p, [id]: e.target.checked }))}/>
+            <span className="tiny mono" style={{ width: 130 }}>{so ? so.so_no : id}{id === po.so_id ? ' (original)' : ''}</span>
+            {min > 0 && <span className="tiny muted">already received {min} — locked in</span>}
+            {picked[id] && (
+              <input type="number" min={min} className="input mono" value={alloc[id] || 0}
+                onChange={e => setAlloc(a => ({ ...a, [id]: Math.max(min, Number(e.target.value) || 0) }))}
+                style={{ width: 64, height: 24, textAlign: 'right', marginLeft: 'auto' }}/>
+            )}
+          </div>
+        );
+      })}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+        <span className="tiny mono" style={{ color: balanced ? 'var(--success)' : 'var(--danger)' }}>{total} / {it.qty}</span>
+        <div className="grow"/>
+        <button type="button" className="btn btn-sm" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-primary" disabled={!balanced} onClick={save}>Save split</button>
+      </div>
+    </div>
+  );
+}
+window.LinePoSplitEditor = LinePoSplitEditor;
+
 // Per-vendor receive modal (used from the SO Vendor POs tab — scalable to many vendors).
 // The PO e-Bill as a document.
 //
@@ -2658,6 +2780,23 @@ function procComponentList(so) {
   return soRequiredList(so);
 }
 
+// Turn CreateVendorPOModal's rows (each row's own qty + an optional combine[]
+// of {so_id, qty} picked up from OTHER SOs sharing the same need) into real PO
+// line items. so_alloc is written only when a line genuinely ends up with a
+// second contributing SO — a plain, uncombined row keeps today's exact
+// single-SO shape (no so_alloc key at all).
+function buildComboPOItems(primarySoId, items) {
+  const totalOf = (i) => (Number(i.qty) || 0) + (i.combine || []).reduce((s, c) => s + (Number(c.qty) || 0), 0);
+  return (items || []).filter(i => totalOf(i) > 0).map(i => {
+    const combine = (i.combine || []).filter(c => (Number(c.qty) || 0) > 0);
+    const base = { product_id: i.product_id, qty: totalOf(i), rate: i.rate };
+    return combine.length
+      ? { ...base, so_alloc: [{ so_id: primarySoId, qty: Number(i.qty) || 0 }, ...combine.map(c => ({ so_id: c.so_id, qty: Number(c.qty) || 0 }))] }
+      : base;
+  });
+}
+window.buildComboPOItems = buildComboPOItems;
+
 // ===== Create Vendor PO for an SO (Purchase) =====
 function CreateVendorPOModal({ soId, vendorId, onClose }) {
   const { state, mutate, getSO, getProduct, getVendor } = useStore();
@@ -2689,26 +2828,49 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
       let rate = p ? p.buy : 0;
       if (vendor && prices[c.product_id] && prices[c.product_id][vendor] != null) rate = prices[c.product_id][vendor];
       else if (vendor && window.vendorUnitPrice && p) rate = window.vendorUnitPrice(vendor, p);
-      return { product_id: c.product_id, qty: c.qty, rate };
+      return { product_id: c.product_id, qty: c.qty, rate, combine: [] };
     }));
   }, [so, vendor]);
 
+  // Every OTHER open SO that independently needs some of the same item —
+  // netted against what each already has on its own vendor PO
+  // (soOutstandingProcurement), so an SO that is already fully covered never
+  // shows up as a candidate to combine. Purely a deliberate per-PO human
+  // click: nothing here writes anything until Create PO is actually pressed.
+  const [combineOpen, setCombineOpen] = React.useState({});
+  const otherOpenSOs = state.sales_orders.filter(s => s.id !== so && !['Closed', 'Cancelled'].includes(s.status));
+  const otherOutstanding = {};
+  otherOpenSOs.forEach(os => { otherOutstanding[os.id] = window.soOutstandingProcurement ? window.soOutstandingProcurement(state, os) : {}; });
+  const candidatesFor = (pid) => otherOpenSOs
+    .map(os => ({ so_id: os.id, so_no: os.so_no, outstanding: otherOutstanding[os.id][pid] || 0 }))
+    .filter(c => c.outstanding > 0.0001);
+
   const setItem = (i, patch) => setItems(its => its.map((x, j) => j === i ? { ...x, ...patch } : x));
-  const amount = items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0);
+  const rowTotalQty = (it) => (Number(it.qty) || 0) + (it.combine || []).reduce((s, c) => s + (Number(c.qty) || 0), 0);
+  const toggleCombine = (i, soId, outstanding) => setItems(its => its.map((x, j) => {
+    if (j !== i) return x;
+    const has = (x.combine || []).some(c => c.so_id === soId);
+    return { ...x, combine: has ? x.combine.filter(c => c.so_id !== soId) : [...(x.combine || []), { so_id: soId, qty: outstanding }] };
+  }));
+  const setCombineQty = (i, soId, qty) => setItems(its => its.map((x, j) => j === i
+    ? { ...x, combine: (x.combine || []).map(c => c.so_id === soId ? { ...c, qty: Math.max(0, Number(qty) || 0) } : c) } : x));
+
+  const amount = items.reduce((s, i) => s + rowTotalQty(i) * (i.rate || 0), 0);
   const needsMD = amount > (state.config.vendor_po_md_threshold ?? 500000);
 
   const submit = () => {
-    const real = items.filter(i => i.qty > 0);
+    const real = buildComboPOItems(so, items);
     if (!so || !vendor || real.length === 0) { toast('Pick SO, vendor and at least one item'); return; }
     const poNo = vendorPoNo(state, TODAY);
+    const linkedSoIds = Array.from(new Set([so, ...real.flatMap(i => (i.so_alloc || []).map(a => a.so_id))]));
     const po = { id: 'po-' + Date.now(), po_no: poNo, so_id: so, vendor_id: vendor, date: TODAY, expected, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: real, ebill: {}, source: 'manual' };
     mutate(s => ({
       ...s,
       vendor_pos: [po, ...s.vendor_pos],
-      sales_orders: s.sales_orders.map(x => x.id === so ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x),
-      notifications: [{ id: 'n-po-' + Date.now(), kind: 'po', text: `${poNo} ${needsMD ? 'awaiting MD approval' : 'issued'} → ${getVendor(vendor)?.name} for ${getSO(so)?.so_no} · ${inrK(amount)}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
+      sales_orders: s.sales_orders.map(x => linkedSoIds.includes(x.id) ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x),
+      notifications: [{ id: 'n-po-' + Date.now(), kind: 'po', text: `${poNo} ${needsMD ? 'awaiting MD approval' : 'issued'} → ${getVendor(vendor)?.name} for ${linkedSoIds.map(id => getSO(id)?.so_no).filter(Boolean).join(', ')} · ${inrK(amount)}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
     }), { action: 'create', entity: 'VendorPO', entity_id: po.id });
-    toast(`${poNo} created${needsMD ? ' · sent to MD' : ''}`, 'success');
+    toast(`${poNo} created${linkedSoIds.length > 1 ? ` · combined across ${linkedSoIds.length} SOs` : ''}${needsMD ? ' · sent to MD' : ''}`, 'success');
     onClose();
   };
 
@@ -2747,13 +2909,45 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
             <tbody>
               {items.map((it, i) => {
                 const p = getProduct(it.product_id) || { name: it.product_id, code: it.product_id };
+                const cands = candidatesFor(it.product_id);
+                const combine = it.combine || [];
+                const total = rowTotalQty(it);
                 return (
-                  <tr key={it.product_id}>
-                    <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
+                  <Fragment key={it.product_id}>
+                  <tr>
+                    <td>
+                      {p.name}<div className="tiny muted mono">{p.code}</div>
+                      {cands.length > 0 && (
+                        <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 2, height: 20, fontSize: 11 }}
+                          onClick={() => setCombineOpen(m => ({ ...m, [it.product_id]: !m[it.product_id] }))}>
+                          <Icon name="arrowLeftRight" size={11}/>{combine.length > 0 ? `combining ${combine.length} other SO(s)` : `${cands.length} other SO(s) also need this — combine?`}
+                        </button>
+                      )}
+                    </td>
                     <td className="num"><input type="number" className="input mono" min="0" value={it.qty} onChange={e => setItem(i, { qty: parseInt(e.target.value) || 0 })} style={{ width: 64, textAlign: 'right', height: 24 }}/></td>
                     <td className="num"><input type="number" className="input mono" min="0" value={it.rate} onChange={e => setItem(i, { rate: parseInt(e.target.value) || 0 })} style={{ width: 90, textAlign: 'right', height: 24 }}/></td>
-                    <td className="num">{inr((it.qty || 0) * (it.rate || 0))}</td>
+                    <td className="num">{inr(total * (it.rate || 0))}{combine.length > 0 && <div className="tiny muted">{total} total</div>}</td>
                   </tr>
+                  {combineOpen[it.product_id] && cands.length > 0 && (
+                    <tr><td colSpan={4} style={{ padding: 0 }}>
+                      <div style={{ padding: '6px 8px', background: 'var(--bg-subtle)', borderRadius: 4, marginTop: 2, marginBottom: 2 }}>
+                        <div className="tiny muted" style={{ marginBottom: 4 }}>Combine this line into the same PO, for:</div>
+                        {cands.map(c => {
+                          const on = combine.some(x => x.so_id === c.so_id);
+                          const row = combine.find(x => x.so_id === c.so_id);
+                          return (
+                            <div key={c.so_id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' }}>
+                              <input type="checkbox" checked={on} onChange={() => toggleCombine(i, c.so_id, c.outstanding)}/>
+                              <span className="tiny mono" style={{ width: 130 }}>{c.so_no}</span>
+                              <span className="tiny muted">needs {c.outstanding}</span>
+                              {on && <input type="number" min="0" className="input mono" value={row.qty} onChange={e => setCombineQty(i, c.so_id, e.target.value)} style={{ width: 64, height: 24, textAlign: 'right', marginLeft: 'auto' }}/>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </td></tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
