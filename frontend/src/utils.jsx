@@ -828,6 +828,58 @@ function soRequiredList(so) {
   return Object.keys(m).map(product_id => ({ product_id, qty: m[product_id] }));
 }
 
+// ===== A vendor PO shared across more than one Sales Order =====
+// A PO's `so_id` has always meant "the whole PO belongs to this one order."
+// Most POs still do — these five functions are the ONLY place that changes,
+// and only when a line explicitly says so. `it.so_alloc` / grnItem.so_split
+// are optional: [{ so_id, qty }], written ONLY when ≥2 SOs genuinely share a
+// line (never a 1-entry array — that would just be a second, redundant way
+// to say "100% to one SO"). Absent means exactly what it always meant: the
+// whole line/receipt belongs to po.so_id. Every caller below degrades to
+// that historic behaviour automatically, so a single-SO PO — still the
+// overwhelming majority, forever — is provably unaffected.
+// See docs/multi-so-vendor-po.md.
+
+// How much of ONE PO LINE's ordered qty belongs to ONE SO.
+function poLineSoQty(po, productId, soId) {
+  const it = ((po && po.items) || []).find(x => x.product_id === productId);
+  if (!it) return 0;
+  if (Array.isArray(it.so_alloc) && it.so_alloc.length) {
+    const a = it.so_alloc.find(x => x.so_id === soId);
+    return a ? (Number(a.qty) || 0) : 0;
+  }
+  return soId === po.so_id ? (Number(it.qty) || 0) : 0;
+}
+
+// How much of ONE GRN LINE's accepted qty (one receipt event) belongs to ONE
+// SO. `grnItem` is one entry of grn.items; `po` is that GRN's own PO (needed
+// only for the po.so_id fallback — a GRN itself never stores so_id).
+function grnLineSoQty(grnItem, po, soId) {
+  if (!grnItem) return 0;
+  if (Array.isArray(grnItem.so_split) && grnItem.so_split.length) {
+    const a = grnItem.so_split.find(x => x.so_id === soId);
+    return a ? (Number(a.qty) || 0) : 0;
+  }
+  return soId === (po && po.so_id) ? (Number(grnItem.accepted) || 0) : 0;
+}
+
+// Every SO this PO currently serves. DERIVED from po.so_id ∪ every line's
+// so_alloc, never stored separately — so it can never drift from the
+// per-line truth the way a cached list could.
+function poLinkedSoIds(po) {
+  const ids = new Set([po && po.so_id].filter(Boolean));
+  ((po && po.items) || []).forEach(it => (it.so_alloc || []).forEach(a => { if (a.so_id) ids.add(a.so_id); }));
+  return Array.from(ids);
+}
+function poServesSO(po, soId) { return poLinkedSoIds(po).indexOf(soId) !== -1; }
+
+// This SO's own share of the PO's value — never the whole PO's amount,
+// which is what reading po.amount directly would wrongly attribute to every
+// SO sharing it.
+function poSoAmount(po, soId) {
+  return ((po && po.items) || []).reduce((s, it) => s + poLineSoQty(po, it.product_id, soId) * (Number(it.rate) || 0), 0);
+}
+
 // ===== What an item costs us =====
 // In order of trust: what we actually last paid a vendor, then the catalogue's
 // standard cost. Vendor POs are already in memory, so this needs no round trip.
@@ -865,6 +917,7 @@ Object.assign(window, {
   poLineTax, poLineTaxes, taxSummary,
   docStem, docNo, boqNo, vendorPoNo, challanNo, reprefix, vendorInvoiceNo, poEbillNoFor, clientInvoiceNo,
   nextSoNo, soNoTaken, soRequired, soRequiredList, lastBuyOf, itemCost,
+  poLineSoQty, grnLineSoQty, poLinkedSoIds, poServesSO, poSoAmount,
   soStageIndex, soAdvanceStatus, soDerivedStatus, soEffectiveStatus, SO_MANUAL_STATES,
   soDispatchedQty, soClientReview, soRejectedOutstanding, soUnfulfilled,
   inrFmt, inr, inrK, fmtDate, addDays, daysBetween, TODAY, statusClass, SO_LIFECYCLE,
