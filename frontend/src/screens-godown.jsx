@@ -328,9 +328,10 @@ function VGAddFromPoolPanel({ so }) {
   const _impl = window.soImplReq ? window.soImplReq(so) : {}; Object.keys(_impl).forEach(pid => { need[pid] = (need[pid] || 0) + _impl[pid]; });   // include implementation BOQ
   // What this SO already holds (GRN-accepted + committed pool − diverted), so we
   // only suggest filling the real remaining gap, ranked by cost saved.
-  const soPoIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
+  const soPosById = {};
+  (state.vendor_pos || []).forEach(p => { if (poServesSO(p, so.id)) soPosById[p.id] = p; });
   const have = {};
-  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { have[it.product_id] = (have[it.product_id] || 0) + (it.accepted || 0); }); });
+  (state.grns || []).forEach(g => { const po = soPosById[g.po_id]; if (po) (g.items || []).forEach(it => { have[it.product_id] = (have[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }); });
   (so.pool_alloc || []).forEach(a => { have[a.product_id] = (have[a.product_id] || 0) + (Number(a.qty) || 0); });
   const out = window.soPoolOut ? window.soPoolOut(so) : {};
   Object.keys(out).forEach(pid => { have[pid] = Math.max(0, (have[pid] || 0) - out[pid]); });
@@ -596,7 +597,7 @@ window.PendingReceiptsPanel = PendingReceiptsPanel;
 function VGGrnCard({ so }) {
   const { state, navigate, getProduct, getVendor } = useStore();
   const poById = {};
-  (state.vendor_pos || []).forEach(p => { if (p.so_id === so.id) poById[p.id] = p; });
+  (state.vendor_pos || []).forEach(p => { if (poServesSO(p, so.id)) poById[p.id] = p; });
   const grns = (state.grns || []).filter(g => poById[g.po_id]);
   if (!grns.length) return null;
   grns.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
@@ -613,7 +614,7 @@ function VGGrnCard({ so }) {
             {grns.map(g => {
               const po = poById[g.po_id] || {};
               const v = getVendor(po.vendor_id);
-              const units = (g.items || []).reduce((a, i) => a + (Number(i.accepted) || 0), 0);
+              const units = (g.items || []).reduce((a, i) => a + grnLineSoQty(i, po, so.id), 0);
               return (
                 <tr key={g.id}>
                   <td><a className="mono small" style={{ cursor: 'pointer' }} onClick={() => navigate(`grn/${g.id}`)}>{g.grn_no}</a>
@@ -621,7 +622,7 @@ function VGGrnCard({ so }) {
                   <td className="mono small">{fmtDate(g.date)}</td>
                   <td className="small">{v ? v.name : '—'}<div className="tiny muted mono">{po.po_no || ''}</div></td>
                   <td className="small trunc" style={{ maxWidth: 260 }}>
-                    {(g.items || []).map(i => `${i.accepted}x ${(getProduct(i.product_id) || {}).name || i.product_id}`).join(', ')}
+                    {(g.items || []).map(i => `${grnLineSoQty(i, po, so.id)}x ${(getProduct(i.product_id) || {}).name || i.product_id}`).join(', ')}
                   </td>
                   <td className="num mono">{units}</td>
                   <td style={{ textAlign: 'right' }}>
@@ -703,9 +704,13 @@ function VGPoolSendPanel({ so }) {
   const role = getUser(currentUser)?.role;
   const canPool = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
 
-  const soPoIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
+  const soPosById = {};
+  (state.vendor_pos || []).forEach(p => { if (poServesSO(p, so.id)) soPosById[p.id] = p; });
   const recv = {};
-  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + (it.accepted || 0); }); });
+  // A shared PO's GRN counts only THIS SO's own split here — never the whole
+  // receipt — so Purchase/PM can never divert another linked SO's units to
+  // the pool by accident.
+  (state.grns || []).forEach(g => { const po = soPosById[g.po_id]; if (po) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }); });
   (so.pool_alloc || []).forEach(a => { recv[a.product_id] = (recv[a.product_id] || 0) + (Number(a.qty) || 0); });
   const out = window.soPoolOut ? window.soPoolOut(so) : {};
   const held = Object.keys(recv).map(pid => ({ product_id: pid, held: Math.max(0, (recv[pid] || 0) - (out[pid] || 0)) })).filter(x => x.held > 0);
@@ -796,9 +801,10 @@ function VGImplPanel({ so }) {
   const requests = (im && im.requests) || [];
   const sup = getUser(im && im.supervisor_id);
 
-  const soPoIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
+  const soPosById = {};
+  (state.vendor_pos || []).forEach(p => { if (poServesSO(p, so.id)) soPosById[p.id] = p; });
   const grnByProd = {};
-  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { grnByProd[it.product_id] = (grnByProd[it.product_id] || 0) + (it.accepted || 0); }); });
+  (state.grns || []).forEach(g => { const po = soPosById[g.po_id]; if (po) (g.items || []).forEach(it => { grnByProd[it.product_id] = (grnByProd[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }); });
   // Pool stock committed to this SO ("Add from Master Pool") is already in hand for
   // the site, so it counts as received AND as handed over → the item reads Fulfilled.
   const poolAllocByProd = {};
@@ -1150,10 +1156,11 @@ function VirtualGodownView({ soId, embedded }) {
   });
 
   // Material physically received against this SO's vendor POs (cumulative GRN accepted).
-  const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id);
-  const soPoIds = new Set(soPOs.map(p => p.id));
+  const soPOs = (state.vendor_pos || []).filter(p => poServesSO(p, so.id));
+  const soPosById = {};
+  soPOs.forEach(p => { soPosById[p.id] = p; });
   const recvByProd = {};
-  (state.grns || []).forEach(g => { if (soPoIds.has(g.po_id)) (g.items || []).forEach(it => { recvByProd[it.product_id] = (recvByProd[it.product_id] || 0) + (it.accepted || 0); }); });
+  (state.grns || []).forEach(g => { const po = soPosById[g.po_id]; if (po) (g.items || []).forEach(it => { recvByProd[it.product_id] = (recvByProd[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }); });
   (so.pool_alloc || []).forEach(a => { recvByProd[a.product_id] = (recvByProd[a.product_id] || 0) + (Number(a.qty) || 0); });   // committed pool stock counts as in-hand
   const pooledOut = window.soPoolOut ? window.soPoolOut(so) : {};   // units diverted to the Master Pool
   // Pool stock COMMITTED to this SO (via "Add from Master Pool"). Merely having a
@@ -1168,12 +1175,15 @@ function VirtualGodownView({ soId, embedded }) {
   const onPOByProd = {};
   const shippedByProd = {};
   (state.vendor_pos || []).forEach(po => {
-    if (po.so_id !== so.id || ['Rejected', 'Cancelled'].includes(po.status)) return;
+    if (!poServesSO(po, so.id) || ['Rejected', 'Cancelled'].includes(po.status)) return;
     (po.items || []).forEach(it => {
-      onPOByProd[it.product_id] = (onPOByProd[it.product_id] || 0) + (Number(it.qty) || 0);
+      onPOByProd[it.product_id] = (onPOByProd[it.product_id] || 0) + poLineSoQty(po, it.product_id, so.id);
     });
     const di = po.dispatch_info || {};
     if (!di.lr_no && !di.carrier && !di.shipped_on) return;
+    // Vendor shipment tracking has no per-SO split of its own (dispatch_info
+    // isn't one of the two places this feature extends) — on a genuinely
+    // shared PO this stays the whole shipment, same as it always has.
     const list = Array.isArray(di.items) && di.items.length ? di.items : (po.items || []);
     list.forEach(it => {
       shippedByProd[it.product_id] = (shippedByProd[it.product_id] || 0) + (Number(it.qty) || 0);
@@ -1991,8 +2001,9 @@ window.soFullyReceived = function (state, so) {
   // Under-counting here let an order be treated as fully received when only a
   // fraction had arrived, which is the worst version of this bug.
   const req = soRequired(so);
-  const poIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
-  const recv = {}; (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + (it.accepted || 0); }); });
+  const posById = {};
+  (state.vendor_pos || []).forEach(p => { if (poServesSO(p, so.id)) posById[p.id] = p; });
+  const recv = {}; (state.grns || []).forEach(g => { const po = posById[g.po_id]; if (po) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }); });
   (so.pool_alloc || []).forEach(a => { recv[a.product_id] = (recv[a.product_id] || 0) + (Number(a.qty) || 0); });
   return Object.keys(req).every(pid => (recv[pid] || 0) >= req[pid]);
 };

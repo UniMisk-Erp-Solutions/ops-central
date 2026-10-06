@@ -156,5 +156,97 @@ console.log('\n[3] suggestSoSplit ranks by priority then delivery date then SO n
   check('the rest is visible as leftover, not silently dropped', r3.leftover, 3);
 }
 
+console.log('\n[4] the real migrated call sites agree, on one shared PO spanning two SOs');
+{
+  const PRODUCTS = [{ id: 'p1', name: 'Switch', code: 'SW-1', buy: 50, sell: 0 }];
+  const getProduct = id => PRODUCTS.find(p => p.id === id) || null;
+
+  const soX = { id: 'so-x', so_no: 'SO/FY26/0100', status: 'Procurement Started', customer_id: 'c1',
+    lines: [{ id: 'l1', bundle_qty: 1, unit_price: 100, components: [{ product_id: 'p1', qty: 10 }] }],
+    pool_alloc: [], invoices: [], extra: {} };
+  const soY = { id: 'so-y', so_no: 'SO/FY26/0101', status: 'Procurement Started', customer_id: 'c1',
+    lines: [{ id: 'l1', bundle_qty: 1, unit_price: 60, components: [{ product_id: 'p1', qty: 6 }] }],
+    pool_alloc: [], invoices: [], extra: {} };
+  const poShared = {
+    id: 'po-shared', po_no: 'VPO/FY26/0001', so_id: 'so-x', vendor_id: 'v1', status: 'Issued', amount: 800,
+    items: [{ product_id: 'p1', qty: 16, rate: 50, so_alloc: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }] }],
+  };
+  const grn1 = {
+    id: 'grn-1', grn_no: 'GRN/FY26/0001', po_id: 'po-shared', date: '2026-10-01',
+    items: [{ product_id: 'p1', qty: 16, received: 16, accepted: 16, rejected: 0, to_pool: 0,
+      so_split: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }] }],
+  };
+  const state = {
+    vendor_pos: [poShared], grns: [grn1], sales_orders: [soX, soY],
+    outward_dispatches: [], payments: [], pool: [], config: {},
+  };
+  const soSubtotal = so => (so.lines || []).reduce((a, l) => a + (Number(l.bundle_qty) || 0) * (Number(l.unit_price) || 0), 0);
+
+  check("soReceivedQty gives SO-X only its own 10, never SO-Y's 6",
+    sandbox.soReceivedQty(soX, state).p1, 10);
+  check("soReceivedQty gives SO-Y only its own 6, never SO-X's 10",
+    sandbox.soReceivedQty(soY, state).p1, 6);
+
+  check('soDerivedStatus sees SO-X as fully received from its own 10/10 share',
+    sandbox.soDerivedStatus(state, soX), 'Ready to Dispatch');
+  check("soDerivedStatus ALSO sees SO-Y as fully received, from the same shared PO's 6/6 share",
+    sandbox.soDerivedStatus(state, soY), 'Ready to Dispatch');
+
+  check('soOutstandingProcurement says SO-X needs nothing more — its 10 is already on the shared PO',
+    sandbox.soOutstandingProcurement(state, soX), {});
+  check("soOutstandingProcurement says SO-Y needs nothing more either — not fooled into reordering its 6",
+    sandbox.soOutstandingProcurement(state, soY), {});
+
+  check("allocBuildRows never re-offers SO-Y's item — its whole need is already on the shared PO",
+    sandbox.allocBuildRows(state, soY), []);
+
+  const profX = sandbox.soProfit(state, soX, getProduct);
+  check('soProfit commits SO-X to only its own 10×50 = 500, not the whole 16×50 PO',
+    profX.committed, 500);
+  const profY = sandbox.soProfit(state, soY, getProduct);
+  check('soProfit commits SO-Y to only its own 6×50 = 300',
+    profY.committed, 300);
+
+  const metX = sandbox.soMetrics(state, soX, soSubtotal);
+  check("soMetrics' vendor spend for SO-X is its own 500 share of the shared PO, not the full 800",
+    metX.vendorSpend, 500);
+  const metY = sandbox.soMetrics(state, soY, soSubtotal);
+  check("soMetrics' vendor spend for SO-Y is its own 300 share",
+    metY.vendorSpend, 300);
+
+  check('soFullyReceived is true for SO-X from its own share', sandbox.soFullyReceived(state, soX), true);
+  check('soFullyReceived is true for SO-Y from its own share too', sandbox.soFullyReceived(state, soY), true);
+}
+
+console.log('\n[5] a client rejection replaced through a PO combined with ANOTHER SO is correctly recognized as already reordered');
+{
+  sandbox.__opcWorkflow = { client_acceptance: true };
+  const soR = { id: 'so-r', so_no: 'SO/FY26/0102', status: 'Pending Client Acceptance', customer_id: 'c1',
+    lines: [{ id: 'l1', bundle_qty: 1, unit_price: 40, components: [{ product_id: 'p2', qty: 4 }] }],
+    pool_alloc: [], invoices: [], extra: { client_review: { items: { p2: { accepted: 2, rejected: 2 } } } } };
+  const soZ = { id: 'so-z', so_no: 'SO/FY26/0103', status: 'Procurement Started', customer_id: 'c1',
+    lines: [{ id: 'l1', bundle_qty: 1, unit_price: 30, components: [{ product_id: 'p2', qty: 3 }] }],
+    pool_alloc: [], invoices: [], extra: {} };
+  const poOrigR = { id: 'po-orig-r', po_no: 'VPO/FY26/0002', so_id: 'so-r', vendor_id: 'v1', status: 'Material Received', amount: 80,
+    items: [{ product_id: 'p2', qty: 4, rate: 20 }] };
+  const poReplace = {
+    id: 'po-replace', po_no: 'VPO/FY26/0003', so_id: 'so-z', vendor_id: 'v1', status: 'Issued', amount: 100,
+    items: [{ product_id: 'p2', qty: 5, rate: 20, so_alloc: [{ so_id: 'so-z', qty: 3 }, { so_id: 'so-r', qty: 2 }] }],
+  };
+  const state = {
+    vendor_pos: [poOrigR, poReplace], grns: [], sales_orders: [soR, soZ],
+    outward_dispatches: [{ id: 'd1', so_id: 'so-r', status: 'Delivered', items: [{ product_id: 'p2', qty: 4 }] }],
+    payments: [], pool: [], config: {},
+  };
+
+  check("soRejectedOutstanding sees SO-R's 2 rejected units as already replaced by the combined PO, not still owed",
+    sandbox.soRejectedOutstanding(state, soR), {});
+  check("soOutstandingProcurement agrees — SO-R needs nothing more ordered",
+    sandbox.soOutstandingProcurement(state, soR), {});
+  check("soOutstandingProcurement for SO-Z isn't confused by SO-R's rejection riding the same PO — SO-Z's own 3 is covered too",
+    sandbox.soOutstandingProcurement(state, soZ), {});
+  sandbox.__opcWorkflow = null;
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);

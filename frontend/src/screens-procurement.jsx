@@ -114,6 +114,13 @@ function poOurValue(po, getProduct) {
   return (po.items || []).reduce((s, it) => { const p = getProduct(it.product_id); return s + (p ? (p.sell || 0) : 0) * (it.qty || 0); }, 0);
 }
 
+// Same, but just one SO's own share of a PO that's shared across several —
+// so a combined PO's value isn't counted in full on every linked SO's own
+// margin card. Identical to poOurValue whenever the PO isn't actually shared.
+function poOurValueForSO(po, soId, getProduct) {
+  return (po.items || []).reduce((s, it) => { const p = getProduct(it.product_id); return s + (p ? (p.sell || 0) : 0) * poLineSoQty(po, it.product_id, soId); }, 0);
+}
+
 // Resolve an MD review of a PO. If a vendor-change is pending, approve swaps the
 // vendor/items/amount in automatically; reject discards it (old vendor kept). For
 // a plain over-threshold PO: approve → Issued, reject → Rejected.
@@ -207,7 +214,7 @@ function SOVendorPOsTab({ so }) {
     toast(approve ? `${po.po_no} approved` : `${po.po_no} ${changed ? 'change declined' : 'rejected'}`, approve ? 'success' : '');
   };
 
-  const pos = state.vendor_pos.filter(p => p.so_id === so.id);
+  const pos = state.vendor_pos.filter(p => poServesSO(p, so.id));
   const grnsFor = (poId) => state.grns.filter(g => g.po_id === poId);
   const viFor = (poId) => (state.vendor_invoices || []).filter(v => v.po_id === poId);
   const PoolPanel = window.VGAddFromPoolPanel;   // smart pool-suggestion panel (reused)
@@ -238,13 +245,17 @@ function SOVendorPOsTab({ so }) {
   // Aggregate received / on-PO / required per product across this SO.
   const receivedByProd = {}, onPOByProd = {};
   pos.forEach(po => {
-    (po.items || []).forEach(it => { onPOByProd[it.product_id] = (onPOByProd[it.product_id] || 0) + (it.qty || 0); });
-    grnsFor(po.id).forEach(g => (g.items || []).forEach(it => { receivedByProd[it.product_id] = (receivedByProd[it.product_id] || 0) + (it.accepted || 0); }));
+    (po.items || []).forEach(it => { onPOByProd[it.product_id] = (onPOByProd[it.product_id] || 0) + poLineSoQty(po, it.product_id, so.id); });
+    grnsFor(po.id).forEach(g => (g.items || []).forEach(it => { receivedByProd[it.product_id] = (receivedByProd[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }));
   });
   const required = soReqComponents(so);
 
   // Grand totals — project profit margin = our sell value − vendor spend.
-  const vendorSpend = pos.reduce((s, p) => s + (p.amount || 0), 0);
+  // A PO shared across SOs counts only this SO's own share here, never the
+  // whole PO — identical to po.amount whenever the PO isn't actually shared.
+  const poCostForSO = (po) => poLinkedSoIds(po).length > 1 ? poSoAmount(po, so.id) : (po.amount || 0);
+  const poOurForSO = (po) => poLinkedSoIds(po).length > 1 ? poOurValueForSO(po, so.id, getProduct) : poOurValue(po, getProduct);
+  const vendorSpend = pos.reduce((s, p) => s + poCostForSO(p), 0);
   const projectSell = soSubtotal(so);
   const projectMargin = projectSell - vendorSpend;
   const marginPct = projectSell > 0 ? (projectMargin / projectSell) * 100 : 0;
@@ -346,10 +357,12 @@ function SOVendorPOsTab({ so }) {
             <tbody>
               {vRows.map(po => {
                 const v = getVendor(po.vendor_id);
-                const our = poOurValue(po, getProduct);
-                const m = our - (po.amount || 0); const mp = our > 0 ? (m / our) * 100 : 0;
-                const ordered = (po.items || []).reduce((a, it) => a + (it.qty || 0), 0);
-                const rec = grnsFor(po.id).reduce((a, g) => a + (g.items || []).reduce((b, it) => b + (it.accepted || 0), 0), 0);
+                const shared = poLinkedSoIds(po).length > 1;
+                const cost = poCostForSO(po);
+                const our = poOurForSO(po);
+                const m = our - cost; const mp = our > 0 ? (m / our) * 100 : 0;
+                const ordered = shared ? (po.items || []).reduce((a, it) => a + poLineSoQty(po, it.product_id, so.id), 0) : (po.items || []).reduce((a, it) => a + (it.qty || 0), 0);
+                const rec = shared ? grnsFor(po.id).reduce((a, g) => a + (g.items || []).reduce((b, it) => b + grnLineSoQty(it, po, so.id), 0), 0) : grnsFor(po.id).reduce((a, g) => a + (g.items || []).reduce((b, it) => b + (it.accepted || 0), 0), 0);
                 const recPct = ordered > 0 ? Math.round(rec / ordered * 100) : 0;
                 const vis = viFor(po.id); const booked = vis.filter(x => x.status === 'Booked').length;
                 const open = !!expanded[po.id]; const canEdit = editablePO(po);
@@ -357,7 +370,7 @@ function SOVendorPOsTab({ so }) {
                   <Fragment key={po.id}>
                   <tr onClick={() => setExpanded(e => ({ ...e, [po.id]: !open }))} style={{ cursor: 'pointer' }}>
                     <td><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={12}/><div><strong>{v ? v.name : po.vendor_id}</strong><div className="tiny muted mono">{po.po_no} · {(po.items || []).length} item(s)</div></div></div></td>
-                    <td className="num mono">{inr(po.amount)}</td>
+                    <td className="num mono">{inr(cost)}{shared && <div className="tiny muted">of {inr(po.amount)} total</div>}</td>
                     <td className="num mono">{inr(our)}</td>
                     <td className="num mono" style={{ color: m >= 0 ? 'var(--success)' : 'var(--danger)' }}>{inr(m)}<div className="tiny">{mp >= 0 ? '+' : ''}{mp.toFixed(1)}%</div></td>
                     <td className="num">{recPct}%</td>
@@ -438,7 +451,7 @@ function SOVendorPOsTab({ so }) {
                 );
               })}
             </tbody>
-            <tfoot><tr><td className="right small">Totals</td><td className="num mono"><strong>{inr(vendorSpend)}</strong></td><td className="num mono">{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0))}</td><td className="num mono" style={{ color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(pos.reduce((a, p) => a + poOurValue(p, getProduct), 0) - vendorSpend)}</strong></td><td colSpan="5"></td></tr></tfoot>
+            <tfoot><tr><td className="right small">Totals</td><td className="num mono"><strong>{inr(vendorSpend)}</strong></td><td className="num mono">{inr(pos.reduce((a, p) => a + poOurForSO(p), 0))}</td><td className="num mono" style={{ color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }}><strong>{inr(pos.reduce((a, p) => a + poOurForSO(p), 0) - vendorSpend)}</strong></td><td colSpan="5"></td></tr></tfoot>
           </table>
         </div>
         {canProcure && <div className="card-body" style={{ borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}><button className="btn btn-sm btn-primary" onClick={() => setShowSplit(true)}><Icon name="arrowLeftRight" size={12}/>Split across vendors</button><button className="btn btn-sm" onClick={() => navigate('grn/new')}><Icon name="package" size={12}/>Receive material (GRN)</button><button className="btn btn-sm" onClick={() => navigate('three-way')}><Icon name="check" size={12}/>Vendor invoices / 3-way</button></div>}
@@ -554,7 +567,7 @@ function SplitAllocatorModal({ so, onClose }) {
   const candIds = (sourcing && (sourcing.quote_vendors || []).length) ? sourcing.quote_vendors : state.vendors.map(v => v.id);
   const required = soReqComponents(so);
   const onPO = {};
-  state.vendor_pos.filter(p => p.so_id === so.id).forEach(po => (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + (it.qty || 0); }));
+  state.vendor_pos.filter(p => poServesSO(p, so.id)).forEach(po => (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + poLineSoQty(po, it.product_id, so.id); }));
   const items = Object.keys(required).map(pid => ({ pid, p: getProduct(pid), required: required[pid], onPO: onPO[pid] || 0, toOrder: Math.max(0, required[pid] - (onPO[pid] || 0)) })).filter(x => x.toOrder > 0);
   const rateOf = (vid, p) => (sourcing && sourcing.prices && sourcing.prices[p.id] && sourcing.prices[p.id][vid] != null) ? sourcing.prices[p.id][vid] : (window.vendorUnitPrice ? window.vendorUnitPrice(vid, p) : (p ? (p.buy || 0) : 0));
   const [alloc, setAlloc] = React.useState(() => {
@@ -2458,8 +2471,8 @@ function soOutstandingProcurement(state, so) {
   const req = soReqComponents(so);
   const onPO = {};
   (state.vendor_pos || []).forEach(po => {
-    if (po.so_id !== so.id || ['Rejected', 'Cancelled'].includes(po.status)) return;
-    (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + (Number(it.qty) || 0); });
+    if (!poServesSO(po, so.id) || ['Rejected', 'Cancelled'].includes(po.status)) return;
+    (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + poLineSoQty(po, it.product_id, so.id); });
   });
   const rejected = (typeof soRejectedOutstanding === 'function') ? soRejectedOutstanding(state, so) : {};
   const out = {};
