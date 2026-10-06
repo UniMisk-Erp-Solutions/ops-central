@@ -142,6 +142,11 @@ The two kinds are told apart by `invoice.type`: `'Partial'`/`'Final'` for
 what actually shipped, `'BOQ Complete'` for a closed group. Both are real
 rows in `so.invoices`, so either can be filtered, counted or reported on.
 
+Turned on for Microlink in production via
+[`supabase/migrations/039_boq_partial_dispatch_microlink.sql`](../supabase/migrations/039_boq_partial_dispatch_microlink.sql)
+— a per-organization override, not a change to the `procurement_only`
+profile's own defaults, so no other organization on that profile inherits it.
+
 ### Where the numbers come from
 
 `boqNo()` in `utils.jsx`, on the one document-numbering scheme:
