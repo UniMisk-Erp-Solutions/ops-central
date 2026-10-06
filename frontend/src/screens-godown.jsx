@@ -88,14 +88,19 @@ function VGReceivePanel({ so }) {
   const canReceive = wfCanReceive(role)
     || wfReceiving().requesterRoles.includes(role) || wfReceiving().approverRoles.includes(role);
 
-  const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
+  const soPOs = (state.vendor_pos || []).filter(p => poServesSO(p, so.id) && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
   const acceptedKey = {};
-  (state.grns || []).forEach(g => (g.items || []).forEach(it => { acceptedKey[g.po_id + '|' + it.product_id] = (acceptedKey[g.po_id + '|' + it.product_id] || 0) + (it.accepted || 0); }));
+  // On a shared line, this SO's own received-so-far — never the whole PO
+  // line's — so this panel can never offer more than this SO's own share.
+  (state.grns || []).forEach(g => { const po = soPOs.find(p => p.id === g.po_id); if (po) (g.items || []).forEach(it => {
+    acceptedKey[g.po_id + '|' + it.product_id] = (acceptedKey[g.po_id + '|' + it.product_id] || 0) + grnLineSoQty(it, po, so.id);
+  }); });
   const outstanding = [];
   soPOs.forEach(po => (po.items || []).forEach(it => {
+    const ordered = poLineSoQty(po, it.product_id, so.id);
     const recv = acceptedKey[po.id + '|' + it.product_id] || 0;
-    const remaining = Math.max(0, (it.qty || 0) - recv);
-    if (remaining > 0) outstanding.push({ key: po.id + '|' + it.product_id, po, product_id: it.product_id, ordered: it.qty, received: recv, remaining, rate: it.rate });
+    const remaining = Math.max(0, ordered - recv);
+    if (remaining > 0) outstanding.push({ key: po.id + '|' + it.product_id, po, product_id: it.product_id, ordered, received: recv, remaining, rate: it.rate, shared: poLinkedSoIds(po).length > 1 });
   }));
 
   const [sel, setSel] = React.useState({});   // key -> receiveNow qty (presence = checked)
@@ -124,7 +129,8 @@ function VGReceivePanel({ so }) {
     const ctx = { state, mutate, toast: null, addToPool, getProduct, getVendor, currentUser, getUser };
     let i = 0, posted = 0, units = 0;
     for (const { po, items } of Object.values(byPo)) {
-      const recvItems = items.map(r => ({ product_id: r.product_id, qty: r.ordered, rate: r.rate, received: sel[r.key], rejected: 0, to_pool: 0 }));
+      const recvItems = items.map(r => ({ product_id: r.product_id, qty: r.ordered, rate: r.rate, received: sel[r.key], rejected: 0, to_pool: 0,
+        ...(r.shared ? { so_split: [{ so_id: so.id, qty: sel[r.key] }] } : {}) }));
       units += recvItems.reduce((s, x) => s + (x.received || 0), 0);
       await window.postReceiptForPO(po, recvItems, { grnDate: TODAY, lr: '', seqOffset: i, skipInvoice: true }, ctx);
       i++; posted++;
@@ -183,11 +189,13 @@ function VGReceivePanel({ so }) {
 // consolidated client invoice is raised. Returns a short summary.
 async function vgReceiveComponents(so, picks, ctx) {
   const { state, mutate, getProduct } = ctx;
-  const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
+  const soPOs = (state.vendor_pos || []).filter(p => poServesSO(p, so.id) && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
   const acceptedKey = {};
-  (state.grns || []).forEach(g => (g.items || []).forEach(it => { acceptedKey[g.po_id + '|' + it.product_id] = (acceptedKey[g.po_id + '|' + it.product_id] || 0) + (it.accepted || 0); }));
+  (state.grns || []).forEach(g => { const po = soPOs.find(p => p.id === g.po_id); if (po) (g.items || []).forEach(it => {
+    acceptedKey[g.po_id + '|' + it.product_id] = (acceptedKey[g.po_id + '|' + it.product_id] || 0) + grnLineSoQty(it, po, so.id);
+  }); });
 
-  const perPo = {};            // po.id -> { po, items:[{product_id, qty, rate, received}] }
+  const perPo = {};            // po.id -> { po, items:[{product_id, qty, rate, received, so_split?}] }
   const newLines = [];         // shortfall lines for an auto PO
   for (const pick of picks) {
     let need = Math.max(0, pick.qty);
@@ -195,10 +203,15 @@ async function vgReceiveComponents(so, picks, ctx) {
       if (need <= 0) break;
       const line = (po.items || []).find(it => it.product_id === pick.product_id);
       if (!line) continue;
-      const cap = (line.qty || 0) - (acceptedKey[po.id + '|' + pick.product_id] || 0);
+      // Cap to THIS SO's own share of the line — never the whole PO's — so a
+      // shared line can never hand this SO another linked SO's stock.
+      const orderedForSO = poLineSoQty(po, pick.product_id, so.id);
+      const cap = orderedForSO - (acceptedKey[po.id + '|' + pick.product_id] || 0);
       if (cap <= 0) continue;
       const take = Math.min(need, cap);
-      (perPo[po.id] = perPo[po.id] || { po, items: [] }).items.push({ product_id: pick.product_id, qty: line.qty, rate: line.rate, received: take });
+      const shared = poLinkedSoIds(po).length > 1;
+      (perPo[po.id] = perPo[po.id] || { po, items: [] }).items.push({ product_id: pick.product_id, qty: orderedForSO, rate: line.rate, received: take,
+        ...(shared ? { so_split: [{ so_id: so.id, qty: take }] } : {}) });
       acceptedKey[po.id + '|' + pick.product_id] = (acceptedKey[po.id + '|' + pick.product_id] || 0) + take;   // reserve
       need -= take;
     }
@@ -223,7 +236,8 @@ async function vgReceiveComponents(so, picks, ctx) {
 
   let i = 0, posted = 0, units = 0;
   for (const grp of Object.values(perPo)) {
-    const items = grp.items.map(it => ({ product_id: it.product_id, qty: it.qty, rate: it.rate, received: it.received, rejected: 0, to_pool: 0 }));
+    const items = grp.items.map(it => ({ product_id: it.product_id, qty: it.qty, rate: it.rate, received: it.received, rejected: 0, to_pool: 0,
+      ...(it.so_split ? { so_split: it.so_split } : {}) }));
     units += items.reduce((s, x) => s + (x.received || 0), 0);
     await window.postReceiptForPO(grp.po, items, { grnDate: TODAY, lr: '', seqOffset: i, skipInvoice: true }, ctx);
     i++; posted++;
@@ -242,6 +256,27 @@ function poolReceiptNo(state) {
   (state.sales_orders || []).forEach(so => ((so.extra && so.extra.pool_receipts) || []).forEach(() => n++));
   return `POOL/FY26/${String(1 + n).padStart(4, '0')}`;
 }
+
+// Shrink a vendor PO line by `take` units because the pool covered that much
+// instead. On an ordinary line the whole line shrinks, same as always. On a
+// line shared across SOs (so_alloc), only the CALLING so's own share shrinks
+// — another linked SO's share is never touched. Collapses so_alloc back to
+// the plain default only when a single claimant remains AND it is the PO's
+// own so_id; any other single survivor still needs to be said explicitly, or
+// its share would silently fall back to "belongs to po.so_id" and vanish.
+function shrinkPOLineForSO(it, po, soId, take) {
+  if (!(Array.isArray(it.so_alloc) && it.so_alloc.length)) {
+    const actual = Math.min(take, it.qty || 0);
+    return { item: { ...it, qty: (it.qty || 0) - actual }, taken: actual };
+  }
+  const share = it.so_alloc.find(a => a.so_id === soId);
+  const avail = share ? (Number(share.qty) || 0) : 0;
+  const actual = Math.min(take, avail);
+  let so_alloc = it.so_alloc.map(a => a.so_id === soId ? { ...a, qty: (Number(a.qty) || 0) - actual } : a).filter(a => (a.qty || 0) > 0.0001);
+  if (so_alloc.length <= 1 && (so_alloc.length === 0 || so_alloc[0].so_id === po.so_id)) so_alloc = undefined;
+  return { item: { ...it, qty: (it.qty || 0) - actual, so_alloc }, taken: actual };
+}
+window.shrinkPOLineForSO = shrinkPOLineForSO;
 
 // Execute an "add from Master Pool" allocation for one component + write a receipt
 // record (proof) onto so.extra.pool_receipts. Identical movement logic to the
@@ -265,12 +300,13 @@ async function poolAllocateToSO(so, item, ctx) {
     const viPoIds = new Set((s.vendor_invoices || []).map(v => v.po_id));
     let cut = n; let removedFromPO = 0;
     const vendor_pos = s.vendor_pos.map(po => {
-      if (cut <= 0 || po.so_id !== so.id || grnPoIds.has(po.id) || viPoIds.has(po.id) || ['Material Received', 'Partially Received', 'Rejected', 'Pending MD Approval'].includes(po.status)) return po;
+      if (cut <= 0 || !poServesSO(po, so.id) || grnPoIds.has(po.id) || viPoIds.has(po.id) || ['Material Received', 'Partially Received', 'Rejected', 'Pending MD Approval'].includes(po.status)) return po;
       if (!(po.items || []).some(it => it.product_id === pid)) return po;
       const items = (po.items || []).map(it => {
         if (it.product_id !== pid || cut <= 0) return it;
-        const take = Math.min(cut, it.qty || 0); cut -= take; removedFromPO += take;
-        return { ...it, qty: (it.qty || 0) - take };
+        const { item, taken } = shrinkPOLineForSO(it, po, so.id, cut);
+        cut -= taken; removedFromPO += taken;
+        return item;
       }).filter(it => (it.qty || 0) > 0);
       return { ...po, items, amount: Math.round(items.reduce((a, it) => a + (it.qty || 0) * (it.rate || 0), 0)) };
     }).filter(po => !(po.so_id === so.id && (po.items || []).length === 0));

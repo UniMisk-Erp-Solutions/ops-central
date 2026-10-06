@@ -248,5 +248,106 @@ console.log('\n[5] a client rejection replaced through a PO combined with ANOTHE
   sandbox.__opcWorkflow = null;
 }
 
+console.log('\n[6] shrinkPOLineForSO touches only the calling SO\'s own share — Phase 3\'s "subtlest" write path');
+{
+  const poXY = { id: 'po-xy', so_id: 'so-x', items: [] };   // so_id used only for the collapse rule below
+  const shared = { product_id: 'p1', qty: 16, rate: 50, so_alloc: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }] };
+
+  let r = sandbox.shrinkPOLineForSO(shared, poXY, 'so-x', 4);
+  check('shrinking SO-X by 4 takes exactly 4', r.taken, 4);
+  check("SO-X's own share drops to 6, SO-Y's 6 is untouched", r.item.so_alloc, [{ so_id: 'so-x', qty: 6 }, { so_id: 'so-y', qty: 6 }]);
+  check('the line total drops by the same 4 (16 -> 12)', r.item.qty, 12);
+
+  r = sandbox.shrinkPOLineForSO(shared, poXY, 'so-x', 999);
+  check("asking for more than SO-X's 10 share only ever takes SO-X's 10", r.taken, 10);
+  check("SO-Y's 6 is never touched by SO-X's own shrink, even when SO-X's ask is unbounded", r.item.so_alloc.find(a => a.so_id === 'so-y').qty, 6);
+  check("the sole survivor isn't po.so_id (so-y, not so-x) — stays an explicit entry, never silently falls back",
+    r.item.so_alloc, [{ so_id: 'so-y', qty: 6 }]);
+
+  r = sandbox.shrinkPOLineForSO(shared, poXY, 'so-y', 999);
+  check("shrinking SO-Y's whole 6, leaving SO-X (the PO's own so_id) alone, collapses back to the plain default",
+    r.item.so_alloc, undefined);
+  check('its qty still correctly drops to just SO-X\'s remaining 10', r.item.qty, 10);
+
+  const plain = { product_id: 'p2', qty: 8, rate: 20 };
+  r = sandbox.shrinkPOLineForSO(plain, { id: 'po-plain', so_id: 'so-x', items: [] }, 'so-x', 3);
+  check('an ordinary (non-shared) line shrinks exactly as it always did', [r.taken, r.item.qty], [3, 5]);
+}
+
+// A ctx whose mutate() applies synchronously to a boxed state, same convention
+// receipt-engine-check.js uses, so postReceiptForPO/vgReceiveComponents can be
+// driven directly without a React store.
+function makeCtx(state) {
+  const box = { state };
+  const ctx = {
+    state: box.state, mutate: (fn) => { box.state = fn(box.state); }, toast: null,
+    addToPool: async () => {}, getProduct: () => null,
+    getVendor: () => ({ name: 'Vendor' }), getUser: () => ({ name: 'User' }), currentUser: 'u1',
+  };
+  return { box, ctx };
+}
+
+(async () => {
+
+console.log('\n[7] postReceiptForPO stamps the real split and invoices EVERY linked SO that received units this event');
+{
+  const poShared = {
+    id: 'po-shared2', po_no: 'VPO/FY26/0010', so_id: 'so-x', vendor_id: 'v1', status: 'Issued', amount: 800, ebill: {},
+    items: [{ product_id: 'p1', qty: 16, rate: 50, so_alloc: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }] }],
+  };
+  const { box, ctx } = makeCtx({
+    vendor_pos: [poShared], grns: [], vendor_invoices: [],
+    sales_orders: [{ id: 'so-x', so_no: 'SO/FY26/0100' }, { id: 'so-y', so_no: 'SO/FY26/0101' }],
+    notifications: [],
+  });
+  const invoiced = [];
+  const realAutoInvoiceSO = sandbox.autoInvoiceSO;
+  sandbox.autoInvoiceSO = (soId) => { invoiced.push(soId); return null; };
+  const items = [{ product_id: 'p1', qty: 16, received: 16, rejected: 0, to_pool: 0,
+    so_split: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }] }];
+  const res = await sandbox.postReceiptForPO(poShared, items, { grnDate: '2026-10-05', lr: '' }, ctx);
+  sandbox.autoInvoiceSO = realAutoInvoiceSO;
+
+  check('the GRN item carries the real split, not a trivial default', res.grn.items[0].so_split,
+    [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }]);
+  check('BOTH linked SOs are invoiced from this one GRN event — not just po.so_id',
+    invoiced.slice().sort(), ['so-x', 'so-y']);
+  check('the PO itself still resolves PO-centric, unaffected by the split', box.state.vendor_pos[0].status, 'Material Received');
+}
+
+console.log('\n[8] vgReceiveComponents caps a shared line to the calling SO\'s own share — never dips into another linked SO\'s');
+{
+  const poShared = {
+    id: 'po-shared3', po_no: 'VPO/FY26/0011', so_id: 'so-x', vendor_id: 'v1', status: 'Issued', amount: 140, ebill: {},
+    items: [{ product_id: 'p1', qty: 7, rate: 20, so_alloc: [{ so_id: 'so-x', qty: 4 }, { so_id: 'so-y', qty: 3 }] }],
+  };
+  const soX = { id: 'so-x', so_no: 'SO/FY26/0100', extra: {} };
+  const { box, ctx } = makeCtx({
+    vendor_pos: [poShared], grns: [], vendor_invoices: [],
+    sales_orders: [soX, { id: 'so-y', so_no: 'SO/FY26/0101', extra: {} }],
+    notifications: [], vendors: [{ id: 'v1', name: 'Vendor' }], config: {},
+  });
+  const realAutoInvoiceSO = sandbox.autoInvoiceSO;
+  sandbox.autoInvoiceSO = () => null;
+  // SO-X asks for 10 — far more than its own 4 share of the shared line.
+  const r = await sandbox.vgReceiveComponents(soX, [{ product_id: 'p1', qty: 10, name: 'Item 1' }], ctx);
+  sandbox.autoInvoiceSO = realAutoInvoiceSO;
+
+  check('exactly 10 units were received in total (4 from the shared PO + a 6-unit shortfall PO)', r.units, 10);
+  check('a second PO was auto-created for the 6 SO-X could not take from the shared line', box.state.vendor_pos.length, 2);
+  const sharedGrnItem = box.state.grns.flatMap(g => (g.items || []).map(it => ({ it, po_id: g.po_id })))
+    .find(x => x.po_id === 'po-shared3');
+  check('the shared PO\'s own GRN line is capped to SO-X\'s 4, never SO-Y\'s 3',
+    sharedGrnItem.it.accepted, 4);
+  check('it is stamped with a trivial one-entry split naming SO-X — this event was 100% SO-X\'s',
+    sharedGrnItem.it.so_split, [{ so_id: 'so-x', qty: 4 }]);
+  check("SO-Y's own share is untouched — grnLineSoQty for so-y on this line is still 0",
+    sandbox.grnLineSoQty(sharedGrnItem.it, poShared, 'so-y'), 0);
+  check('the shared PO\'s own ordered split is unmodified by a GRN-sourced receive (only pool diversion shrinks a line)',
+    box.state.vendor_pos.find(p => p.id === 'po-shared3').items[0].so_alloc, [{ so_id: 'so-x', qty: 4 }, { so_id: 'so-y', qty: 3 }]);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
+
+})();
