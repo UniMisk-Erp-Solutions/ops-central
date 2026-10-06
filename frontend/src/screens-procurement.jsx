@@ -1411,7 +1411,8 @@ async function postReceiptForPO(po, items, meta, ctx) {
   const rnd = Math.random().toString(36).slice(2, 5);
   const grn = {
     id: 'grn-' + Date.now() + rnd, grn_no: grnNo, po_id: po.id, date: grnDate, lr, received_by: 'Stores', status: 'Posted',
-    items: norm.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null, to_pool: it.to_pool || 0 })),
+    items: norm.map(it => ({ product_id: it.product_id, ordered: it.qty, received: it.received, accepted: it.accepted, rejected: it.rejected || 0, reject_reason: it.reason || null, to_pool: it.to_pool || 0,
+      ...(Array.isArray(it.so_split) && it.so_split.length ? { so_split: it.so_split } : {}) })),
   };
   const adjustments = norm.filter(it => (it.to_pool || 0) > 0).map(it => { const p = getProduct(it.product_id); return { product_id: it.product_id, qty: it.to_pool, amount: Math.round((p ? (p.sell || 0) : 0) * it.to_pool), reason: 'Removed at GRN — not supplied to customer', grn_id: grn.id, date: grnDate }; });
   const billCut = adjustments.reduce((s, a) => s + a.amount, 0);
@@ -1446,6 +1447,18 @@ async function postReceiptForPO(po, items, meta, ctx) {
   // invoice after posting several POs (VG "Mark Received"). Default behaviour
   // (single-PO receive) is unchanged.
   if (!(meta && meta.skipInvoice) && po.so_id && window.autoInvoiceSO) window.autoInvoiceSO(po.so_id, { mutate, toast: null, currentUser, getUser, getProduct });
+  // A PO combined across several SOs also invoices every OTHER linked SO that
+  // received units in THIS GRN event — each gets billed only its own slice
+  // (soReceivedQty/soInvoiceState already read grn.items by so_split), never
+  // the whole receipt. No-op for the overwhelming majority of POs, which
+  // serve only po.so_id, already invoiced above.
+  if (!(meta && meta.skipInvoice) && window.autoInvoiceSO) {
+    poLinkedSoIds(po).filter(soId => soId !== po.so_id).forEach(soId => {
+      if (grn.items.some(it => grnLineSoQty(it, po, soId) > 0)) {
+        window.autoInvoiceSO(soId, { mutate, toast: null, currentUser, getUser, getProduct });
+      }
+    });
+  }
   return { grn, surplusUnits, billCut, poComplete };
 }
 window.postReceiptForPO = postReceiptForPO;
@@ -1494,6 +1507,58 @@ function suggestSoSplit(accepted, allocations, getSO) {
   return { rows, leftover: pool };
 }
 window.suggestSoSplit = suggestSoSplit;
+
+// Build suggestSoSplit's own `allocations` input for one PO line, straight
+// from app state — every linked SO's own ordered share and what it has
+// already received on EARLIER GRNs against this same PO (so a second,
+// partial delivery only offers what is genuinely still outstanding).
+function poSoAllocations(state, po, productId) {
+  return poLinkedSoIds(po).map(so_id => {
+    const orderedQty = poLineSoQty(po, productId, so_id);
+    let alreadyReceived = 0;
+    (state.grns || []).forEach(g => { if (g.po_id === po.id) (g.items || []).forEach(it => {
+      if (it.product_id === productId) alreadyReceived += grnLineSoQty(it, po, so_id);
+    }); });
+    return { so_id, orderedQty, alreadyReceived };
+  });
+}
+window.poSoAllocations = poSoAllocations;
+
+// GRN-time control for a shared line: full manual override, with a one-click
+// "use suggested" fill from suggestSoSplit. Never auto-commits — the caller
+// only gets `value` when the person submits the receipt.
+function SoSplitEditor({ po, productId, accepted, value, onChange }) {
+  const { state, getSO } = useStore();
+  const allocations = poSoAllocations(state, po, productId);
+  const rowQty = (soId) => { const r = (value || []).find(x => x.so_id === soId); return r ? (Number(r.qty) || 0) : 0; };
+  const total = (value || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const balanced = Math.abs(total - (Number(accepted) || 0)) < 0.0001;
+  const setQty = (soId, qty) => {
+    const q = Math.max(0, Number(qty) || 0);
+    onChange(allocations.map(a => ({ so_id: a.so_id, qty: a.so_id === soId ? q : rowQty(a.so_id) })));
+  };
+  const useSuggested = () => {
+    const { rows } = suggestSoSplit(accepted, allocations, getSO);
+    onChange(allocations.map(a => { const s = rows.find(x => x.so_id === a.so_id); return { so_id: a.so_id, qty: s ? s.suggested : 0 }; }));
+  };
+  return (
+    <div style={{ padding: '6px 8px', background: 'var(--bg-subtle)', borderRadius: 4, marginTop: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+        <span className="tiny muted">Shared across {allocations.length} SO(s) — split the {accepted} accepted:</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={useSuggested}><Icon name="sparkles" size={11}/>Use suggested split</button>
+        <span className="tiny mono" style={{ marginLeft: 'auto', color: balanced ? 'var(--success)' : 'var(--danger)' }}>{total} / {accepted}</span>
+      </div>
+      {allocations.map(a => { const so = getSO(a.so_id); const remaining = Math.max(0, a.orderedQty - a.alreadyReceived); return (
+        <div key={a.so_id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' }}>
+          <span className="tiny mono" style={{ width: 130 }}>{so ? so.so_no : a.so_id}</span>
+          <span className="tiny muted" style={{ width: 90 }}>needs {remaining}</span>
+          <input type="number" min="0" className="input mono" value={rowQty(a.so_id)} onChange={e => setQty(a.so_id, e.target.value)} style={{ width: 64, height: 24, textAlign: 'right' }}/>
+        </div>
+      ); })}
+    </div>
+  );
+}
+window.SoSplitEditor = SoSplitEditor;
 
 // Per-vendor receive modal (used from the SO Vendor POs tab — scalable to many vendors).
 // The PO e-Bill as a document.
@@ -1911,11 +1976,12 @@ function ReceiveModal({ po, onClose }) {
   // double receipt.
   const [items, setItems] = React.useState(po.items.map(it => {
     const left = outstanding(it);
-    return { ...it, recv: left > 0, received: left, rejected: 0, reason: '', to_pool: 0, outstanding: left };
+    return { ...it, recv: left > 0, received: left, rejected: 0, reason: '', to_pool: 0, outstanding: left, so_split: null };
   }));
   const [lr, setLr] = React.useState(po.dispatch_info && po.dispatch_info.lr_no ? po.dispatch_info.lr_no : '');
   const [grnDate, setGrnDate] = React.useState(TODAY);
   const [showExtra, setShowExtra] = React.useState(false);   // rejections / pool
+  const isShared = (it) => Array.isArray(it.so_alloc) && it.so_alloc.length > 1;
 
   const setAll = (on) => setItems(its => its.map(it => on
     ? { ...it, recv: it.outstanding > 0, received: it.outstanding }
@@ -1926,6 +1992,15 @@ function ReceiveModal({ po, onClose }) {
   const anyExtra = items.some(it => (Number(it.rejected) || 0) > 0 || (Number(it.to_pool) || 0) > 0);
   const submit = async () => {
     if (items.some(it => it.rejected > 0 && !it.reason)) { toast('Add a reason for each rejected line'); return; }
+    for (const it of items) {
+      if (!it.recv || !isShared(it)) continue;
+      const acc = Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0));
+      const splitTotal = (it.so_split || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+      if (acc > 0 && Math.abs(splitTotal - acc) > 0.0001) {
+        toast(`Split ${getProduct(it.product_id)?.name || it.product_id} across its SOs (currently ${splitTotal} of ${acc})`);
+        return;
+      }
+    }
     await postReceiptForPO(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
     toast(`Receipt posted for ${po.po_no}`, 'success');
     onClose();
@@ -1963,8 +2038,10 @@ function ReceiveModal({ po, onClose }) {
           {items.map((it, i) => {
             const p = getProduct(it.product_id) || { name: it.product_id, code: it.product_id };
             const off = !it.recv; const acc = it.recv ? Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0)) : 0;
+            const colCount = 5 + ((showExtra || anyExtra) ? 3 : 0);
             return (
-              <tr key={i} style={{ opacity: off ? 0.5 : 1 }}>
+              <Fragment key={i}>
+              <tr style={{ opacity: off ? 0.5 : 1 }}>
                 <td><input type="checkbox" checked={!!it.recv} onChange={e => { const on = e.target.checked; const n = [...items]; n[i] = on ? { ...it, recv: true, received: it.qty, rejected: 0, to_pool: 0 } : { ...it, recv: false, received: 0, rejected: 0, to_pool: 0 }; setItems(n); }}/></td>
                 <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
                 <td className="num mono small muted">{qty(it.qty)}</td>
@@ -1979,6 +2056,13 @@ function ReceiveModal({ po, onClose }) {
                   <td className="num"><input type="number" min="0" className="input mono" disabled={off} value={it.to_pool} onChange={e => { const n = [...items]; n[i] = { ...it, to_pool: parseInt(e.target.value) || 0 }; setItems(n); }} style={{ width: 56, textAlign: 'right' }}/></td>
                 </>}
               </tr>
+              {it.recv && isShared(it) && acc > 0 && (
+                <tr><td colSpan={colCount} style={{ padding: 0 }}>
+                  <SoSplitEditor po={po} productId={it.product_id} accepted={acc} value={it.so_split}
+                    onChange={v => { const n = [...items]; n[i] = { ...it, so_split: v }; setItems(n); }}/>
+                </td></tr>
+              )}
+              </Fragment>
             );
           })}
         </tbody>
@@ -2006,8 +2090,9 @@ function GRNNew() {
   const [items, setItems] = React.useState([]);
   const [lr, setLr] = React.useState('DELHIVERY-D88234');
   const [grnDate, setGrnDate] = React.useState(TODAY);
+  const isShared = (it) => Array.isArray(it.so_alloc) && it.so_alloc.length > 1;
   React.useEffect(() => {
-    setItems(po ? po.items.map(it => ({ ...it, recv: true, received: it.qty, accepted: it.qty, rejected: 0, reason: '', to_pool: 0 })) : []);
+    setItems(po ? po.items.map(it => ({ ...it, recv: true, received: it.qty, accepted: it.qty, rejected: 0, reason: '', to_pool: 0, so_split: null })) : []);
   }, [poId]);
 
   if (state.vendor_pos.length === 0) return (
@@ -2029,6 +2114,15 @@ function GRNNew() {
   const post = async () => {
     if (!po) { toast('Pick a Vendor PO to receive against'); return; }
     if (items.some(it => it.rejected > 0 && !it.reason)) { toast('Add a reason for each rejected line'); return; }
+    for (const it of items) {
+      if (!it.recv || !isShared(it)) continue;
+      const acc = Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0));
+      const splitTotal = (it.so_split || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+      if (acc > 0 && Math.abs(splitTotal - acc) > 0.0001) {
+        toast(`Split ${getProduct(it.product_id)?.name || it.product_id} across its SOs (currently ${splitTotal} of ${acc})`);
+        return;
+      }
+    }
     const r = await postReceiptForPO(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
     toast(`${r.grn.grn_no} posted · ${po.po_no} received${r.surplusUnits ? ` · ${r.surplusUnits} → Master Pool` : ''}${r.billCut ? ` · bill −${inrK(r.billCut)}` : ''}`, 'success');
     navigate(`vendor-pos/${po.id}`);
@@ -2078,7 +2172,8 @@ function GRNNew() {
                     const acc = it.recv ? Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0)) : 0;
                     const off = !it.recv;
                     return (
-                      <tr key={i} style={{ opacity: off ? 0.5 : 1 }}>
+                      <Fragment key={i}>
+                      <tr style={{ opacity: off ? 0.5 : 1 }}>
                         <td><input type="checkbox" checked={!!it.recv} onChange={e => { const on = e.target.checked; const next=[...items]; next[i] = on ? {...it, recv:true, received: it.qty, accepted: it.qty, rejected:0, to_pool:0} : {...it, recv:false, received:0, accepted:0, rejected:0, to_pool:0}; setItems(next); }}/></td>
                         <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
                         <td className="num">{qty(it.qty)}</td>
@@ -2103,6 +2198,13 @@ function GRNNew() {
                         </td>
                         <td><input className="input" placeholder={it.rejected > 0 ? 'Reason required' : ''} disabled={off || !it.rejected} value={it.reason || ''} onChange={e => { const next = [...items]; next[i] = { ...it, reason: e.target.value }; setItems(next); }}/></td>
                       </tr>
+                      {it.recv && isShared(it) && acc > 0 && po && (
+                        <tr><td colSpan={7} style={{ padding: 0 }}>
+                          <SoSplitEditor po={po} productId={it.product_id} accepted={acc} value={it.so_split}
+                            onChange={v => { const next = [...items]; next[i] = { ...it, so_split: v }; setItems(next); }}/>
+                        </td></tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
