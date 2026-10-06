@@ -347,6 +347,37 @@ console.log('\n[8] vgReceiveComponents caps a shared line to the calling SO\'s o
     box.state.vendor_pos.find(p => p.id === 'po-shared3').items[0].so_alloc, [{ so_id: 'so-x', qty: 4 }, { so_id: 'so-y', qty: 3 }]);
 }
 
+console.log('\n[9] buildComboPOItems — CreateVendorPOModal\'s "combine with other SOs?" turns rows into real PO lines');
+{
+  const plainRows = [{ product_id: 'p1', qty: 10, rate: 50, combine: [] }];
+  check('an uncombined row stays today\'s exact single-SO shape (no so_alloc at all)',
+    sandbox.buildComboPOItems('so-x', plainRows), [{ product_id: 'p1', qty: 10, rate: 50 }]);
+
+  const zeroedCombine = [{ product_id: 'p1', qty: 10, rate: 50, combine: [{ so_id: 'so-y', qty: 0 }] }];
+  check('a ticked-but-zeroed combine row never produces a redundant so_alloc',
+    sandbox.buildComboPOItems('so-x', zeroedCombine), [{ product_id: 'p1', qty: 10, rate: 50 }]);
+
+  const combined = [{ product_id: 'p1', qty: 10, rate: 50, combine: [{ so_id: 'so-y', qty: 6 }] }];
+  check('a real combine produces a 2-entry so_alloc (primary + the combined SO) and sums the qty',
+    sandbox.buildComboPOItems('so-x', combined), [{ product_id: 'p1', qty: 16, rate: 50, so_alloc: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }] }]);
+
+  const threeWay = [{ product_id: 'p1', qty: 10, rate: 50, combine: [{ so_id: 'so-y', qty: 6 }, { so_id: 'so-z', qty: 4 }] }];
+  check('combining with TWO other SOs produces all three in so_alloc, summed correctly',
+    sandbox.buildComboPOItems('so-x', threeWay),
+    [{ product_id: 'p1', qty: 20, rate: 50, so_alloc: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }, { so_id: 'so-z', qty: 4 }] }]);
+
+  const mixedRows = [
+    { product_id: 'p1', qty: 10, rate: 50, combine: [{ so_id: 'so-y', qty: 6 }] },
+    { product_id: 'p2', qty: 3, rate: 20, combine: [] },
+  ];
+  check('a combined row and a plain row on the SAME PO each keep their own correct shape',
+    sandbox.buildComboPOItems('so-x', mixedRows),
+    [{ product_id: 'p1', qty: 16, rate: 50, so_alloc: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }] }, { product_id: 'p2', qty: 3, rate: 20 }]);
+
+  check('a row with no quantity at all (own qty 0, nothing combined) is dropped from the PO entirely',
+    sandbox.buildComboPOItems('so-x', [{ product_id: 'p3', qty: 0, rate: 10, combine: [] }]), []);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 

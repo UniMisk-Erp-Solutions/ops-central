@@ -4,7 +4,7 @@ Every document in `docs/`, what it covers, and who it is for. **Keep this file
 current**: when a feature changes, update its document *and* the row here. When
 something new is built, add the document *and* a row here in the same change.
 
-_Last updated: 2026-09-23_
+_Last updated: 2026-10-06_
 
 ---
 
@@ -36,6 +36,7 @@ _Last updated: 2026-09-23_
 | [keyboard-control.md](./keyboard-control.md) | Working without a mouse | Every screen from the keyboard: Alt+letter straight to any screen or button (hold Alt to see them), Tab reaches every control, up/down drive the list, left/right cross between sidebar and page, `]`/`[` and `1`-`9` for the tabs on a record, one tab stop per group, Enter walking a dialog's fields, the command palette, `g` jumps, dialog focus traps, and the rule that nothing fires while you are typing. |
 | [boq-billing.md](./boq-billing.md) | Billing groups | What gets billed together: BOQ 001, 002, … carved from the BOM; a group bills only when all of it is dispatched; per-item drilldown; the Final sweep. |
 | [sales-order-lifecycle.md](./sales-order-lifecycle.md) | Order status | Why status is derived from facts, every transition, what it will never do. |
+| [multi-so-vendor-po.md](./multi-so-vendor-po.md) | One PO, several SOs | Purchase combines several SOs' shared need into one vendor PO; GRN decides (with a suggestion, never automatically) how a receipt splits across them; editing an issued PO to add more SOs later, locked per line once that line is received. |
 
 ## Operations
 
