@@ -471,8 +471,9 @@ window.soNonBillableValue = function (so, products) { return _soNonBillable(so, 
 // for items sent away). The matching bill_adjustment reconciles the order value.
 function soReceivedQty(so, state) {
   const acc = {};
-  const poIds = new Set((state.vendor_pos || []).filter(p => p.so_id === so.id).map(p => p.id));
-  (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => { acc[it.product_id] = (acc[it.product_id] || 0) + (it.accepted || 0); }); });
+  const posById = {};
+  (state.vendor_pos || []).forEach(p => { if (poServesSO(p, so.id)) posById[p.id] = p; });
+  (state.grns || []).forEach(g => { const po = posById[g.po_id]; if (po) (g.items || []).forEach(it => { acc[it.product_id] = (acc[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }); });
   (so.pool_alloc || []).forEach(a => { acc[a.product_id] = (acc[a.product_id] || 0) + (Number(a.qty) || 0); });
   const out = (window.soPoolOut ? window.soPoolOut(so) : {});
   Object.keys(out).forEach(pid => { acc[pid] = Math.max(0, (acc[pid] || 0) - out[pid]); });
@@ -1274,7 +1275,7 @@ function SOGrnTab({ so }) {
   const toast = useToast();
   const role = currentUser ? getUser(currentUser)?.role : '';
   const canInvoice = ['Purchase', 'Billing', 'Collections', 'Project Manager', 'Org Admin'].includes(role);
-  const soPOs = (state.vendor_pos || []).filter(p => p.so_id === so.id);
+  const soPOs = (state.vendor_pos || []).filter(p => poServesSO(p, so.id));
   const soPoIds = new Set(soPOs.map(p => p.id));
   const grns = (state.grns || []).filter(g => soPoIds.has(g.po_id));
   const invoices = so.invoices || [];

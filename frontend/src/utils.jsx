@@ -115,13 +115,14 @@ function soDerivedStatus(state, so) {
   const required = (typeof soRequired === 'function') ? soRequired(so) : {};
   const needed = Object.keys(required).reduce((a, k) => a + required[k], 0);
 
-  const pos = (state.vendor_pos || []).filter(p => p.so_id === so.id
+  const pos = (state.vendor_pos || []).filter(p => poServesSO(p, so.id)
     && ['Rejected', 'Cancelled'].indexOf(p.status) === -1);
-  const poIds = new Set(pos.map(p => p.id));
+  const posById = {};
+  pos.forEach(p => { posById[p.id] = p; });
 
   const received = {};
-  (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => {
-    received[it.product_id] = (received[it.product_id] || 0) + (Number(it.accepted) || 0);
+  (state.grns || []).forEach(g => { const po = posById[g.po_id]; if (po) (g.items || []).forEach(it => {
+    received[it.product_id] = (received[it.product_id] || 0) + grnLineSoQty(it, po, so.id);
   }); });
   (so.pool_alloc || []).forEach(a => {
     received[a.product_id] = (received[a.product_id] || 0) + (Number(a.qty) || 0);
@@ -258,8 +259,8 @@ function soRejectedOutstanding(state, so) {
   const required = (typeof soRequired === 'function') ? soRequired(so) : {};
   const onPO = {};
   ((state && state.vendor_pos) || []).forEach(po => {
-    if (po.so_id !== so.id || ['Rejected', 'Cancelled'].includes(po.status)) return;
-    (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + (Number(it.qty) || 0); });
+    if (!poServesSO(po, so.id) || ['Rejected', 'Cancelled'].includes(po.status)) return;
+    (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + poLineSoQty(po, it.product_id, so.id); });
   });
   const out = {};
   review.items.forEach(i => {

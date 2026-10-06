@@ -693,7 +693,7 @@ function SalesOrderDetail({ soId }) {
   const subtotal = soBilledSubtotal(so);   // billed = ordered − items removed at GRN
   const grand = subtotal * 1.18;
 
-  const linkedPOs = state.vendor_pos.filter(p => p.so_id === so.id);
+  const linkedPOs = state.vendor_pos.filter(p => poServesSO(p, so.id));
   const sameState = cust.state === state.org.state;
 
   // Components received into this SO via approved cross-SO transfers (fulfilment,
@@ -740,7 +740,7 @@ function SalesOrderDetail({ soId }) {
     // vendor allocation, so every vendor + the GRN appear immediately.
     if (so.status === 'Approved' && nextAction.next === 'Procurement Started') {
       const sourcing = window.soSourcing ? window.soSourcing(state, so.id) : null;
-      const hasPOs = state.vendor_pos.some(p => p.so_id === so.id);
+      const hasPOs = state.vendor_pos.some(p => poServesSO(p, so.id));
       if (sourcing && !hasPOs && window.generateVendorPOsFromSourcing) {
         window.generateVendorPOsFromSourcing(so, sourcing, { state, mutate, toast, navigate, getProduct });
         return;
@@ -1223,7 +1223,7 @@ function ProcurementTab({ so }) {
   const [showPO, setShowPO] = React.useState(false);
   const role = getUser(currentUser)?.role;
   const canProcure = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
-  const linkedPOs = state.vendor_pos.filter(p => p.so_id === so.id);
+  const linkedPOs = state.vendor_pos.filter(p => poServesSO(p, so.id));
 
   // Vendor chosen (via the linked Sourcing's own vendor-comparison / Float RFQ
   // screen) → no need to retype anything here; generate the Vendor PO(s)
@@ -1452,11 +1452,11 @@ function soProfit(state, so, getProduct) {
 
   // Committed: the vendor POs raised against this order.
   const pos = (state.vendor_pos || []).filter(
-    p => p.so_id === so.id && ['Rejected', 'Cancelled'].indexOf(p.status) === -1);
+    p => poServesSO(p, so.id) && ['Rejected', 'Cancelled'].indexOf(p.status) === -1);
   const ordered = {};
   let committed = 0;
   pos.forEach(po => (po.items || []).forEach(it => {
-    const q = Number(it.qty) || 0;
+    const q = poLineSoQty(po, it.product_id, so.id);
     ordered[it.product_id] = (ordered[it.product_id] || 0) + q;
     committed += q * (Number(it.rate) || 0);
   }));

@@ -33,8 +33,8 @@ function allocLastBuy(state, productId, vendorId) {
 function allocBuildRows(state, so) {
   const onPO = {};
   (state.vendor_pos || []).forEach(po => {
-    if (po.so_id !== so.id || ['Rejected', 'Cancelled'].includes(po.status)) return;
-    (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + (Number(it.qty) || 0); });
+    if (!poServesSO(po, so.id) || ['Rejected', 'Cancelled'].includes(po.status)) return;
+    (po.items || []).forEach(it => { onPO[it.product_id] = (onPO[it.product_id] || 0) + poLineSoQty(po, it.product_id, so.id); });
   });
   const pooled = {};
   (so.pool_alloc || []).forEach(a => { pooled[a.product_id] = (pooled[a.product_id] || 0) + (Number(a.qty) || 0); });

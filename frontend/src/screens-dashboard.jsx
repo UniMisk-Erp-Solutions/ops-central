@@ -4,8 +4,10 @@
 // vendors and lifecycle progress, all computed from app state.
 function soMetrics(state, so, soSubtotal) {
   const sell = soSubtotal(so);
-  const pos = state.vendor_pos.filter(p => p.so_id === so.id);
-  const vendorSpend = pos.reduce((s, p) => s + (p.amount || 0), 0);
+  const pos = state.vendor_pos.filter(p => poServesSO(p, so.id));
+  // A PO shared across SOs counts only this SO's own share here, never the
+  // whole PO — identical to p.amount whenever the PO isn't actually shared.
+  const vendorSpend = pos.reduce((s, p) => s + (poLinkedSoIds(p).length > 1 ? poSoAmount(p, so.id) : (p.amount || 0)), 0);
   const margin = sell - vendorSpend;
   const vendorIds = [...new Set(pos.map(p => p.vendor_id))];
   // Use the admin-configured workflow stages when present; fall back to the
@@ -27,9 +29,10 @@ function soMetrics(state, so, soSubtotal) {
   (so.lines || []).forEach(l => (l.components || []).forEach(c => { req[c.product_id] = (req[c.product_id] || 0) + (Number(c.qty) || 0) * (Number(l.bundle_qty) || 1); }));
   const implReq = window.soImplReq ? window.soImplReq(so) : {};
   Object.keys(implReq).forEach(pid => { req[pid] = (req[pid] || 0) + implReq[pid]; });
-  const poIds = new Set(pos.map(p => p.id));
+  const posById = {};
+  pos.forEach(p => { posById[p.id] = p; });
   const recv = {};
-  (state.grns || []).forEach(g => { if (poIds.has(g.po_id)) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + (Number(it.accepted) || 0); }); });
+  (state.grns || []).forEach(g => { const po = posById[g.po_id]; if (po) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }); });
   (so.pool_alloc || []).forEach(a => { recv[a.product_id] = (recv[a.product_id] || 0) + (Number(a.qty) || 0); });
   const reqUnits = Object.values(req).reduce((a, b) => a + b, 0);
   const recvUnits = Object.keys(req).reduce((a, pid) => a + Math.min(recv[pid] || 0, req[pid]), 0);
