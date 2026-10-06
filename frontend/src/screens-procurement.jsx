@@ -1437,6 +1437,51 @@ async function postReceiptForPO(po, items, meta, ctx) {
 }
 window.postReceiptForPO = postReceiptForPO;
 
+// ===== Suggesting how a shared PO line's receipt splits across its SOs =====
+// A SUGGESTION only — GRN can override every number before submitting; this
+// never writes anything itself. Same greedy, ranked-allocation idiom
+// soRejectedOutstanding/allocBuildRows already use elsewhere in this app, not
+// an invented solver: rank the SOs sharing this line by how urgently they
+// need it, then hand each one what it needs, in that order, until the
+// accepted quantity runs out.
+//
+//   allocations: [{ so_id, orderedQty, alreadyReceived }] — one entry per SO
+//     this line is shared with (so_id must include every linked SO, even
+//     ones already fully received — they are dropped here, not by the caller,
+//     so "fully received" is answered in exactly one place).
+//   getSO(so_id) -> { so_no, priority, expected } | null
+//
+// Rank: Critical > Urgent > Standard (the SAME two literal values
+// NewTransferModal already filters stock-lending destinations on — not a new
+// per-tenant hardcode), then expected date ascending, then so_no ascending —
+// fully deterministic, so re-running on the same facts always gives the same
+// suggestion.
+function suggestSoSplit(accepted, allocations, getSO) {
+  const PRIO_RANK = { Critical: 0, Urgent: 1, Standard: 2 };
+  const rows = (allocations || [])
+    .map(a => {
+      const remaining = Math.max(0, (Number(a.orderedQty) || 0) - (Number(a.alreadyReceived) || 0));
+      const so = getSO ? getSO(a.so_id) : null;
+      return { so_id: a.so_id, so_no: (so && so.so_no) || a.so_id, priority: (so && so.priority) || 'Standard',
+               expected: (so && so.expected) || '', remaining };
+    })
+    .filter(r => r.remaining > 0.0001)
+    .sort((x, y) =>
+      (PRIO_RANK[x.priority] ?? 2) - (PRIO_RANK[y.priority] ?? 2)
+      || (x.expected || '9999-99-99').localeCompare(y.expected || '9999-99-99')
+      || x.so_no.localeCompare(y.so_no));
+
+  let pool = Math.max(0, Number(accepted) || 0);
+  rows.forEach(r => {
+    const give = Math.min(r.remaining, pool);
+    r.suggested = give;
+    pool -= give;
+    r.reason = `${r.so_no} — ${r.priority}, ${r.expected ? 'expected ' + r.expected : 'no delivery date set'} → suggested ${give}`;
+  });
+  return { rows, leftover: pool };
+}
+window.suggestSoSplit = suggestSoSplit;
+
 // Per-vendor receive modal (used from the SO Vendor POs tab — scalable to many vendors).
 // The PO e-Bill as a document.
 //
