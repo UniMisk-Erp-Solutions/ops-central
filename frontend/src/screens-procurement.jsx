@@ -2982,6 +2982,25 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
 }
 window.CreateVendorPOModal = CreateVendorPOModal;
 
+// The matching engine behind Bulk PO's SO picker: of a set of open SOs,
+// which ones still need (netted against what each already has on its own
+// PO — soOutstandingProcurement, the same function every other combine
+// entry point reads) something at least one OTHER SO in the set also needs.
+// A reverse index (item -> which SOs need it) turns "does this SO share
+// anything with another" into a lookup, not an O(n²) scan per SO, so it
+// stays cheap enough to run on the whole list on every render. Pure and
+// read-only — nothing here writes anything.
+function soShareIndex(state, openSOs) {
+  const outstandingBySO = {};
+  openSOs.forEach(s => { outstandingBySO[s.id] = window.soOutstandingProcurement ? window.soOutstandingProcurement(state, s) : {}; });
+  const sosByProduct = {};
+  openSOs.forEach(s => { Object.keys(outstandingBySO[s.id] || {}).forEach(pid => { (sosByProduct[pid] = sosByProduct[pid] || new Set()).add(s.id); }); });
+  const counts = {};
+  openSOs.forEach(s => { counts[s.id] = Object.keys(outstandingBySO[s.id] || {}).filter(pid => sosByProduct[pid].size > 1).length; });
+  return { outstandingBySO, counts };
+}
+window.soShareIndex = soShareIndex;
+
 // ===== Bulk PO — one vendor PO against SEVERAL Sales Orders at once =====
 // CreateVendorPOModal above is SO-first: pick one, then an item's own
 // "combine?" badge offers whoever else needs it. This is the other way
@@ -3001,26 +3020,30 @@ function BulkVendorPOModal({ onClose }) {
   const [rateOverride, setRateOverride] = React.useState({});  // pid -> rate
 
   const openSOs = state.sales_orders.filter(s => !['Closed', 'Cancelled'].includes(s.status));
-  const visibleSOs = openSOs.filter(s => {
-    if (!soSearch.trim()) return true;
-    const cust = getCustomer(s.customer_id);
-    return `${s.so_no} ${cust ? cust.name : ''}`.toLowerCase().includes(soSearch.trim().toLowerCase());
-  });
+  const { outstandingBySO: outstandingByAllSO, counts: shareCounts } = soShareIndex(state, openSOs);
+  const sharedCountFor = (soId) => shareCounts[soId] || 0;
+
+  // SOs that share something with another open SO surface first — that is
+  // the whole point of this screen, so the best candidates to combine should
+  // never require scrolling to find. Stable regardless of what is ticked,
+  // since sharing is a fact about the SO, not about the current selection.
+  const visibleSOs = openSOs
+    .filter(s => {
+      if (!soSearch.trim()) return true;
+      const cust = getCustomer(s.customer_id);
+      return `${s.so_no} ${cust ? cust.name : ''}`.toLowerCase().includes(soSearch.trim().toLowerCase());
+    })
+    .slice()
+    .sort((a, b) => sharedCountFor(b.id) - sharedCountFor(a.id) || String(a.so_no).localeCompare(String(b.so_no)));
+
   const togglePick = (id) => setPicked(m => ({ ...m, [id]: !m[id] }));
   const pickedSOs = openSOs.filter(s => picked[s.id]);
-
-  // Every item ANY ticked SO still needs, netted against what it already has
-  // on its own vendor PO — the exact same soOutstandingProcurement every
-  // other combine entry point reads, so a fully-covered SO contributes
-  // nothing here either, the same as it would on the SO-first path.
-  const outstandingBySO = {};
-  pickedSOs.forEach(s => { outstandingBySO[s.id] = window.soOutstandingProcurement ? window.soOutstandingProcurement(state, s) : {}; });
-  const pids = Array.from(new Set(pickedSOs.flatMap(s => Object.keys(outstandingBySO[s.id] || {}))));
+  const pids = Array.from(new Set(pickedSOs.flatMap(s => Object.keys(outstandingByAllSO[s.id] || {}))));
 
   const qtyFor = (pid, soId) => {
     const key = pid + '|' + soId;
     if (qtyOverride[key] != null) return qtyOverride[key];
-    return (outstandingBySO[soId] && outstandingBySO[soId][pid]) || 0;
+    return (outstandingByAllSO[soId] && outstandingByAllSO[soId][pid]) || 0;
   };
   const setQty = (pid, soId, v) => setQtyOverride(m => ({ ...m, [pid + '|' + soId]: Math.max(0, Number(v) || 0) }));
   const rateFor = (pid) => {
@@ -3032,11 +3055,19 @@ function BulkVendorPOModal({ onClose }) {
   const setRate = (pid, v) => setRateOverride(m => ({ ...m, [pid]: Math.max(0, Number(v) || 0) }));
 
   const rows = pids
-    .map(pid => ({ product_id: pid, rate: rateFor(pid), bySO: pickedSOs.map(s => ({ so_id: s.id, so_no: s.so_no, qty: qtyFor(pid, s.id) })) }))
+    .map(pid => {
+      const bySO = pickedSOs.map(s => ({ so_id: s.id, so_no: s.so_no, qty: qtyFor(pid, s.id) }));
+      const contributing = bySO.filter(b => b.qty > 0.0001).length;
+      return { product_id: pid, rate: rateFor(pid), bySO, contributing, shared: contributing > 1 };
+    })
     .map(r => ({ ...r, total: r.bySO.reduce((a, b) => a + b.qty, 0) }))
     .filter(r => r.total > 0.0001)
-    .filter(r => !itemSearch.trim() || (getProduct(r.product_id)?.name || r.product_id).toLowerCase().includes(itemSearch.trim().toLowerCase()));
+    .filter(r => !itemSearch.trim() || (getProduct(r.product_id)?.name || r.product_id).toLowerCase().includes(itemSearch.trim().toLowerCase()))
+    // Shared lines — the actual reason to combine — read first; single-SO
+    // lines (still useful to see, still part of the same PO) trail after.
+    .sort((a, b) => (b.shared - a.shared) || (b.contributing - a.contributing));
 
+  const sharedRowCount = rows.filter(r => r.shared).length;
   const amount = rows.reduce((s, r) => s + r.total * r.rate, 0);
   const needsMD = amount > (state.config.vendor_po_md_threshold ?? 500000);
 
@@ -3064,22 +3095,27 @@ function BulkVendorPOModal({ onClose }) {
       </>
     }>
       <div className="tiny muted mb-2" style={{ padding: 10, background: 'var(--accent-bg)', borderRadius: 4 }}>
-        Tick every Sales Order this PO is for. Items any of them still need
-        (netted against what each already has on its own PO) appear below,
-        one row per item with each SO's own quantity — edit any number
-        before creating.
+        SOs marked <span className="badge accent tiny" style={{ verticalAlign: 'middle' }}>shared</span> already
+        overlap with another open SO on at least one item — they're listed
+        first. Tick any combination; items any of them still need (netted
+        against what each already has on its own PO) appear below, one row
+        per item with each SO's own quantity, shared ones on top — edit any
+        number before creating.
       </div>
       <div className="field mb-2">
         <label className="field-label">Sales Orders * ({pickedSOs.length} picked)</label>
         <input className="input search mb-1" placeholder="Search SO no or customer…" value={soSearch} onChange={e => setSoSearch(e.target.value)}/>
-        <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4, padding: 6 }}>
+        <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4, padding: 6 }}>
           {visibleSOs.map(s => {
             const cust = getCustomer(s.customer_id);
+            const shared = sharedCountFor(s.id);
             return (
-              <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 2px', cursor: 'pointer' }}>
+              <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 2px', cursor: 'pointer', background: picked[s.id] ? 'var(--bg-subtle)' : 'transparent', borderRadius: 3 }}>
                 <input type="checkbox" checked={!!picked[s.id]} onChange={() => togglePick(s.id)}/>
                 <span className="tiny mono">{s.so_no}</span>
                 <span className="tiny muted">{cust ? cust.name : ''} · {s.status}</span>
+                <div className="grow"/>
+                {shared > 0 && <span className="badge accent tiny" title={`Shares ${shared} item(s) with at least one other open SO`}>{shared} shared</span>}
               </label>
             );
           })}
@@ -3106,7 +3142,14 @@ function BulkVendorPOModal({ onClose }) {
         <div className="empty mt-2">Every ticked SO is already fully covered by its own vendor PO(s) — nothing left to order.</div>
       ) : (
         <div className="card mt-2"><div className="card-body flush">
-          <div style={{ padding: 8 }}><input className="input search" placeholder="Filter items…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} style={{ width: 220 }}/></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 8, flexWrap: 'wrap' }}>
+            <input className="input search" placeholder="Filter items…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} style={{ width: 220 }}/>
+            <span className="tiny muted">
+              {sharedRowCount > 0
+                ? <><strong style={{ color: 'var(--accent)' }}>{sharedRowCount} shared</strong> item(s) across {pickedSOs.length} ticked SO(s) · {rows.length - sharedRowCount} exclusive to one SO</>
+                : <>No item is shared across the ticked SOs yet — every row below belongs to just one of them.</>}
+            </span>
+          </div>
           <table className="t">
             <thead><tr>
               <th>Item</th>
@@ -3118,15 +3161,21 @@ function BulkVendorPOModal({ onClose }) {
               {rows.map(r => {
                 const p = getProduct(r.product_id) || { name: r.product_id, code: r.product_id };
                 return (
-                  <tr key={r.product_id}>
-                    <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
-                    {pickedSOs.map(s => (
-                      <td key={s.id} className="num">
-                        <input type="number" min="0" className="input mono" value={qtyFor(r.product_id, s.id)}
-                          onChange={e => setQty(r.product_id, s.id, e.target.value)}
-                          style={{ width: 56, textAlign: 'right', height: 24 }}/>
-                      </td>
-                    ))}
+                  <tr key={r.product_id} style={r.shared ? { background: 'var(--accent-bg)' } : undefined}>
+                    <td>
+                      {p.name}<div className="tiny muted mono">{p.code}</div>
+                      {r.shared && <span className="badge accent tiny" style={{ marginTop: 2 }}>shared ×{r.contributing}</span>}
+                    </td>
+                    {pickedSOs.map(s => {
+                      const q = qtyFor(r.product_id, s.id);
+                      return (
+                        <td key={s.id} className="num">
+                          <input type="number" min="0" className="input mono" value={q}
+                            onChange={e => setQty(r.product_id, s.id, e.target.value)}
+                            style={{ width: 56, textAlign: 'right', height: 24, opacity: q > 0 ? 1 : 0.4 }}/>
+                        </td>
+                      );
+                    })}
                     <td className="num"><input type="number" min="0" className="input mono" value={r.rate} onChange={e => setRate(r.product_id, e.target.value)} style={{ width: 80, textAlign: 'right', height: 24 }}/></td>
                     <td className="num mono">{inr(r.total * r.rate)}</td>
                   </tr>

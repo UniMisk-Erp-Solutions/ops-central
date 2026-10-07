@@ -134,6 +134,22 @@ appears after picking an SO and loading its components is not the same as a
 labelled, discoverable action on the page where Purchase is already looking
 for exactly this.
 
+**The matching engine (`soShareIndex`).** Before anything is even ticked,
+every open SO is checked against every other for a still-outstanding item in
+common — a reverse index (item → which SOs still need it), so this is one
+pass over the open SOs' own outstanding maps, not an O(n²) comparison.
+Any SO that shares something is tagged with a `N shared` badge and sorted to
+the top of the picker, so Purchase scans a short, ranked list instead of
+guessing which SOs to try ticking. The same index feeds the item table once
+SOs are ticked: a row where ≥2 ticked SOs actually contribute quantity is
+tagged `shared ×N`, highlighted, and sorted above the rows that turned out
+to belong to just one of them — so the moment Purchase ticks a combination,
+it's immediately obvious which lines are the actual reason to combine and
+which are just along for the ride on the same PO. Reads `soOutstandingProcurement`
+— the same netted-against-existing-POs figure every other combine entry
+point uses — so an item already fully covered by an existing PO stops
+reading as "shared" the moment that PO exists, never going stale.
+
 ### Moment 2 — GRN-time: a suggestion, never a decision
 
 `ReceiveModal` and `GRNNew` (the PO-centric receive screens) show a
@@ -254,7 +270,8 @@ simplification, not hidden.
 | `VGReceivePanel`, `vgReceiveComponents` — capped per-SO, trivial one-entry `so_split` | `frontend/src/screens-godown.jsx` |
 | `shrinkPOLineForSO`, used by `poolAllocateToSO` | `frontend/src/screens-godown.jsx` |
 | Every migrated read path (`soDerivedStatus`, `soRejectedOutstanding`, `soOutstandingProcurement`, `allocBuildRows`, `soReceivedQty`, `SOGrnTab`, `soMetrics`, `VGAddFromPoolPanel`, `VGGrnCard`, `VGPoolSendPanel`, `VGImplPanel`, the VG main stock panel, `soFullyReceived`, `hasPOs`, `ProcurementTab.linkedPOs`, `soProfit`) | `frontend/src/utils.jsx`, `frontend/src/screens-procurement.jsx`, `frontend/src/screens-alloc.jsx`, `frontend/src/screens-billing.jsx`, `frontend/src/screens-dashboard.jsx`, `frontend/src/screens-godown.jsx`, `frontend/src/screens-so.jsx` |
-| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] `BulkVendorPOModal`/`createComboVendorPO` — ticking several SOs builds the right `so_alloc`, a zero-quantity SO is dropped from `linkedSoIds` rather than left dangling, and ticking just one SO degrades to a plain PO |
+| `soShareIndex` — the matching engine behind Bulk PO's SO picker | `frontend/src/screens-procurement.jsx` |
+| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] `BulkVendorPOModal`/`createComboVendorPO` — ticking several SOs builds the right `so_alloc`, a zero-quantity SO is dropped from `linkedSoIds` rather than left dangling, and ticking just one SO degrades to a plain PO; [11] `soShareIndex` — who shares what with whom, correctly excluding an SO's own non-overlapping items, and an item already on a vendor PO correctly stops counting as shared |
 
 ## Traps
 

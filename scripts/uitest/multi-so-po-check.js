@@ -425,6 +425,37 @@ console.log('\n[10] Bulk PO — Purchase ticks several SOs up front and places O
   check('a single ticked SO produces a plain PO with no so_alloc at all', singleResult.po.items[0].so_alloc, undefined);
 }
 
+console.log('\n[11] soShareIndex — the matching engine that ranks Bulk PO\'s SO picker, before anything is ticked');
+{
+  const mk = (id, no, comps) => ({ id, so_no: no, status: 'Approved',
+    lines: [{ id: 'l1', bundle_qty: 1, components: comps.map(([product_id, qty]) => ({ product_id, qty })) }],
+    pool_alloc: [], extra: {} });
+  // SO-A needs p1 & p2; SO-B shares p1 with A (plus its own exclusive p3);
+  // SO-C shares p2 with A; SO-D shares nothing with anybody.
+  const soA = mk('so-a', 'SO/FY26/0301', [['p1', 10], ['p2', 5]]);
+  const soB = mk('so-b', 'SO/FY26/0302', [['p1', 6], ['p3', 3]]);
+  const soC = mk('so-c', 'SO/FY26/0303', [['p2', 4]]);
+  const soD = mk('so-d', 'SO/FY26/0304', [['p4', 2]]);
+  const state11 = { vendor_pos: [], sales_orders: [soA, soB, soC, soD], config: {} };
+  const idx = sandbox.soShareIndex(state11, [soA, soB, soC, soD]);
+
+  check('SO-A shares TWO different items (p1 with B, p2 with C)', idx.counts['so-a'], 2);
+  check('SO-B shares its one overlapping item (p1) — its own-exclusive p3 does not count', idx.counts['so-b'], 1);
+  check('SO-C shares its one overlapping item (p2)', idx.counts['so-c'], 1);
+  check('SO-D shares nothing with anybody — zero, not undefined', idx.counts['so-d'], 0);
+  check('the index also hands back each SO\'s own outstanding map (what the item table is built from)',
+    idx.outstandingBySO['so-a'], { p1: 10, p2: 5 });
+
+  // Placing a vendor PO for SO-B's own p1 need removes exactly that overlap
+  // — soOutstandingProcurement nets it out, so the engine's "shared" claim
+  // can never go stale against what has already been ordered.
+  const poForB = { id: 'po-1', so_id: 'so-b', vendor_id: 'v1', status: 'Issued', items: [{ product_id: 'p1', qty: 6, rate: 10 }] };
+  const state11b = { ...state11, vendor_pos: [poForB] };
+  const idx2 = sandbox.soShareIndex(state11b, [soA, soB, soC, soD]);
+  check('once SO-B\'s p1 need is already on a vendor PO, SO-A and SO-B no longer read as sharing it',
+    [idx2.counts['so-a'], idx2.counts['so-b']], [1, 0]);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 
