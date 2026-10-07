@@ -684,6 +684,7 @@ window.SplitAllocatorModal = SplitAllocatorModal;
 function VendorPOList() {
   const { state, navigate, getVendor, getSO, getCustomer, currentUser, getUser } = useStore();
   const [showPO, setShowPO] = React.useState(false);
+  const [showBulkPO, setShowBulkPO] = React.useState(false);   // one PO combined across several SOs
   const [allocSO, setAllocSO] = React.useState('');     // bulk assign for one SO
   const [pickAlloc, setPickAlloc] = React.useState(false);
   const [search, setSearch] = React.useState('');
@@ -745,10 +746,14 @@ function VendorPOList() {
           {canCreate && <button className="btn btn-primary" onClick={() => setPickAlloc(true)}
             title="Pick vendors and prices for a whole order at once, then raise every PO together">
             <Icon name="layers" size={13}/>Assign vendors &amp; prices</button>}
+          {canCreate && <button className="btn" onClick={() => setShowBulkPO(true)}
+            title="One PO covering several Sales Orders that independently need the same item">
+            <Icon name="arrowLeftRight" size={13}/>Bulk PO</button>}
           {canCreate && <button className="btn" onClick={() => setShowPO(true)}><Icon name="plus" size={13}/>Single PO</button>}
         </div>
       </div>
       {showPO && <CreateVendorPOModal onClose={() => setShowPO(false)}/>}
+      {showBulkPO && <CreateVendorPOModal onClose={() => setShowBulkPO(false)} bulkMode/>}
       {pickAlloc && <AllocSOPicker onClose={() => setPickAlloc(false)}
         onPick={id => { setPickAlloc(false); setAllocSO(id); }}/>}
       {allocSO && <VendorAllocator soId={allocSO} onClose={() => setAllocSO('')}/>}
@@ -2798,7 +2803,7 @@ function buildComboPOItems(primarySoId, items) {
 window.buildComboPOItems = buildComboPOItems;
 
 // ===== Create Vendor PO for an SO (Purchase) =====
-function CreateVendorPOModal({ soId, vendorId, onClose }) {
+function CreateVendorPOModal({ soId, vendorId, onClose, bulkMode }) {
   const { state, mutate, getSO, getProduct, getVendor } = useStore();
   const toast = useToast();
   const [so, setSo] = React.useState(soId || '');
@@ -2875,12 +2880,20 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
   };
 
   return (
-    <Modal title="Create Vendor PO" onClose={onClose} size="lg" footer={
+    <Modal title={bulkMode ? 'Bulk PO — combine Sales Orders' : 'Create Vendor PO'} onClose={onClose} size="lg" footer={
       <>
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn btn-primary" disabled={!so || !vendor || amount <= 0} onClick={submit}>Create PO {amount > 0 ? `· ${inr(amount)}` : ''}</button>
       </>
     }>
+      {bulkMode && (
+        <div className="tiny muted mb-2" style={{ padding: 10, background: 'var(--accent-bg)', borderRadius: 4 }}>
+          Pick any one SO to host this PO — for each item, every OTHER open SO
+          that independently needs the same thing shows up below it, already
+          expanded, ready to tick in. One PO, each SO's own quantity tracked
+          correctly inside it.
+        </div>
+      )}
       <div className="field-row">
         <div className="field">
           <label className="field-label">For Sales Order *</label>
@@ -2912,6 +2925,11 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
                 const cands = candidatesFor(it.product_id);
                 const combine = it.combine || [];
                 const total = rowTotalQty(it);
+                // Bulk PO opens every combine picker by default, so a shared
+                // item is impossible to miss; Single PO keeps today's
+                // click-to-expand behaviour unless the user has already
+                // toggled this specific row themselves.
+                const picksOpen = combineOpen[it.product_id] ?? !!bulkMode;
                 return (
                   <Fragment key={it.product_id}>
                   <tr>
@@ -2919,7 +2937,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
                       {p.name}<div className="tiny muted mono">{p.code}</div>
                       {cands.length > 0 && (
                         <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 2, height: 20, fontSize: 11 }}
-                          onClick={() => setCombineOpen(m => ({ ...m, [it.product_id]: !m[it.product_id] }))}>
+                          onClick={() => setCombineOpen(m => ({ ...m, [it.product_id]: !picksOpen }))}>
                           <Icon name="arrowLeftRight" size={11}/>{combine.length > 0 ? `combining ${combine.length} other SO(s)` : `${cands.length} other SO(s) also need this — combine?`}
                         </button>
                       )}
@@ -2928,7 +2946,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
                     <td className="num"><input type="number" className="input mono" min="0" value={it.rate} onChange={e => setItem(i, { rate: parseInt(e.target.value) || 0 })} style={{ width: 90, textAlign: 'right', height: 24 }}/></td>
                     <td className="num">{inr(total * (it.rate || 0))}{combine.length > 0 && <div className="tiny muted">{total} total</div>}</td>
                   </tr>
-                  {combineOpen[it.product_id] && cands.length > 0 && (
+                  {picksOpen && cands.length > 0 && (
                     <tr><td colSpan={4} style={{ padding: 0 }}>
                       <div style={{ padding: '6px 8px', background: 'var(--bg-subtle)', borderRadius: 4, marginTop: 2, marginBottom: 2 }}>
                         <div className="tiny muted" style={{ marginBottom: 4 }}>Combine this line into the same PO, for:</div>
@@ -2954,7 +2972,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose }) {
             <tfoot><tr><td colSpan="3" className="right small">Total {needsMD && <span style={{ color: 'var(--warning)' }}>· &gt; ₹5L needs MD</span>}</td><td className="num"><strong>{inr(amount)}</strong></td></tr></tfoot>
           </table>
         </div></div>
-      ) : <div className="empty mt-2">{so ? 'This SO has no components' : 'Pick an SO to load its components'}</div>}
+      ) : <div className="empty mt-2">{so ? 'This SO has no components' : bulkMode ? 'Pick any one SO to start — its shared items will offer every other SO that also needs them' : 'Pick an SO to load its components'}</div>}
     </Modal>
   );
 }

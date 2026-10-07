@@ -103,6 +103,20 @@ becomes `{..., so_alloc: [{so_id: primary, qty}, {so_id: other, qty}, ...]}`.
 Every linked SO's status advances to `Procurement Started`, same as today's
 single-SO PO, and the notification names every one of them.
 
+**Two doors into the same modal.** The Vendor POs list page
+(`VendorPOList`) has both a plain **Single PO** button and a **Bulk PO**
+button — same `CreateVendorPOModal`, same `buildComboPOItems`, zero new
+logic. `bulkMode` only changes what's shown by default: every item's combine
+picker starts pre-expanded (`picksOpen = combineOpen[it.product_id] ??
+!!bulkMode`) instead of requiring an extra click, and the modal's own copy
+orients the user toward combining. Single PO's behaviour is unchanged bit
+for bit — `bulkMode` is simply absent there, and the `??` only ever supplies
+a *default*, never overrides a row the user has already toggled themselves.
+Added because the combine picker, reachable from Single PO all along, was
+genuinely easy to miss — a badge that only appears after picking an SO and
+loading its items is not the same as a labelled entry point on the page
+where Purchase is already looking for exactly this.
+
 ### Moment 2 — GRN-time: a suggestion, never a decision
 
 `ReceiveModal` and `GRNNew` (the PO-centric receive screens) show a
@@ -217,12 +231,13 @@ simplification, not hidden.
 | The five SO-scoping functions | `frontend/src/utils.jsx` |
 | `suggestSoSplit`, `poSoAllocations`, `SoSplitEditor` | `frontend/src/screens-procurement.jsx` |
 | `postReceiptForPO`'s `so_split` stamping + multi-SO invoice fan-out | `frontend/src/screens-procurement.jsx` |
-| `buildComboPOItems`, `CreateVendorPOModal`'s combine picker | `frontend/src/screens-procurement.jsx` |
+| `buildComboPOItems`, `CreateVendorPOModal`'s combine picker, `bulkMode` | `frontend/src/screens-procurement.jsx` |
+| `VendorPOList`'s Single PO / Bulk PO buttons | `frontend/src/screens-procurement.jsx` |
 | `SOVendorPOsTab`'s per-line lock (`poOpenForEdit`/`lineReceived`/`lineEditable`), `LinePoSplitEditor`, `setItemSoAlloc` | `frontend/src/screens-procurement.jsx` |
 | `VGReceivePanel`, `vgReceiveComponents` — capped per-SO, trivial one-entry `so_split` | `frontend/src/screens-godown.jsx` |
 | `shrinkPOLineForSO`, used by `poolAllocateToSO` | `frontend/src/screens-godown.jsx` |
 | Every migrated read path (`soDerivedStatus`, `soRejectedOutstanding`, `soOutstandingProcurement`, `allocBuildRows`, `soReceivedQty`, `SOGrnTab`, `soMetrics`, `VGAddFromPoolPanel`, `VGGrnCard`, `VGPoolSendPanel`, `VGImplPanel`, the VG main stock panel, `soFullyReceived`, `hasPOs`, `ProcurementTab.linkedPOs`, `soProfit`) | `frontend/src/utils.jsx`, `frontend/src/screens-procurement.jsx`, `frontend/src/screens-alloc.jsx`, `frontend/src/screens-billing.jsx`, `frontend/src/screens-dashboard.jsx`, `frontend/src/screens-godown.jsx`, `frontend/src/screens-so.jsx` |
-| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems` |
+| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] the Bulk PO button and `bulkMode`'s default-open behaviour |
 
 ## Traps
 

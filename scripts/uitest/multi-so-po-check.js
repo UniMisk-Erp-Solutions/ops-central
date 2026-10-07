@@ -378,6 +378,19 @@ console.log('\n[9] buildComboPOItems — CreateVendorPOModal\'s "combine with ot
     sandbox.buildComboPOItems('so-x', [{ product_id: 'p3', qty: 0, rate: 10, combine: [] }]), []);
 }
 
+console.log('\n[10] the Vendor POs list page has its own discoverable "Bulk PO" entry, not just Single PO\'s hidden combine badge');
+{
+  const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
+  check('VendorPOList offers a Bulk PO button', /Bulk PO</.test(src), true);
+  check('it opens CreateVendorPOModal in bulkMode', /CreateVendorPOModal onClose=\{[^}]*\}\s+bulkMode/.test(src), true);
+  check('bulkMode is a real, separate prop CreateVendorPOModal accepts (not a typo/dead prop)',
+    /function CreateVendorPOModal\(\{[^}]*bulkMode[^}]*\}\)/.test(src), true);
+  check('bulk mode pre-opens a shared item\'s combine picker instead of requiring an extra click',
+    /picksOpen = combineOpen\[it\.product_id\] \?\? !!bulkMode/.test(src), true);
+  check('Single PO (bulkMode absent/false) keeps today\'s click-to-expand default — picksOpen only defaults open, never forces it',
+    /combineOpen\[it\.product_id\] \?\?/.test(src), true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 
