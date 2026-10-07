@@ -378,17 +378,51 @@ console.log('\n[9] buildComboPOItems — CreateVendorPOModal\'s "combine with ot
     sandbox.buildComboPOItems('so-x', [{ product_id: 'p3', qty: 0, rate: 10, combine: [] }]), []);
 }
 
-console.log('\n[10] the Vendor POs list page has its own discoverable "Bulk PO" entry, not just Single PO\'s hidden combine badge');
+console.log('\n[10] Bulk PO — Purchase ticks several SOs up front and places ONE PO for all of them');
 {
   const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
   check('VendorPOList offers a Bulk PO button', /Bulk PO</.test(src), true);
-  check('it opens CreateVendorPOModal in bulkMode', /CreateVendorPOModal onClose=\{[^}]*\}\s+bulkMode/.test(src), true);
-  check('bulkMode is a real, separate prop CreateVendorPOModal accepts (not a typo/dead prop)',
-    /function CreateVendorPOModal\(\{[^}]*bulkMode[^}]*\}\)/.test(src), true);
-  check('bulk mode pre-opens a shared item\'s combine picker instead of requiring an extra click',
-    /picksOpen = combineOpen\[it\.product_id\] \?\? !!bulkMode/.test(src), true);
-  check('Single PO (bulkMode absent/false) keeps today\'s click-to-expand default — picksOpen only defaults open, never forces it',
-    /combineOpen\[it\.product_id\] \?\?/.test(src), true);
+  check('it opens the dedicated BulkVendorPOModal, not the Single-PO modal', /showBulkPO && <BulkVendorPOModal/.test(src), true);
+  check('BulkVendorPOModal is a real, registered component', typeof sandbox.BulkVendorPOModal, 'function');
+  check('both Bulk PO and Single PO commit through the same shared path (one definition, not two)',
+    /BulkVendorPOModal[\s\S]*?createComboVendorPO\(/.test(src) && /function CreateVendorPOModal[\s\S]*?createComboVendorPO\(/.test(src), true);
+
+  // createComboVendorPO is the function BulkVendorPOModal's submit() calls —
+  // exercise it directly the way ticking 3 SOs and a vendor would build it.
+  const soA = { id: 'so-a', so_no: 'SO/FY26/0201' };
+  const soB = { id: 'so-b', so_no: 'SO/FY26/0202' };
+  const soC = { id: 'so-c', so_no: 'SO/FY26/0203' };
+  const getSO10 = id => ({ 'so-a': soA, 'so-b': soB, 'so-c': soC })[id];
+  const getVendor10 = () => ({ name: 'Acme' });
+  const box10 = { state: {
+    vendor_pos: [], sales_orders: [
+      { ...soA, status: 'Approved' }, { ...soB, status: 'Approved' }, { ...soC, status: 'Approved' },
+    ],
+    notifications: [], config: {},
+  } };
+  const ctx10 = { state: box10.state, mutate: fn => { box10.state = fn(box10.state); }, getVendor: getVendor10, getSO: getSO10 };
+  // SO-A (primary, ticked first) needs 10, SO-B needs 6, SO-C needs 0 of this
+  // item (ticked, but the item isn't shared with it) — exactly what the
+  // modal's own `items.map` assembly produces from 3 ticked SOs.
+  const items10 = [{ product_id: 'p1', rate: 50, qty: 10, combine: [{ so_id: 'so-b', qty: 6 }, { so_id: 'so-c', qty: 0 }] }];
+  const result10 = sandbox.createComboVendorPO({ ...ctx10, primarySoId: 'so-a', vendorId: 'v1', items: items10, expected: '2026-10-20' });
+  check('one PO is created', !!result10, true);
+  check('it is linked to exactly the SOs that actually had quantity (SO-C contributed 0, so it is not linked)',
+    result10.linkedSoIds.sort(), ['so-a', 'so-b']);
+  check('its so_alloc carries each real SO\'s own qty, SO-C\'s zero dropped', result10.po.items[0].so_alloc,
+    [{ so_id: 'so-a', qty: 10 }, { so_id: 'so-b', qty: 6 }]);
+  check('the amount is the combined 16 units at the shared rate', result10.amount, 800);
+  check('both linked SOs actually advanced to Procurement Started',
+    box10.state.sales_orders.filter(s => ['so-a', 'so-b'].includes(s.id)).map(s => s.status), ['Procurement Started', 'Procurement Started']);
+  check('SO-C (never actually allocated anything) is untouched',
+    box10.state.sales_orders.find(s => s.id === 'so-c').status, 'Approved');
+
+  // Ticking just ONE SO degrades to an ordinary single-SO PO — Bulk PO works
+  // even when "several" turns out to be one.
+  box10.state = { ...box10.state, vendor_pos: [], sales_orders: box10.state.sales_orders.map(s => ({ ...s, status: 'Approved' })) };
+  const singleResult = sandbox.createComboVendorPO({ ...ctx10, state: box10.state, primarySoId: 'so-a', vendorId: 'v1',
+    items: [{ product_id: 'p1', rate: 50, qty: 10, combine: [] }], expected: '2026-10-20' });
+  check('a single ticked SO produces a plain PO with no so_alloc at all', singleResult.po.items[0].so_alloc, undefined);
 }
 
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');

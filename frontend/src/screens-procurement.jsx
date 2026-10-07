@@ -753,7 +753,7 @@ function VendorPOList() {
         </div>
       </div>
       {showPO && <CreateVendorPOModal onClose={() => setShowPO(false)}/>}
-      {showBulkPO && <CreateVendorPOModal onClose={() => setShowBulkPO(false)} bulkMode/>}
+      {showBulkPO && <BulkVendorPOModal onClose={() => setShowBulkPO(false)}/>}
       {pickAlloc && <AllocSOPicker onClose={() => setPickAlloc(false)}
         onPick={id => { setPickAlloc(false); setAllocSO(id); }}/>}
       {allocSO && <VendorAllocator soId={allocSO} onClose={() => setAllocSO('')}/>}
@@ -2802,8 +2802,33 @@ function buildComboPOItems(primarySoId, items) {
 }
 window.buildComboPOItems = buildComboPOItems;
 
+// Shared commit path for every screen that can create a combo PO —
+// CreateVendorPOModal (one SO, per-item "combine?") and BulkVendorPOModal
+// (several SOs ticked up front) both funnel through here. One definition
+// for "what actually happens when a combo PO is created": builds the real
+// items, advances every linked SO to Procurement Started, notifies by name.
+// Returns null when there is nothing to create (so each caller's own toast
+// stays accurate) rather than silently doing nothing.
+function createComboVendorPO({ state, mutate, getVendor, getSO, primarySoId, vendorId, items, expected }) {
+  const real = buildComboPOItems(primarySoId, items);
+  if (!primarySoId || !vendorId || real.length === 0) return null;
+  const amount = real.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+  const needsMD = amount > (state.config.vendor_po_md_threshold ?? 500000);
+  const poNo = vendorPoNo(state, TODAY);
+  const linkedSoIds = Array.from(new Set([primarySoId, ...real.flatMap(i => (i.so_alloc || []).map(a => a.so_id))]));
+  const po = { id: 'po-' + Date.now(), po_no: poNo, so_id: primarySoId, vendor_id: vendorId, date: TODAY, expected, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: real, ebill: {}, source: 'manual' };
+  mutate(s => ({
+    ...s,
+    vendor_pos: [po, ...s.vendor_pos],
+    sales_orders: s.sales_orders.map(x => linkedSoIds.includes(x.id) ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x),
+    notifications: [{ id: 'n-po-' + Date.now(), kind: 'po', text: `${poNo} ${needsMD ? 'awaiting MD approval' : 'issued'} → ${getVendor(vendorId)?.name} for ${linkedSoIds.map(id => getSO(id)?.so_no).filter(Boolean).join(', ')} · ${inrK(amount)}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
+  }), { action: 'create', entity: 'VendorPO', entity_id: po.id });
+  return { po, linkedSoIds, needsMD, amount };
+}
+window.createComboVendorPO = createComboVendorPO;
+
 // ===== Create Vendor PO for an SO (Purchase) =====
-function CreateVendorPOModal({ soId, vendorId, onClose, bulkMode }) {
+function CreateVendorPOModal({ soId, vendorId, onClose }) {
   const { state, mutate, getSO, getProduct, getVendor } = useStore();
   const toast = useToast();
   const [so, setSo] = React.useState(soId || '');
@@ -2864,36 +2889,20 @@ function CreateVendorPOModal({ soId, vendorId, onClose, bulkMode }) {
   const needsMD = amount > (state.config.vendor_po_md_threshold ?? 500000);
 
   const submit = () => {
-    const real = buildComboPOItems(so, items);
-    if (!so || !vendor || real.length === 0) { toast('Pick SO, vendor and at least one item'); return; }
-    const poNo = vendorPoNo(state, TODAY);
-    const linkedSoIds = Array.from(new Set([so, ...real.flatMap(i => (i.so_alloc || []).map(a => a.so_id))]));
-    const po = { id: 'po-' + Date.now(), po_no: poNo, so_id: so, vendor_id: vendor, date: TODAY, expected, status: needsMD ? 'Pending MD Approval' : 'Issued', amount, items: real, ebill: {}, source: 'manual' };
-    mutate(s => ({
-      ...s,
-      vendor_pos: [po, ...s.vendor_pos],
-      sales_orders: s.sales_orders.map(x => linkedSoIds.includes(x.id) ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x),
-      notifications: [{ id: 'n-po-' + Date.now(), kind: 'po', text: `${poNo} ${needsMD ? 'awaiting MD approval' : 'issued'} → ${getVendor(vendor)?.name} for ${linkedSoIds.map(id => getSO(id)?.so_no).filter(Boolean).join(', ')} · ${inrK(amount)}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
-    }), { action: 'create', entity: 'VendorPO', entity_id: po.id });
-    toast(`${poNo} created${linkedSoIds.length > 1 ? ` · combined across ${linkedSoIds.length} SOs` : ''}${needsMD ? ' · sent to MD' : ''}`, 'success');
+    if (!so || !vendor) { toast('Pick SO, vendor and at least one item'); return; }
+    const result = createComboVendorPO({ state, mutate, getVendor, getSO, primarySoId: so, vendorId: vendor, items, expected });
+    if (!result) { toast('Pick SO, vendor and at least one item'); return; }
+    toast(`${result.po.po_no} created${result.linkedSoIds.length > 1 ? ` · combined across ${result.linkedSoIds.length} SOs` : ''}${result.needsMD ? ' · sent to MD' : ''}`, 'success');
     onClose();
   };
 
   return (
-    <Modal title={bulkMode ? 'Bulk PO — combine Sales Orders' : 'Create Vendor PO'} onClose={onClose} size="lg" footer={
+    <Modal title="Create Vendor PO" onClose={onClose} size="lg" footer={
       <>
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn btn-primary" disabled={!so || !vendor || amount <= 0} onClick={submit}>Create PO {amount > 0 ? `· ${inr(amount)}` : ''}</button>
       </>
     }>
-      {bulkMode && (
-        <div className="tiny muted mb-2" style={{ padding: 10, background: 'var(--accent-bg)', borderRadius: 4 }}>
-          Pick any one SO to host this PO — for each item, every OTHER open SO
-          that independently needs the same thing shows up below it, already
-          expanded, ready to tick in. One PO, each SO's own quantity tracked
-          correctly inside it.
-        </div>
-      )}
       <div className="field-row">
         <div className="field">
           <label className="field-label">For Sales Order *</label>
@@ -2925,11 +2934,6 @@ function CreateVendorPOModal({ soId, vendorId, onClose, bulkMode }) {
                 const cands = candidatesFor(it.product_id);
                 const combine = it.combine || [];
                 const total = rowTotalQty(it);
-                // Bulk PO opens every combine picker by default, so a shared
-                // item is impossible to miss; Single PO keeps today's
-                // click-to-expand behaviour unless the user has already
-                // toggled this specific row themselves.
-                const picksOpen = combineOpen[it.product_id] ?? !!bulkMode;
                 return (
                   <Fragment key={it.product_id}>
                   <tr>
@@ -2937,7 +2941,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose, bulkMode }) {
                       {p.name}<div className="tiny muted mono">{p.code}</div>
                       {cands.length > 0 && (
                         <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 2, height: 20, fontSize: 11 }}
-                          onClick={() => setCombineOpen(m => ({ ...m, [it.product_id]: !picksOpen }))}>
+                          onClick={() => setCombineOpen(m => ({ ...m, [it.product_id]: !combineOpen[it.product_id] }))}>
                           <Icon name="arrowLeftRight" size={11}/>{combine.length > 0 ? `combining ${combine.length} other SO(s)` : `${cands.length} other SO(s) also need this — combine?`}
                         </button>
                       )}
@@ -2946,7 +2950,7 @@ function CreateVendorPOModal({ soId, vendorId, onClose, bulkMode }) {
                     <td className="num"><input type="number" className="input mono" min="0" value={it.rate} onChange={e => setItem(i, { rate: parseInt(e.target.value) || 0 })} style={{ width: 90, textAlign: 'right', height: 24 }}/></td>
                     <td className="num">{inr(total * (it.rate || 0))}{combine.length > 0 && <div className="tiny muted">{total} total</div>}</td>
                   </tr>
-                  {picksOpen && cands.length > 0 && (
+                  {combineOpen[it.product_id] && cands.length > 0 && (
                     <tr><td colSpan={4} style={{ padding: 0 }}>
                       <div style={{ padding: '6px 8px', background: 'var(--bg-subtle)', borderRadius: 4, marginTop: 2, marginBottom: 2 }}>
                         <div className="tiny muted" style={{ marginBottom: 4 }}>Combine this line into the same PO, for:</div>
@@ -2972,10 +2976,171 @@ function CreateVendorPOModal({ soId, vendorId, onClose, bulkMode }) {
             <tfoot><tr><td colSpan="3" className="right small">Total {needsMD && <span style={{ color: 'var(--warning)' }}>· &gt; ₹5L needs MD</span>}</td><td className="num"><strong>{inr(amount)}</strong></td></tr></tfoot>
           </table>
         </div></div>
-      ) : <div className="empty mt-2">{so ? 'This SO has no components' : bulkMode ? 'Pick any one SO to start — its shared items will offer every other SO that also needs them' : 'Pick an SO to load its components'}</div>}
+      ) : <div className="empty mt-2">{so ? 'This SO has no components' : 'Pick an SO to load its components'}</div>}
     </Modal>
   );
 }
+window.CreateVendorPOModal = CreateVendorPOModal;
+
+// ===== Bulk PO — one vendor PO against SEVERAL Sales Orders at once =====
+// CreateVendorPOModal above is SO-first: pick one, then an item's own
+// "combine?" badge offers whoever else needs it. This is the other way
+// round — Purchase already knows which SOs share a need and wants to pick
+// all of them up front, then see one merged shopping list to order from in
+// a single PO. Same primitive underneath (so_alloc via buildComboPOItems /
+// createComboVendorPO) — only how the SOs get picked differs.
+function BulkVendorPOModal({ onClose }) {
+  const { state, mutate, getSO, getProduct, getVendor, getCustomer } = useStore();
+  const toast = useToast();
+  const [picked, setPicked] = React.useState({});    // so.id -> true
+  const [soSearch, setSoSearch] = React.useState('');
+  const [vendor, setVendor] = React.useState('');
+  const [itemSearch, setItemSearch] = React.useState('');
+  const [expected, setExpected] = React.useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); });
+  const [qtyOverride, setQtyOverride] = React.useState({});    // "pid|so.id" -> qty
+  const [rateOverride, setRateOverride] = React.useState({});  // pid -> rate
+
+  const openSOs = state.sales_orders.filter(s => !['Closed', 'Cancelled'].includes(s.status));
+  const visibleSOs = openSOs.filter(s => {
+    if (!soSearch.trim()) return true;
+    const cust = getCustomer(s.customer_id);
+    return `${s.so_no} ${cust ? cust.name : ''}`.toLowerCase().includes(soSearch.trim().toLowerCase());
+  });
+  const togglePick = (id) => setPicked(m => ({ ...m, [id]: !m[id] }));
+  const pickedSOs = openSOs.filter(s => picked[s.id]);
+
+  // Every item ANY ticked SO still needs, netted against what it already has
+  // on its own vendor PO — the exact same soOutstandingProcurement every
+  // other combine entry point reads, so a fully-covered SO contributes
+  // nothing here either, the same as it would on the SO-first path.
+  const outstandingBySO = {};
+  pickedSOs.forEach(s => { outstandingBySO[s.id] = window.soOutstandingProcurement ? window.soOutstandingProcurement(state, s) : {}; });
+  const pids = Array.from(new Set(pickedSOs.flatMap(s => Object.keys(outstandingBySO[s.id] || {}))));
+
+  const qtyFor = (pid, soId) => {
+    const key = pid + '|' + soId;
+    if (qtyOverride[key] != null) return qtyOverride[key];
+    return (outstandingBySO[soId] && outstandingBySO[soId][pid]) || 0;
+  };
+  const setQty = (pid, soId, v) => setQtyOverride(m => ({ ...m, [pid + '|' + soId]: Math.max(0, Number(v) || 0) }));
+  const rateFor = (pid) => {
+    if (rateOverride[pid] != null) return rateOverride[pid];
+    const p = getProduct(pid);
+    const vendorRate = vendor && window.vendorUnitPrice ? window.vendorUnitPrice(vendor, p) : 0;
+    return vendorRate || (p ? (p.buy || 0) : 0);
+  };
+  const setRate = (pid, v) => setRateOverride(m => ({ ...m, [pid]: Math.max(0, Number(v) || 0) }));
+
+  const rows = pids
+    .map(pid => ({ product_id: pid, rate: rateFor(pid), bySO: pickedSOs.map(s => ({ so_id: s.id, so_no: s.so_no, qty: qtyFor(pid, s.id) })) }))
+    .map(r => ({ ...r, total: r.bySO.reduce((a, b) => a + b.qty, 0) }))
+    .filter(r => r.total > 0.0001)
+    .filter(r => !itemSearch.trim() || (getProduct(r.product_id)?.name || r.product_id).toLowerCase().includes(itemSearch.trim().toLowerCase()));
+
+  const amount = rows.reduce((s, r) => s + r.total * r.rate, 0);
+  const needsMD = amount > (state.config.vendor_po_md_threshold ?? 500000);
+
+  const submit = () => {
+    if (pickedSOs.length === 0 || !vendor) { toast('Tick at least one SO and pick a vendor'); return; }
+    const [primary, ...rest] = pickedSOs;
+    const items = pids.map(pid => ({
+      product_id: pid, rate: rateFor(pid),
+      qty: qtyFor(pid, primary.id),
+      combine: rest.map(s => ({ so_id: s.id, qty: qtyFor(pid, s.id) })),
+    }));
+    const result = createComboVendorPO({ state, mutate, getVendor, getSO, primarySoId: primary.id, vendorId: vendor, items, expected });
+    if (!result) { toast('Nothing to order — every ticked SO is already fully covered'); return; }
+    toast(`${result.po.po_no} created${result.linkedSoIds.length > 1 ? ` · combined across ${result.linkedSoIds.length} SOs` : ''}${result.needsMD ? ' · sent to MD' : ''}`, 'success');
+    onClose();
+  };
+
+  return (
+    <Modal title="Bulk PO — one vendor PO for several Sales Orders" onClose={onClose} size="lg" footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={pickedSOs.length === 0 || !vendor || amount <= 0} onClick={submit}>
+          Create PO {amount > 0 ? `· ${inr(amount)}` : ''}{pickedSOs.length > 1 ? ` · ${pickedSOs.length} SOs` : ''}
+        </button>
+      </>
+    }>
+      <div className="tiny muted mb-2" style={{ padding: 10, background: 'var(--accent-bg)', borderRadius: 4 }}>
+        Tick every Sales Order this PO is for. Items any of them still need
+        (netted against what each already has on its own PO) appear below,
+        one row per item with each SO's own quantity — edit any number
+        before creating.
+      </div>
+      <div className="field mb-2">
+        <label className="field-label">Sales Orders * ({pickedSOs.length} picked)</label>
+        <input className="input search mb-1" placeholder="Search SO no or customer…" value={soSearch} onChange={e => setSoSearch(e.target.value)}/>
+        <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4, padding: 6 }}>
+          {visibleSOs.map(s => {
+            const cust = getCustomer(s.customer_id);
+            return (
+              <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 2px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!picked[s.id]} onChange={() => togglePick(s.id)}/>
+                <span className="tiny mono">{s.so_no}</span>
+                <span className="tiny muted">{cust ? cust.name : ''} · {s.status}</span>
+              </label>
+            );
+          })}
+          {visibleSOs.length === 0 && <div className="tiny muted">No matching Sales Orders.</div>}
+        </div>
+      </div>
+      <div className="field-row">
+        <div className="field">
+          <label className="field-label">Vendor *</label>
+          <select className="select" value={vendor} onChange={e => setVendor(e.target.value)}>
+            <option value="">Pick vendor…</option>
+            {state.vendors.map(v => <option key={v.id} value={v.id}>{v.name} · ★ {v.rating}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label">Expected delivery</label>
+          <input type="date" className="input mono" value={expected} onChange={e => setExpected(e.target.value)} style={{ width: 180 }}/>
+        </div>
+      </div>
+
+      {pickedSOs.length === 0 ? (
+        <div className="empty mt-2">Tick at least one SO above to see what it needs.</div>
+      ) : rows.length === 0 ? (
+        <div className="empty mt-2">Every ticked SO is already fully covered by its own vendor PO(s) — nothing left to order.</div>
+      ) : (
+        <div className="card mt-2"><div className="card-body flush">
+          <div style={{ padding: 8 }}><input className="input search" placeholder="Filter items…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} style={{ width: 220 }}/></div>
+          <table className="t">
+            <thead><tr>
+              <th>Item</th>
+              {pickedSOs.map(s => <th key={s.id} className="num">{s.so_no}</th>)}
+              <th className="num">Rate ₹</th>
+              <th className="num">Amount</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => {
+                const p = getProduct(r.product_id) || { name: r.product_id, code: r.product_id };
+                return (
+                  <tr key={r.product_id}>
+                    <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
+                    {pickedSOs.map(s => (
+                      <td key={s.id} className="num">
+                        <input type="number" min="0" className="input mono" value={qtyFor(r.product_id, s.id)}
+                          onChange={e => setQty(r.product_id, s.id, e.target.value)}
+                          style={{ width: 56, textAlign: 'right', height: 24 }}/>
+                      </td>
+                    ))}
+                    <td className="num"><input type="number" min="0" className="input mono" value={r.rate} onChange={e => setRate(r.product_id, e.target.value)} style={{ width: 80, textAlign: 'right', height: 24 }}/></td>
+                    <td className="num mono">{inr(r.total * r.rate)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot><tr><td colSpan={pickedSOs.length + 2} className="right small">Total {needsMD && <span style={{ color: 'var(--warning)' }}>· &gt; ₹5L needs MD</span>}</td><td className="num"><strong>{inr(amount)}</strong></td></tr></tfoot>
+          </table>
+        </div></div>
+      )}
+    </Modal>
+  );
+}
+window.BulkVendorPOModal = BulkVendorPOModal;
 
 // ===== In transit — the gap between "PO issued" and "GRN posted" =====
 // Without this, material that has left the vendor but not arrived is invisible:
