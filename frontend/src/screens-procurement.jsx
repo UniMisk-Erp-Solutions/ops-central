@@ -1007,6 +1007,8 @@ function VendorPODetail({ poId }) {
         <div className="tiny muted mt-1">Ordered → received → e-Billed → vendor invoice 3-way matched → booked for payment. Receiving auto-creates the e-Bill; a matching invoice auto-books.</div>
       </div></div>
 
+      <ComboPOSummary po={po} getSO={getSO} getProduct={getProduct}/>
+
       {/* Client vs vendor billing — kept explicitly separate */}
       <div className="mb-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}><div className="card-body">

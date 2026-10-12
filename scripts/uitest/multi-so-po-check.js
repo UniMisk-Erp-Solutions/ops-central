@@ -614,6 +614,9 @@ console.log('\n[14] soItemPOBreakdown -- an SO with several of its OWN vendor PO
 console.log('\n[15] ComboPOSummary -- Stores sees which SO(s) a PO is for, and how much of what, before any per-line split editor appears');
 {
   const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
+  const poDetailBody = src.slice(src.indexOf('function VendorPODetail('), src.indexOf('\nfunction ', src.indexOf('function VendorPODetail(') + 1));
+  check('the PO\'s own detail page -- not just the Receive dialog you have to open first -- shows the full combined-SOs section directly',
+    /<ComboPOSummary po=\{po\} getSO=\{getSO\} getProduct=\{getProduct\}\/>/.test(poDetailBody), true);
   check('ComboPOSummary renders nothing for an ordinary single-SO PO -- zero visual change for the overwhelming majority of POs',
     /if \(linked\.length <= 1\) return null;/.test(src), true);
   check('ReceiveModal (the PO detail page\'s own Receive dialog) shows the summary as the first thing in the dialog',

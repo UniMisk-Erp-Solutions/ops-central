@@ -238,14 +238,19 @@ with that product.
   exactly as it always did.
 - **`ComboPOSummary({po, getSO, getProduct})`** is the mirror case for
   Stores: a PO that serves more than one SO shows as a card — "This PO
-  combines N Sales Orders" plus an Item/SO/Qty table — right at the top of
-  `ReceiveModal` and `GRNNew`, before any per-line split editor appears.
-  Renders `null` for an ordinary single-SO PO, so the overwhelming majority
-  of receiving screens look exactly as before. `GRNNew`'s PO picker and
-  page-sub, and `ReceiveModal`'s own title, also name every linked SO up
-  front — the same "combined · N SOs" wording Stores already sees on
-  `VendorPOList` and the PO's own detail page, so a shared PO is never a
-  surprise discovered only after opening the dialog.
+  combines N Sales Orders" plus an Item/SO/Qty table. It renders on
+  **`VendorPODetail` itself** — the actual PO page, visible the moment you
+  open it, not just a badge you have to hover to decode — and again at the
+  top of `ReceiveModal` and `GRNNew`, before any per-line split editor
+  appears. Renders `null` for an ordinary single-SO PO, so the overwhelming
+  majority of PO/receiving screens look exactly as before. `GRNNew`'s PO
+  picker and page-sub, and `ReceiveModal`'s own title, also name every
+  linked SO up front — the same "combined · N SOs" wording Stores already
+  sees on `VendorPOList`, so a shared PO is never a surprise discovered only
+  after opening a dialog. The title badge on `VendorPODetail` first shipped
+  as the only cue there; it was a start, not the destination — the full
+  table is what actually answers "which SOs, how much of what" without
+  requiring a hover.
 
 This is read-only visibility, not a new allocation mechanism — the actual
 `so_alloc`/`so_split` math this section depends on is unchanged.
@@ -310,7 +315,7 @@ simplification, not hidden.
 | Every migrated read path (`soDerivedStatus`, `soRejectedOutstanding`, `soOutstandingProcurement`, `allocBuildRows`, `soReceivedQty`, `SOGrnTab`, `soMetrics`, `VGAddFromPoolPanel`, `VGGrnCard`, `VGPoolSendPanel`, `VGImplPanel`, the VG main stock panel, `soFullyReceived`, `hasPOs`, `ProcurementTab.linkedPOs`, `soProfit`) | `frontend/src/utils.jsx`, `frontend/src/screens-procurement.jsx`, `frontend/src/screens-alloc.jsx`, `frontend/src/screens-billing.jsx`, `frontend/src/screens-dashboard.jsx`, `frontend/src/screens-godown.jsx`, `frontend/src/screens-so.jsx` |
 | `soShareIndex` — the matching engine behind Bulk PO's SO picker | `frontend/src/screens-procurement.jsx` |
 | `soItemPOBreakdown`, `ComboPOSummary` — which PO(s) cover an SO's own on-order/received qty | `frontend/src/screens-procurement.jsx` |
-| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] `BulkVendorPOModal`/`createComboVendorPO` — ticking several SOs builds the right `so_alloc`, a zero-quantity SO is dropped from `linkedSoIds` rather than left dangling, and ticking just one SO degrades to a plain PO; [11] `soShareIndex` — who shares what with whom, correctly excluding an SO's own non-overlapping items, and an item already on a vendor PO correctly stops counting as shared; [12] a full lifecycle simulation — Bulk PO creation, a mid-flow edit adding a 4th SO to an unreceived line, two partial GRN deliveries using the real suggested split, and every one of the four SOs ending up with exactly its own units billed, not a unit more or less; [13] GRN/Vendor-PO discoverability (Receive button, New GRN button, combined-PO tags); [14] `soItemPOBreakdown` against a 3-PO-per-SO fixture, including a line also shared with a different SO, proving it reports only this SO's own share with no phantom zero-qty PO entries; [15] `ComboPOSummary`'s wiring into `ReceiveModal`/`GRNNew`/`SOVendorPOsTab` |
+| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] `BulkVendorPOModal`/`createComboVendorPO` — ticking several SOs builds the right `so_alloc`, a zero-quantity SO is dropped from `linkedSoIds` rather than left dangling, and ticking just one SO degrades to a plain PO; [11] `soShareIndex` — who shares what with whom, correctly excluding an SO's own non-overlapping items, and an item already on a vendor PO correctly stops counting as shared; [12] a full lifecycle simulation — Bulk PO creation, a mid-flow edit adding a 4th SO to an unreceived line, two partial GRN deliveries using the real suggested split, and every one of the four SOs ending up with exactly its own units billed, not a unit more or less; [13] GRN/Vendor-PO discoverability (Receive button, New GRN button, combined-PO tags); [14] `soItemPOBreakdown` against a 3-PO-per-SO fixture, including a line also shared with a different SO, proving it reports only this SO's own share with no phantom zero-qty PO entries; [15] `ComboPOSummary`'s wiring into `VendorPODetail` itself, `ReceiveModal`/`GRNNew`/`SOVendorPOsTab` |
 
 ## Traps
 

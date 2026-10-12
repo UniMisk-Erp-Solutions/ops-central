@@ -80,15 +80,16 @@ common case.
 
 A PO that combines several Sales Orders (see
 [multi-so-vendor-po.md](./multi-so-vendor-po.md)) is tagged **combined · N
-SOs** both on `VendorPOList`'s own row and at the top of the PO's detail
-page, so that is visible before Receive is even opened — not discovered
-only after a shared line's split editor appears mid-dialog. The dialog
-itself (both `ReceiveModal` and `GRNNew`) opens with **`ComboPOSummary`** —
-"This PO combines N Sales Orders" plus an Item/SO/Qty table — as the first
-thing shown, so which SOs and how much of what is answered up front, not
-one line at a time as each split editor is reached. It renders nothing for
-an ordinary single-SO PO. `GRNNew`'s own PO picker and page-sub, and
-`ReceiveModal`'s title, name every linked SO the same way.
+SOs** on `VendorPOList`'s own row and in the title of the PO's own detail
+page — but the title badge is only a cue, not the answer. **`VendorPODetail`
+itself carries the full `ComboPOSummary` section** — "This PO combines N
+Sales Orders" plus an Item/SO/Qty table — right on the page, before Receive
+is even opened. The same card repeats as the first thing inside
+`ReceiveModal` and `GRNNew`, so which SOs and how much of what is answered
+up front wherever you're looking, not one line at a time as each split
+editor is reached. It renders nothing for an ordinary single-SO PO.
+`GRNNew`'s own PO picker and page-sub, and `ReceiveModal`'s title, name
+every linked SO the same way.
 
 - **Everything arrived** / **Clear all**, and a select-all header box
 - it knows what an **earlier partial delivery** already took: a line received in
