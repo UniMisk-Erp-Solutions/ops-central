@@ -586,6 +586,52 @@ console.log('\n[13] "mark received" is a direct, discoverable action from both t
     /combined · \{linkedCount\} SOs/.test(src), true);
 }
 
+console.log('\n[14] soItemPOBreakdown -- an SO with several of its OWN vendor POs (no SO-sharing involved) can see exactly which PO each on-order/received unit came from');
+{
+  const soP = { id: 'so-p', so_no: 'SO/FY26/0500' };
+  const po1 = { id: 'po-1', po_no: 'VPO/FY26/0001', so_id: 'so-p', vendor_id: 'v1', items: [{ product_id: 'p1', qty: 5, rate: 100 }] };
+  const po2 = { id: 'po-2', po_no: 'VPO/FY26/0002', so_id: 'so-p', vendor_id: 'v2', items: [{ product_id: 'p1', qty: 3, rate: 100 }, { product_id: 'p2', qty: 2, rate: 50 }] };
+  // po-3 also combines a second SO ('so-other') on the SAME line -- the
+  // breakdown must still only count SO-P's own 4, never the other SO's 6.
+  const po3 = { id: 'po-3', po_no: 'VPO/FY26/0003', so_id: 'so-p', vendor_id: 'v1', items: [{ product_id: 'p1', qty: 10, rate: 100, so_alloc: [{ so_id: 'so-p', qty: 4 }, { so_id: 'so-other', qty: 6 }] }] };
+  const pos = [po1, po2, po3];
+  const grns = [
+    { id: 'grn-1', po_id: 'po-1', items: [{ product_id: 'p1', accepted: 5 }] },
+    { id: 'grn-2', po_id: 'po-3', items: [{ product_id: 'p1', accepted: 10, so_split: [{ so_id: 'so-p', qty: 4 }, { so_id: 'so-other', qty: 6 }] }] },
+  ];
+  const b = sandbox.soItemPOBreakdown({ grns }, soP, pos);
+  check('p1 on-PO total is the sum of all three POs\' own share for this SO', b.onPOByProd, { p1: 12, p2: 2 });
+  check('p1 on-PO breakdown names all three POs, each with just its own contribution', b.onPOByProdPO.p1,
+    [{ po_id: 'po-1', po_no: 'VPO/FY26/0001', qty: 5 }, { po_id: 'po-2', po_no: 'VPO/FY26/0002', qty: 3 }, { po_id: 'po-3', po_no: 'VPO/FY26/0003', qty: 4 }]);
+  check('p2 on-PO breakdown names only po-2 -- po-1/po-3 never ordered any p2, so no phantom zero entries', b.onPOByProdPO.p2,
+    [{ po_id: 'po-2', po_no: 'VPO/FY26/0002', qty: 2 }]);
+  check('p1 received total is po-1\'s 5 plus po-3\'s OWN 4 -- never so-other\'s 6', b.receivedByProd, { p1: 9 });
+  check('p1 received breakdown names po-1 and po-3, each at its own accepted qty', b.receivedByProdPO.p1,
+    [{ po_id: 'po-1', po_no: 'VPO/FY26/0001', qty: 5 }, { po_id: 'po-3', po_no: 'VPO/FY26/0003', qty: 4 }]);
+  check('p2 has no received breakdown at all yet -- nothing has arrived for it, so no phantom zero-qty PO entry either', b.receivedByProdPO.p2, undefined);
+}
+
+console.log('\n[15] ComboPOSummary -- Stores sees which SO(s) a PO is for, and how much of what, before any per-line split editor appears');
+{
+  const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
+  check('ComboPOSummary renders nothing for an ordinary single-SO PO -- zero visual change for the overwhelming majority of POs',
+    /if \(linked\.length <= 1\) return null;/.test(src), true);
+  check('ReceiveModal (the PO detail page\'s own Receive dialog) shows the summary as the first thing in the dialog',
+    /<ComboPOSummary po=\{po\} getSO=\{getSO\} getProduct=\{getProduct\}\/>/.test(src), true);
+  check('ReceiveModal\'s own title also says "combined" up front, same wording Stores already sees on the PO list/detail',
+    /Receive — \$\{po\.po_no\}.*combined · \$\{linkedSoIds\.length\} SOs/.test(src), true);
+  check('GRNNew\'s PO picker tags a combined PO right in the dropdown, before it is even selected',
+    /\(\+\$\{n - 1\} more SO\$\{n > 2 \? 's' : ''\}\)/.test(src), true);
+  check('GRNNew\'s page-sub names every linked SO by number when the chosen PO is combined, not just the primary one',
+    /for <strong>\{linkedSoIds\.length\} Sales Orders<\/strong>/.test(src), true);
+  check('GRNNew also renders the same summary card Stores sees from the Vendor PO page',
+    /\{po && <ComboPOSummary po=\{po\} getSO=\{getSO\} getProduct=\{getProduct\}\/>\}/.test(src), true);
+  check('SOVendorPOsTab\'s Item tracking table shows which PO an on-order qty came from, once more than one PO contributes',
+    /r\.onPOBreakdown\.length > 1/.test(src), true);
+  check('...and the same for received qty',
+    /r\.recvBreakdown\.length > 1/.test(src), true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 

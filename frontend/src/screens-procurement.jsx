@@ -203,6 +203,70 @@ function applyLineSoAlloc(po, productId, so_alloc) {
 }
 window.applyLineSoAlloc = applyLineSoAlloc;
 
+// Per-product on-PO / received totals for an SO, AND which specific PO(s)
+// each total comes from — an SO routinely has more than one vendor PO
+// (different vendors, batches, or a PO combined with another SO entirely),
+// and a combined number with no way to see which PO it came from is exactly
+// the guess-presented-as-fact "show where a number came from" rule exists
+// to prevent. Only lists a PO against a product when it actually has
+// quantity on/received for it — never a phantom zero entry. Pure read-only.
+function soItemPOBreakdown(state, so, pos) {
+  const receivedByProd = {}, onPOByProd = {};
+  const onPOByProdPO = {}, receivedByProdPO = {};
+  const grnsForPO = (poId) => (state.grns || []).filter(g => g.po_id === poId);
+  pos.forEach(po => {
+    (po.items || []).forEach(it => {
+      const q = poLineSoQty(po, it.product_id, so.id);
+      onPOByProd[it.product_id] = (onPOByProd[it.product_id] || 0) + q;
+      if (q > 0.0001) (onPOByProdPO[it.product_id] = onPOByProdPO[it.product_id] || []).push({ po_id: po.id, po_no: po.po_no, qty: q });
+    });
+    const recvForThisPO = {};
+    grnsForPO(po.id).forEach(g => (g.items || []).forEach(it => {
+      const q = grnLineSoQty(it, po, so.id);
+      receivedByProd[it.product_id] = (receivedByProd[it.product_id] || 0) + q;
+      if (q > 0.0001) recvForThisPO[it.product_id] = (recvForThisPO[it.product_id] || 0) + q;
+    }));
+    Object.keys(recvForThisPO).forEach(pid => { (receivedByProdPO[pid] = receivedByProdPO[pid] || []).push({ po_id: po.id, po_no: po.po_no, qty: recvForThisPO[pid] }); });
+  });
+  return { onPOByProd, receivedByProd, onPOByProdPO, receivedByProdPO };
+}
+window.soItemPOBreakdown = soItemPOBreakdown;
+
+// A quick, upfront, visual answer to "which SO(s) is this PO for, and how
+// much of what" — shown once, before any line-item ticking, so Stores never
+// discovers a PO is shared only after a per-line split editor appears deep
+// in the form. Renders nothing for the overwhelming majority of POs, which
+// still serve just one SO — zero visual change there.
+function ComboPOSummary({ po, getSO, getProduct }) {
+  const linked = poLinkedSoIds(po);
+  if (linked.length <= 1) return null;
+  const rows = [];
+  (po.items || []).forEach(it => {
+    const p = getProduct(it.product_id);
+    linked.forEach(soId => {
+      const q = poLineSoQty(po, it.product_id, soId);
+      if (q > 0.0001) rows.push({ product: p ? p.name : it.product_id, so_id: soId, qty: q });
+    });
+  });
+  return (
+    <div className="card mb-2" style={{ borderLeft: '3px solid var(--accent)' }}>
+      <div className="card-header">
+        <h3 className="card-title"><Icon name="arrowLeftRight" size={14}/>This PO combines {linked.length} Sales Orders</h3>
+        <span className="tiny muted">Each line's own split (below) decides exactly what this receipt gives each one</span>
+      </div>
+      <div className="card-body flush">
+        <table className="t">
+          <thead><tr><th>Item</th><th>Sales Order</th><th className="num">Ordered qty</th></tr></thead>
+          <tbody>{rows.map((r, i) => { const so = getSO(r.so_id); return (
+            <tr key={i}><td>{r.product}</td><td className="mono small">{so ? so.so_no : r.so_id}</td><td className="num">{qty(r.qty)}</td></tr>
+          ); })}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+window.ComboPOSummary = ComboPOSummary;
+
 // ===== Per-SO Vendor POs tab — every vendor mapped to ONE SO, with margins,
 // item tracking (ordered → received → remaining) and payable status, in one
 // place. Read-only consolidation; actions reuse the existing GRN / 3-way flow. =====
@@ -278,12 +342,9 @@ function SOVendorPOsTab({ so }) {
     }), { action: 'po-split', entity: 'VendorPO', entity_id: po.id });
   };
 
-  // Aggregate received / on-PO / required per product across this SO.
-  const receivedByProd = {}, onPOByProd = {};
-  pos.forEach(po => {
-    (po.items || []).forEach(it => { onPOByProd[it.product_id] = (onPOByProd[it.product_id] || 0) + poLineSoQty(po, it.product_id, so.id); });
-    grnsFor(po.id).forEach(g => (g.items || []).forEach(it => { receivedByProd[it.product_id] = (receivedByProd[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }));
-  });
+  // Aggregate received / on-PO per product across this SO's POs, AND which
+  // specific PO(s) each total comes from — see soItemPOBreakdown.
+  const { onPOByProd, receivedByProd, onPOByProdPO, receivedByProdPO } = soItemPOBreakdown(state, so, pos);
   const required = soReqComponents(so);
 
   // Grand totals — project profit margin = our sell value − vendor spend.
@@ -306,7 +367,8 @@ function SOVendorPOsTab({ so }) {
   const track = prodIds.map(pid => {
     const p = getProduct(pid);
     const req = required[pid] || 0, onPO = onPOByProd[pid] || 0, recv = receivedByProd[pid] || 0;
-    return { pid, p, req, onPO, recv, remaining: Math.max(0, onPO - recv), shortfall: Math.max(0, req - onPO), type: typeOf(pid) };
+    return { pid, p, req, onPO, recv, remaining: Math.max(0, onPO - recv), shortfall: Math.max(0, req - onPO), type: typeOf(pid),
+      onPOBreakdown: onPOByProdPO[pid] || [], recvBreakdown: receivedByProdPO[pid] || [] };
   }).filter(r => !q || (r.p && (r.p.name.toLowerCase().includes(q.toLowerCase()) || (r.p.code || '').toLowerCase().includes(q.toLowerCase()))));
   const shortfalls = track.filter(r => r.shortfall > 0).length;
   const awaiting = track.filter(r => r.remaining > 0).length;
@@ -527,8 +589,16 @@ function SOVendorPOsTab({ so }) {
                   <td>{r.p ? r.p.name : r.pid}<div className="tiny muted mono">{r.p ? r.p.code : ''}</div></td>
                   {im && <td><span className={`badge tiny ${r.type === 'Supply' ? '' : 'accent'}`}>{r.type}</span></td>}
                   <td className="num">{r.req}</td>
-                  <td className="num">{r.onPO}{r.shortfall > 0 && <div className="tiny" style={{ color: 'var(--warning)' }}>short {r.shortfall}</div>}</td>
-                  <td className="num">{r.recv}</td>
+                  <td className="num">{r.onPO}{r.shortfall > 0 && <div className="tiny" style={{ color: 'var(--warning)' }}>short {r.shortfall}</div>}
+                    {r.onPOBreakdown.length > 1 && <div className="tiny muted">from {r.onPOBreakdown.map((b, i) => (
+                      <Fragment key={b.po_id}>{i > 0 && ', '}<a style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate(`vendor-pos/${b.po_id}`)}>{b.po_no}</a> ({qty(b.qty)})</Fragment>
+                    ))}</div>}
+                  </td>
+                  <td className="num">{r.recv}
+                    {r.recvBreakdown.length > 1 && <div className="tiny muted">from {r.recvBreakdown.map((b, i) => (
+                      <Fragment key={b.po_id}>{i > 0 && ', '}<a style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate(`vendor-pos/${b.po_id}`)}>{b.po_no}</a> ({qty(b.qty)})</Fragment>
+                    ))}</div>}
+                  </td>
                   <td className="num">{r.remaining > 0 ? <strong style={{ color: 'var(--accent)' }}>{r.remaining}</strong> : <span className="muted">0</span>}</td>
                   <td>{r.shortfall > 0 ? <span className="badge warning dot">Add PO</span> : r.remaining > 0 ? <span className="badge accent dot">Awaiting</span> : <span className="badge success dot">Complete</span>}</td>
                 </tr>
@@ -2109,9 +2179,10 @@ window.printPOEbill = printPOEbill;
 window.POEbillModal = POEbillModal;
 
 function ReceiveModal({ po, onClose }) {
-  const { state, mutate, addToPool, getProduct, getVendor, currentUser, getUser } = useStore();
+  const { state, mutate, addToPool, getProduct, getVendor, getSO, currentUser, getUser } = useStore();
   const toast = useToast();
   const v = getVendor(po.vendor_id);
+  const linkedSoIds = poLinkedSoIds(po);
   // Already received against this PO on an earlier partial delivery.
   const already = {};
   (state.grns || []).forEach(g => {
@@ -2155,10 +2226,11 @@ function ReceiveModal({ po, onClose }) {
     onClose();
   };
   return (
-    <Modal title={`Receive — ${po.po_no} · ${v ? v.name : ''}`} onClose={onClose} size="lg" footer={<>
+    <Modal title={`Receive — ${po.po_no} · ${v ? v.name : ''}${linkedSoIds.length > 1 ? ` · combined · ${linkedSoIds.length} SOs` : ''}`} onClose={onClose} size="lg" footer={<>
       <span className="tiny muted" style={{ marginRight: 'auto' }}>{tickedCount} of {receivable} line(s) · {totalUnits} unit(s)</span>
       <button className="btn" onClick={onClose}>Cancel</button>
       <button className="btn btn-primary" disabled={!tickedCount} onClick={submit}><Icon name="check" size={13}/>Post receipt</button></>}>
+      <ComboPOSummary po={po} getSO={getSO} getProduct={getProduct}/>
       <div className="field-row mb-2">
         <div className="field"><label className="field-label">LR / tracking</label><input className="input mono" value={lr} onChange={e => setLr(e.target.value)}/></div>
         <div className="field"><label className="field-label">Received date</label><input type="date" className="input mono" value={grnDate} onChange={e => setGrnDate(e.target.value)}/></div>
@@ -2259,6 +2331,7 @@ function GRNNew() {
 
   const v = po ? getVendor(po.vendor_id) : null;
   const so = po ? getSO(po.so_id) : null;
+  const linkedSoIds = po ? poLinkedSoIds(po) : [];
 
   const post = async () => {
     if (!po) { toast('Pick a Vendor PO to receive against'); return; }
@@ -2285,7 +2358,12 @@ function GRNNew() {
             <Icon name="chevronLeft" size={12}/> GRN
           </div>
           <h1 className="page-title">New GRN</h1>
-          <div className="page-sub">Receiving material against <span className="mono">{po ? po.po_no : '—'}</span>{v ? ` · ${v.name}` : ''}</div>
+          <div className="page-sub">
+            Receiving material against <span className="mono">{po ? po.po_no : '—'}</span>{v ? ` · ${v.name}` : ''}
+            {po && (linkedSoIds.length > 1
+              ? <> · for <strong>{linkedSoIds.length} Sales Orders</strong>: {linkedSoIds.map(id => getSO(id)?.so_no).filter(Boolean).join(', ')}</>
+              : <> · for <span className="mono">{so?.so_no || '—'}</span></>)}
+          </div>
         </div>
         <div className="page-actions">
           <button className="btn" onClick={() => navigate('grn')}>Cancel</button>
@@ -2299,14 +2377,20 @@ function GRNNew() {
         <div className="field" style={{ minWidth: 280 }}>
           <label className="field-label">Receive against Vendor PO</label>
           <select className="select" value={poId} onChange={e => setPoId(e.target.value)}>
-            {state.vendor_pos.filter(p => !blockedPo(p.status)).map(p => { const vv = getVendor(p.vendor_id); const ss = getSO(p.so_id); return (
-              <option key={p.id} value={p.id}>{p.po_no} · {vv?.name} · {ss?.so_no || '—'} · {p.status}</option>
-            ); })}
+            {state.vendor_pos.filter(p => !blockedPo(p.status)).map(p => {
+              const vv = getVendor(p.vendor_id); const ss = getSO(p.so_id);
+              const n = poLinkedSoIds(p).length;
+              return (
+                <option key={p.id} value={p.id}>{p.po_no} · {vv?.name} · {ss?.so_no || '—'}{n > 1 ? ` (+${n - 1} more SO${n > 2 ? 's' : ''})` : ''} · {p.status}</option>
+              );
+            })}
           </select>
         </div>
         <div className="field"><label className="field-label">LR / tracking</label><input className="input mono" value={lr} onChange={e => setLr(e.target.value)}/></div>
         <div className="field"><label className="field-label">Received date</label><input type="date" className="input mono" value={grnDate} onChange={e => setGrnDate(e.target.value)}/></div>
       </div></div>
+
+      {po && <ComboPOSummary po={po} getSO={getSO} getProduct={getProduct}/>}
 
       <div className="detail-grid">
         <div className="stack">
