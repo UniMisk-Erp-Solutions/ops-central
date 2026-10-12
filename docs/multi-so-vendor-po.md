@@ -266,6 +266,7 @@ simplification, not hidden.
 | `postReceiptForPO`'s `so_split` stamping + multi-SO invoice fan-out | `frontend/src/screens-procurement.jsx` |
 | `buildComboPOItems`, `createComboVendorPO`, `CreateVendorPOModal`'s combine picker | `frontend/src/screens-procurement.jsx` |
 | `BulkVendorPOModal`, `VendorPOList`'s Single PO / Bulk PO buttons | `frontend/src/screens-procurement.jsx` |
+| `VendorPODetail`'s Receive button, `GRNList`'s New GRN button, the "combined · N SOs" tags | `frontend/src/screens-procurement.jsx` — see [receiving-grn.md](./receiving-grn.md) |
 | `SOVendorPOsTab`'s per-line lock (`poOpenForEdit`/`lineReceived`/`lineEditable`), `LinePoSplitEditor`, `setItemSoAlloc`, `applyLineSoAlloc` | `frontend/src/screens-procurement.jsx` |
 | `VGReceivePanel`, `vgReceiveComponents` — capped per-SO, trivial one-entry `so_split` | `frontend/src/screens-godown.jsx` |
 | `shrinkPOLineForSO`, used by `poolAllocateToSO` | `frontend/src/screens-godown.jsx` |

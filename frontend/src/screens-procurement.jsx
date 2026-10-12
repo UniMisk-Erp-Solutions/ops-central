@@ -726,9 +726,10 @@ function VendorPOList() {
     const so = getSO(po.so_id);
     const cust = so ? getCustomer(so.customer_id) : null;
     const ebilled = po.ebill && po.ebill.generated;
+    const linkedCount = window.poLinkedSoIds ? window.poLinkedSoIds(po).length : 1;
     return (
       <tr key={po.id} onClick={() => navigate(`vendor-pos/${po.id}`)} style={{ cursor: 'pointer' }}>
-        <td><a className="mono">{po.po_no}</a>{po.source === 'sourcing' && <div className="tiny muted">from inquiry</div>}</td>
+        <td><a className="mono">{po.po_no}</a>{po.source === 'sourcing' && <div className="tiny muted">from inquiry</div>}{linkedCount > 1 && <div className="tiny" style={{ color: 'var(--accent)' }}>combined · {linkedCount} SOs</div>}</td>
         <td>{v ? v.name : '—'}<div className="tiny muted mono">{v?.gstin}</div></td>
         {!groupBySO && <td className="mono small">{so?.so_no}<div className="tiny muted">{cust?.name}</div></td>}
         <td className="mono small">{fmtDate(po.date)}</td>
@@ -841,6 +842,7 @@ function VendorPODetail({ poId }) {
   const [showChange, setShowChange] = React.useState(false);
   const [showTransit, setShowTransit] = React.useState(false);
   const [showEbill, setShowEbill] = React.useState(false);
+  const [showReceive, setShowReceive] = React.useState(false);
   // The vendor's OWN part numbers for the items on this PO. An org running the
   // procurement profile prints the PO in the vendor's catalogue; everyone else
   // keeps printing ours. Unmapped lines always fall back to our names, so the
@@ -893,6 +895,7 @@ function VendorPODetail({ poId }) {
             <span className="mono">{po.po_no}</span>
             <span className="badge dot ml-2" style={{ marginLeft: 8 }}>{po.status}</span>
             {po.source === 'sourcing' && <span className="badge accent" style={{ marginLeft: 6 }}>from inquiry</span>}
+            {window.poLinkedSoIds && window.poLinkedSoIds(po).length > 1 && <span className="badge accent" style={{ marginLeft: 6 }} title={window.poLinkedSoIds(po).map(id => getSO(id)?.so_no).filter(Boolean).join(', ')}><Icon name="arrowLeftRight" size={11}/>combined · {window.poLinkedSoIds(po).length} SOs</span>}
           </h1>
           <div className="page-sub">Payable to <strong>{v.name}</strong> · For project <span className="mono">{so?.so_no}</span>{cust ? ` · ${cust.name}` : ''}</div>
         </div>
@@ -908,7 +911,7 @@ function VendorPODetail({ poId }) {
             ? <button className="btn" onClick={() => setShowEbill(true)}><Icon name="receipt" size={13}/>View e-Bill</button>
             : !blocked && <button className="btn btn-primary" onClick={genEbill}><Icon name="receipt" size={13}/>Generate PO e-Bill</button>)}
           {!blocked && (po.status !== 'Material Received'
-            ? <button className="btn btn-primary" onClick={() => navigate('grn')}><Icon name="package" size={13}/>Create GRN</button>
+            ? <button className="btn btn-primary" onClick={() => setShowReceive(true)}><Icon name="package" size={13}/>Receive</button>
             : !vInv
               ? <button className="btn btn-primary" onClick={() => setShowVI(true)}><Icon name="receipt" size={13}/>Record vendor invoice</button>
               : <button className="btn" onClick={() => navigate(`three-way/${vInv.id}`)}><Icon name="check" size={13}/>View 3-way match</button>)}
@@ -922,6 +925,7 @@ function VendorPODetail({ poId }) {
       {showChange && <ChangeVendorModal po={po} onClose={() => setShowChange(false)}/>}
       {showTransit && <InTransitModal po={po} onClose={() => setShowTransit(false)}/>}
       {showEbill && <POEbillModal po={po} onClose={() => setShowEbill(false)}/>}
+      {showReceive && <ReceiveModal po={po} onClose={() => setShowReceive(false)}/>}
 
       <div className="card mb-2"><div className="card-body" style={{ padding: '10px 14px' }}>
         <div className="h-timeline">
@@ -1184,6 +1188,7 @@ function GRNList() {
         <div className="page-actions">
           <span className="tiny muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={12} color="var(--success)"/>Auto-created on receipt at the Virtual Godown</span>
           <button className="btn" onClick={() => navigate('godown')}><Icon name="box" size={13}/>Go to Virtual Godowns</button>
+          <button className="btn btn-primary" onClick={() => navigate('grn/new')}><Icon name="plus" size={13}/>New GRN</button>
         </div>
       </div>
 

@@ -568,6 +568,24 @@ console.log('\n[12] FULL LIFECYCLE SIMULATION — Bulk PO -> mid-flow edit adds 
   check('[F] p2\'s 6 units land on SOs that sum to exactly 6', 4 + 0 + 0 + 2, 6);
 }
 
+console.log('\n[13] "mark received" is a direct, discoverable action from both the GRN list and the Vendor PO itself — not a dead end');
+{
+  const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
+  const grnListBody = src.slice(src.indexOf('function GRNList('), src.indexOf('\nfunction ', src.indexOf('function GRNList(') + 1));
+  check('GRNList has its own New GRN button, not just a link away to the Virtual Godowns',
+    /New GRN/.test(grnListBody), true);
+  check('that button actually opens the real New GRN screen',
+    /New GRN<\/button>/.test(grnListBody) && /navigate\('grn\/new'\)/.test(grnListBody), true);
+  check('VendorPODetail\'s own action button opens Receive directly on THIS po — not a bare navigate(\'grn\') that drops the PO context',
+    /setShowReceive\(true\)/.test(src) && /showReceive && <ReceiveModal po=\{po\}/.test(src), true);
+  check('the old dead-end ("Create GRN" -> navigate(\'grn\') with no PO selected) is gone from the action button',
+    /Create GRN<\/button>/.test(src), false);
+  check('a PO serving more than one SO is visibly tagged "combined" on its own detail page',
+    /combined · \{window\.poLinkedSoIds\(po\)\.length\} SOs/.test(src), true);
+  check('and on the Vendor POs list row too, before you even open it',
+    /combined · \{linkedCount\} SOs/.test(src), true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 

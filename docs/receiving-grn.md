@@ -60,8 +60,29 @@ the panel is drawn.
 
 ## The receive dialog
 
-Reached from a vendor PO. Defaults to *everything still outstanding arrived*,
-because that is the common case.
+Three doors, same `ReceiveModal`, same engine — no "which screen has the real
+receive button" guessing:
+
+1. **The Vendor PO's own detail page** — its own primary action button reads
+   **Receive** the moment the PO is `Issued`/`In Transit`/`Partially Received`
+   and opens `ReceiveModal` for exactly that PO. It used to read "Create GRN"
+   and just navigate to the bare GRN list with nothing selected — a dead end
+   that forced a second, separate hunt for the right PO. Fixed directly, not
+   worked around.
+2. **The GRN screen's own New GRN button**, which didn't exist before — the
+   page had a link *away*, to the Virtual Godowns, but no action of its own.
+   Opens `GRNNew`, the PO-picker version of the same dialog.
+3. **The SO's own Vendor POs tab** — unchanged, "Receive" per row, same as
+   always.
+
+Defaults to *everything still outstanding arrived*, because that is the
+common case.
+
+A PO that combines several Sales Orders (see
+[multi-so-vendor-po.md](./multi-so-vendor-po.md)) is tagged **combined · N
+SOs** both on `VendorPOList`'s own row and at the top of the PO's detail
+page, so that is visible before Receive is even opened — not discovered
+only after a shared line's split editor appears mid-dialog.
 
 - **Everything arrived** / **Clear all**, and a select-all header box
 - it knows what an **earlier partial delivery** already took: a line received in
@@ -120,3 +141,11 @@ creates them.
   [architecture.md](./architecture.md)). The test models that deliberately.
 - e-Bill numbers derive from the PO number, so two POs receipted in one action
   cannot share one. They used to.
+- **A working feature with no door into it is not a working feature.**
+  `ReceiveModal` has always correctly handled a shared, multi-SO line — the
+  split editor was built and tested long before anyone could actually reach
+  it from the Vendor PO's own page, because that page's action button
+  silently navigated away to the bare GRN list instead of opening the
+  dialog. Reported directly as "I can't find where to mark received."
+  Correctness and discoverability are different bugs; this was the second
+  kind, and the engine underneath needed no change at all.
