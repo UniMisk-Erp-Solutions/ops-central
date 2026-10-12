@@ -189,6 +189,20 @@ function ChangeVendorModal({ po, onClose }) {
 }
 window.ChangeVendorModal = ChangeVendorModal;
 
+// The write side of editing which SOs share an ALREADY-ISSUED line (Moment
+// 3) — same so_alloc primitive CreateVendorPOModal/BulkVendorPOModal write
+// at creation. Pure: builds the patched PO and says which SOs are newly
+// linked (so the caller can advance/notify them); writes nothing itself.
+function applyLineSoAlloc(po, productId, so_alloc) {
+  const before = new Set(poLinkedSoIds(po));
+  const items = (po.items || []).map(it => it.product_id === productId ? { ...it, so_alloc } : it);
+  const amount = Math.round(items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0));
+  const linkedSoIds = poLinkedSoIds({ ...po, items });
+  const newlyLinked = linkedSoIds.filter(id => !before.has(id));
+  return { po: { ...po, items, amount }, linkedSoIds, newlyLinked };
+}
+window.applyLineSoAlloc = applyLineSoAlloc;
+
 // ===== Per-SO Vendor POs tab — every vendor mapped to ONE SO, with margins,
 // item tracking (ordered → received → remaining) and payable status, in one
 // place. Read-only consolidation; actions reuse the existing GRN / 3-way flow. =====
@@ -254,17 +268,13 @@ function SOVendorPOsTab({ so }) {
   // added SO gets notified and advances to 'Procurement Started', exactly
   // like today's single-SO "Create PO" already does.
   const setItemSoAlloc = (po, pid, so_alloc) => {
-    const before = new Set(poLinkedSoIds(po));
-    const items = (po.items || []).map(it => it.product_id === pid ? { ...it, so_alloc } : it);
-    const amount = Math.round(recalc(items));
-    const needsMD = amount > mdThreshold;
-    const after = poLinkedSoIds({ ...po, items });
-    const newlyLinked = after.filter(id => !before.has(id));
+    const { po: patched, linkedSoIds, newlyLinked } = applyLineSoAlloc(po, pid, so_alloc);
+    const needsMD = patched.amount > mdThreshold;
     mutate(s => ({
       ...s,
-      vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, items, amount, status: needsMD ? 'Pending MD Approval' : po.status } : p),
+      vendor_pos: s.vendor_pos.map(p => p.id === po.id ? { ...p, items: patched.items, amount: patched.amount, status: needsMD ? 'Pending MD Approval' : po.status } : p),
       sales_orders: newlyLinked.length ? s.sales_orders.map(x => newlyLinked.includes(x.id) ? { ...x, status: soAdvanceStatus(x.status, 'Procurement Started') } : x) : s.sales_orders,
-      notifications: [{ id: 'n-posplit-' + Date.now(), kind: 'po', text: `${po.po_no}: ${getProduct(pid)?.name || pid} now split across ${after.length} SO(s)${newlyLinked.length ? ' — ' + newlyLinked.map(id => (state.sales_orders.find(x => x.id === id) || {}).so_no || id).join(', ') + ' notified' : ''}${needsMD ? ' · needs MD approval' : ''}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
+      notifications: [{ id: 'n-posplit-' + Date.now(), kind: 'po', text: `${po.po_no}: ${getProduct(pid)?.name || pid} now split across ${linkedSoIds.length} SO(s)${newlyLinked.length ? ' — ' + newlyLinked.map(id => (state.sales_orders.find(x => x.id === id) || {}).so_no || id).join(', ') + ' notified' : ''}${needsMD ? ' · needs MD approval' : ''}`, date: TODAY, read: false, role: needsMD ? 'Managing Director' : 'Stores' }, ...s.notifications],
     }), { action: 'po-split', entity: 'VendorPO', entity_id: po.id });
   };
 
@@ -1562,6 +1572,14 @@ window.suggestSoSplit = suggestSoSplit;
 // from app state — every linked SO's own ordered share and what it has
 // already received on EARLIER GRNs against this same PO (so a second,
 // partial delivery only offers what is genuinely still outstanding).
+//
+// poLinkedSoIds(po) is PO-wide — every SO sharing ANY line, not just this
+// one. A PO with two independently-shared lines (so_alloc on line A has
+// {X,Y}, so_alloc on line B has {X,W}) would otherwise hand line B's split
+// editor a row for Y with "needs 0" even though Y has nothing to do with
+// line B. Dropped here, at the source, rather than filtered by each of
+// SoSplitEditor/LinePoSplitEditor separately — a SO with neither an order
+// nor a receipt against THIS product never belonged in THIS line's answer.
 function poSoAllocations(state, po, productId) {
   return poLinkedSoIds(po).map(so_id => {
     const orderedQty = poLineSoQty(po, productId, so_id);
@@ -1570,7 +1588,7 @@ function poSoAllocations(state, po, productId) {
       if (it.product_id === productId) alreadyReceived += grnLineSoQty(it, po, so_id);
     }); });
     return { so_id, orderedQty, alreadyReceived };
-  });
+  }).filter(a => a.orderedQty > 0.0001 || a.alreadyReceived > 0.0001);
 }
 window.poSoAllocations = poSoAllocations;
 
@@ -1620,12 +1638,11 @@ window.SoSplitEditor = SoSplitEditor;
 // actually received — "can't un-receive", the same rule this screen already
 // follows for a received PO as a whole.
 function LinePoSplitEditor({ state, po, it, onSave, onCancel }) {
+  // Same "how much has each linked SO already received on this exact line"
+  // poSoAllocations already answers for SoSplitEditor — one definition, not
+  // two independently-maintained loops that could silently drift apart.
   const already = {};
-  poLinkedSoIds(po).forEach(soId => { already[soId] = 0; });
-  (state.grns || []).filter(g => g.po_id === po.id).forEach(g => (g.items || []).forEach(gi => {
-    if (gi.product_id !== it.product_id) return;
-    poLinkedSoIds(po).forEach(soId => { already[soId] = (already[soId] || 0) + grnLineSoQty(gi, po, soId); });
-  }));
+  poSoAllocations(state, po, it.product_id).forEach(a => { already[a.so_id] = a.alreadyReceived; });
   const linkedIds = (it.so_alloc && it.so_alloc.length ? it.so_alloc.map(a => a.so_id) : [po.so_id]);
   const otherOpen = (state.sales_orders || []).filter(s => s.id !== po.so_id && linkedIds.indexOf(s.id) === -1 && ['Closed', 'Cancelled'].indexOf(s.status) === -1);
   const otherOutstanding = {};

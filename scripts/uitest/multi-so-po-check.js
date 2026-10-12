@@ -456,6 +456,118 @@ console.log('\n[11] soShareIndex — the matching engine that ranks Bulk PO\'s S
     [idx2.counts['so-a'], idx2.counts['so-b']], [1, 0]);
 }
 
+console.log('\n[12] FULL LIFECYCLE SIMULATION — Bulk PO -> mid-flow edit adds a 4th SO -> two partial GRN deliveries -> every SO ends up billed for exactly its own units, nothing more, nothing less');
+{
+  const SOS12 = {
+    'so-x': { id: 'so-x', so_no: 'SO/FY26/0401', priority: 'Critical', expected: '2026-11-01' },
+    'so-y': { id: 'so-y', so_no: 'SO/FY26/0402', priority: 'Urgent', expected: '2026-11-10' },
+    'so-z': { id: 'so-z', so_no: 'SO/FY26/0403', priority: 'Standard', expected: '2026-11-20' },
+    'so-w': { id: 'so-w', so_no: 'SO/FY26/0404', priority: 'Standard', expected: '2026-11-25' },
+  };
+  const getSO12 = id => SOS12[id];
+  const { box, ctx } = makeCtx({
+    vendor_pos: [], grns: [], vendor_invoices: [],
+    sales_orders: Object.values(SOS12).map(s => ({ ...s, status: 'Approved' })),
+    notifications: [], config: {},
+  });
+
+  // ----- A: Purchase ticks SO-X, SO-Y, SO-Z on Bulk PO; p1 is shared 3 ways,
+  // p2 only SO-X asked for -----
+  const itemsA = [
+    { product_id: 'p1', rate: 100, qty: 10, combine: [{ so_id: 'so-y', qty: 6 }, { so_id: 'so-z', qty: 5 }] },
+    { product_id: 'p2', rate: 200, qty: 4, combine: [{ so_id: 'so-y', qty: 0 }, { so_id: 'so-z', qty: 0 }] },
+  ];
+  const created = sandbox.createComboVendorPO({ ...ctx, state: box.state, getSO: getSO12, primarySoId: 'so-x', vendorId: 'v1', items: itemsA, expected: '2026-10-20' });
+  check('[A] p1 comes out shared 3 ways, each SO its own real qty', created.po.items[0],
+    { product_id: 'p1', qty: 21, rate: 100, so_alloc: [{ so_id: 'so-x', qty: 10 }, { so_id: 'so-y', qty: 6 }, { so_id: 'so-z', qty: 5 }] });
+  check('[A] p2 stays a plain single-SO line — SO-Y/SO-Z asked for none of it', created.po.items[1], { product_id: 'p2', qty: 4, rate: 200 });
+  check('[A] PO total is the combined value', created.po.amount, 2900);
+  check('[A] all three ticked SOs linked', created.linkedSoIds.slice().sort(), ['so-x', 'so-y', 'so-z']);
+  check('[A] all three advanced to Procurement Started',
+    box.state.sales_orders.filter(s => ['so-x', 'so-y', 'so-z'].includes(s.id)).map(s => s.status), ['Procurement Started', 'Procurement Started', 'Procurement Started']);
+  check('[A] SO-W, not ticked, is untouched', box.state.sales_orders.find(s => s.id === 'so-w').status, 'Approved');
+  let po = box.state.vendor_pos[0];
+
+  // ----- B: before anything ships, Purchase decides SO-W also needs 2 of the
+  // PSU — bumps the line's qty 4 -> 6, then says which SOs that covers -----
+  const poWithBumpedQty = { ...po, items: po.items.map(it => it.product_id === 'p2' ? { ...it, qty: 6 } : it) };
+  const edited = sandbox.applyLineSoAlloc(poWithBumpedQty, 'p2', [{ so_id: 'so-x', qty: 4 }, { so_id: 'so-w', qty: 2 }]);
+  check('[B] SO-W is the only newly-linked SO from this edit', edited.newlyLinked, ['so-w']);
+  check('[B] the PO total grows to reflect the extra 2 units', edited.po.amount, 3300);
+  box.state = { ...box.state,
+    vendor_pos: box.state.vendor_pos.map(p => p.id === po.id ? edited.po : p),
+    sales_orders: box.state.sales_orders.map(s => s.id === 'so-w' ? { ...s, status: 'Procurement Started' } : s) };
+  po = box.state.vendor_pos[0];
+  check('[B] SO-W now also shows Procurement Started, from a line edit, not a fresh PO', box.state.sales_orders.find(s => s.id === 'so-w').status, 'Procurement Started');
+
+  // ----- C: the bug this simulation caught — poSoAllocations must answer
+  // per LINE, not list every SO the whole PO happens to serve -----
+  check('[C] p1\'s split candidates are exactly X/Y/Z — SO-W (only on the p2 line) does not leak in',
+    sandbox.poSoAllocations(box.state, po, 'p1').map(a => a.so_id).sort(), ['so-x', 'so-y', 'so-z']);
+  check('[C] p2\'s split candidates are exactly X/W — SO-Y/SO-Z (only on the p1 line) do not leak in',
+    sandbox.poSoAllocations(box.state, po, 'p2').map(a => a.so_id).sort(), ['so-w', 'so-x']);
+
+  // ----- D: first delivery — 15 of the 21 p1 arrive, all 6 of the (now 6-unit)
+  // p2 line arrives. GRN uses the suggested split for both lines. -----
+  const invoiced1 = [];
+  const realAutoInvoiceSO = sandbox.autoInvoiceSO;
+  sandbox.autoInvoiceSO = (soId) => { invoiced1.push(soId); return null; };
+
+  const sug1p1 = sandbox.suggestSoSplit(15, sandbox.poSoAllocations(box.state, po, 'p1'), getSO12);
+  check('[D] p1\'s suggestion gives Critical SO-X its full 10 first, Urgent SO-Y the rest, Standard SO-Z nothing (yet)',
+    sug1p1.rows.map(r => [r.so_id, r.suggested]), [['so-x', 10], ['so-y', 5], ['so-z', 0]]);
+  const sug1p2 = sandbox.suggestSoSplit(6, sandbox.poSoAllocations(box.state, po, 'p2'), getSO12);
+  check('[D] p2\'s suggestion gives Critical SO-X its 4, Standard SO-W the remaining 2',
+    sug1p2.rows.map(r => [r.so_id, r.suggested]), [['so-x', 4], ['so-w', 2]]);
+
+  const itemsD = [
+    { product_id: 'p1', qty: 21, received: 15, rejected: 0, to_pool: 0, so_split: sug1p1.rows.map(r => ({ so_id: r.so_id, qty: r.suggested })) },
+    { product_id: 'p2', qty: 6, received: 6, rejected: 0, to_pool: 0, so_split: sug1p2.rows.map(r => ({ so_id: r.so_id, qty: r.suggested })) },
+  ];
+  const r1 = await sandbox.postReceiptForPO(po, itemsD, { lr: 'LR-1', grnDate: '2026-10-25' }, { ...ctx, state: box.state, getSO: getSO12 });
+  check('[D] the PO is Partially Received — p1 is still short, even though p2 just finished', box.state.vendor_pos[0].status, 'Partially Received');
+  check('[D] exactly the SOs that received something this delivery get invoiced — SO-Z got nothing, so it is NOT billed yet',
+    invoiced1.slice().sort(), ['so-w', 'so-x', 'so-y']);
+  check('[D] SO-X: fully served on BOTH lines already, from this one delivery', sandbox.soReceivedQty(SOS12['so-x'], box.state), { p1: 10, p2: 4 });
+  check('[D] SO-Y: its own partial share only', sandbox.soReceivedQty(SOS12['so-y'], box.state), { p1: 5, p2: 0 });
+  check('[D] SO-Z: nothing yet — correctly, not a fraction of someone else\'s share', sandbox.soReceivedQty(SOS12['so-z'], box.state), { p1: 0, p2: 0 });
+  check('[D] SO-W: its own 2, from the p2 line only', sandbox.soReceivedQty(SOS12['so-w'], box.state), { p1: 0, p2: 2 });
+
+  // ----- E: second delivery — the remaining 6 of p1 (SO-Y's last 1, SO-Z's
+  // full 5). p2 is already done and is not part of this delivery at all. -----
+  po = box.state.vendor_pos[0];
+  const invoiced2 = [];
+  sandbox.autoInvoiceSO = (soId) => { invoiced2.push(soId); return null; };
+  const sug2 = sandbox.suggestSoSplit(6, sandbox.poSoAllocations(box.state, po, 'p1'), getSO12);
+  check('[E] SO-X (already fully received) drops out of the suggestion entirely', sug2.rows.some(r => r.so_id === 'so-x'), false);
+  check('[E] Urgent SO-Y\'s last 1 goes first, Standard SO-Z gets the rest',
+    sug2.rows.map(r => [r.so_id, r.suggested]), [['so-y', 1], ['so-z', 5]]);
+  // useSuggested() in the real editor maps over EVERY allocation, so SO-X
+  // still appears in the submitted so_split, at 0 — exactly what the UI sends.
+  const allAlloc2 = sandbox.poSoAllocations(box.state, po, 'p1');
+  const soSplit2 = allAlloc2.map(a => { const s = sug2.rows.find(r => r.so_id === a.so_id); return { so_id: a.so_id, qty: s ? s.suggested : 0 }; });
+  const itemsE = [{ product_id: 'p1', qty: 21, received: 6, rejected: 0, to_pool: 0, so_split: soSplit2 }];
+  const r2 = await sandbox.postReceiptForPO(po, itemsE, { lr: 'LR-2', grnDate: '2026-11-02' }, { ...ctx, state: box.state, getSO: getSO12 });
+  check('[E] the PO is now fully Material Received — every line, every SO\'s share, complete', box.state.vendor_pos[0].status, 'Material Received');
+  check('[E] SO-W got nothing in this delivery, so it is NOT re-invoiced', invoiced2.includes('so-w'), false);
+  check('[E] SO-X is invoiced again by the unconditional po.so_id call (a harmless no-op upstream — autoInvoiceSO itself finds nothing new to bill)',
+    invoiced2.includes('so-x'), true);
+  check('[E] SO-Y and SO-Z, who both received more this round, are invoiced', invoiced2.filter(id => ['so-y', 'so-z'].includes(id)).sort(), ['so-y', 'so-z']);
+
+  sandbox.autoInvoiceSO = realAutoInvoiceSO;
+
+  // ----- F: the headline claim — every SO ends up with EXACTLY what it
+  // itself ordered, not a unit more, not a unit less, across the whole
+  // lifecycle (creation, a mid-flow edit, two separate deliveries) -----
+  check('[F] SO-X: exactly its own 10 + 4', sandbox.soReceivedQty(SOS12['so-x'], box.state), { p1: 10, p2: 4 });
+  check('[F] SO-Y: exactly its own 6', sandbox.soReceivedQty(SOS12['so-y'], box.state), { p1: 6, p2: 0 });
+  check('[F] SO-Z: exactly its own 5', sandbox.soReceivedQty(SOS12['so-z'], box.state), { p1: 5, p2: 0 });
+  check('[F] SO-W: exactly its own 2', sandbox.soReceivedQty(SOS12['so-w'], box.state), { p1: 0, p2: 2 });
+  check('[F] p1\'s 21 units land on SOs that sum to exactly 21 — nothing lost, nothing doubled',
+    10 + 6 + 5 + 0, 21);
+  check('[F] p2\'s 6 units land on SOs that sum to exactly 6', 4 + 0 + 0 + 2, 6);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 

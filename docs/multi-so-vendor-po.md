@@ -266,12 +266,12 @@ simplification, not hidden.
 | `postReceiptForPO`'s `so_split` stamping + multi-SO invoice fan-out | `frontend/src/screens-procurement.jsx` |
 | `buildComboPOItems`, `createComboVendorPO`, `CreateVendorPOModal`'s combine picker | `frontend/src/screens-procurement.jsx` |
 | `BulkVendorPOModal`, `VendorPOList`'s Single PO / Bulk PO buttons | `frontend/src/screens-procurement.jsx` |
-| `SOVendorPOsTab`'s per-line lock (`poOpenForEdit`/`lineReceived`/`lineEditable`), `LinePoSplitEditor`, `setItemSoAlloc` | `frontend/src/screens-procurement.jsx` |
+| `SOVendorPOsTab`'s per-line lock (`poOpenForEdit`/`lineReceived`/`lineEditable`), `LinePoSplitEditor`, `setItemSoAlloc`, `applyLineSoAlloc` | `frontend/src/screens-procurement.jsx` |
 | `VGReceivePanel`, `vgReceiveComponents` — capped per-SO, trivial one-entry `so_split` | `frontend/src/screens-godown.jsx` |
 | `shrinkPOLineForSO`, used by `poolAllocateToSO` | `frontend/src/screens-godown.jsx` |
 | Every migrated read path (`soDerivedStatus`, `soRejectedOutstanding`, `soOutstandingProcurement`, `allocBuildRows`, `soReceivedQty`, `SOGrnTab`, `soMetrics`, `VGAddFromPoolPanel`, `VGGrnCard`, `VGPoolSendPanel`, `VGImplPanel`, the VG main stock panel, `soFullyReceived`, `hasPOs`, `ProcurementTab.linkedPOs`, `soProfit`) | `frontend/src/utils.jsx`, `frontend/src/screens-procurement.jsx`, `frontend/src/screens-alloc.jsx`, `frontend/src/screens-billing.jsx`, `frontend/src/screens-dashboard.jsx`, `frontend/src/screens-godown.jsx`, `frontend/src/screens-so.jsx` |
 | `soShareIndex` — the matching engine behind Bulk PO's SO picker | `frontend/src/screens-procurement.jsx` |
-| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] `BulkVendorPOModal`/`createComboVendorPO` — ticking several SOs builds the right `so_alloc`, a zero-quantity SO is dropped from `linkedSoIds` rather than left dangling, and ticking just one SO degrades to a plain PO; [11] `soShareIndex` — who shares what with whom, correctly excluding an SO's own non-overlapping items, and an item already on a vendor PO correctly stops counting as shared |
+| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] `BulkVendorPOModal`/`createComboVendorPO` — ticking several SOs builds the right `so_alloc`, a zero-quantity SO is dropped from `linkedSoIds` rather than left dangling, and ticking just one SO degrades to a plain PO; [11] `soShareIndex` — who shares what with whom, correctly excluding an SO's own non-overlapping items, and an item already on a vendor PO correctly stops counting as shared; [12] a full lifecycle simulation — Bulk PO creation, a mid-flow edit adding a 4th SO to an unreceived line, two partial GRN deliveries using the real suggested split, and every one of the four SOs ending up with exactly its own units billed, not a unit more or less |
 
 ## Traps
 
@@ -313,3 +313,24 @@ simplification, not hidden.
   *ordered* and *received* figures either side of it are SO-scoped. Not an
   oversight — there is no way to attribute a specific lorry to a specific
   SO without inventing scope this feature doesn't need yet.
+- **`poSoAllocations(state, po, productId)` must answer for ONE LINE, not
+  the whole PO.** It used to build its candidate list from
+  `poLinkedSoIds(po)` — every SO sharing ANY line on the PO — so a PO with
+  two independently-shared lines (`so_alloc` on line A = {X, Y}, on line B
+  = {X, W}) handed line B's `SoSplitEditor` a confusing extra row for Y,
+  "needs 0," even though Y has nothing to do with line B. Found by the full
+  lifecycle simulation (`multi-so-po-check.js` section [12]'s step [C]),
+  fixed by filtering to SOs with a real stake in *this* product — an
+  ordered qty or an already-received qty on it — at the source, so
+  `SoSplitEditor` and `LinePoSplitEditor` both inherit the fix without
+  changing either of them. `suggestSoSplit` itself was never affected — it
+  already drops a zero-remaining SO internally, so the suggestion's own
+  ranking was always correct; this was specifically a rendering/clarity bug
+  in which SOs the split editor showed, not a quantity or money bug.
+- **`LinePoSplitEditor`'s "already received" floor used to be computed
+  twice** — once by `poSoAllocations` for `SoSplitEditor`, and again by a
+  second, independently-written loop inside `LinePoSplitEditor` doing the
+  exact same `grnLineSoQty` summation. The two never actually disagreed,
+  but nothing stopped them from drifting apart the next time either one was
+  touched — exactly the "one definition per question" trap. `LinePoSplitEditor`
+  now reads `poSoAllocations` directly, same as `SoSplitEditor` does.
