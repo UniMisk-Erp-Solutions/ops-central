@@ -4,7 +4,7 @@ Every document in `docs/`, what it covers, and who it is for. **Keep this file
 current**: when a feature changes, update its document *and* the row here. When
 something new is built, add the document *and* a row here in the same change.
 
-_Last updated: 2026-10-06_
+_Last updated: 2026-10-12_
 
 ---
 
@@ -42,6 +42,7 @@ _Last updated: 2026-10-06_
 
 | File | Topic | What it covers |
 |---|---|---|
+| [architecture-security-devops-audit.md](./architecture-security-devops-audit.md) | Phase 1 baseline audit | Current architecture, organization and role boundaries, request flow, module inventory, security findings, risks, and recommended next phases. |
 | [testing.md](./testing.md) | The check suite | What each `scripts/uitest/*-check.js` guards and why. **Run before every deploy.** |
 | [tenant-subdomains.md](./tenant-subdomains.md) | Subdomains and TLS | Per-tenant hosts, Vercel + Cloudflare provisioning. |
 | [COOLIFY_OPC_SUPABASE_SETUP.md](./COOLIFY_OPC_SUPABASE_SETUP.md) | Self-hosted Supabase | The Coolify stack, service ids, what must not be touched. |
