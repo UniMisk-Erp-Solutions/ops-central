@@ -175,13 +175,13 @@ same event. A PO's own completion/status logic stays entirely PO-level,
 unaffected: a line is "fully received" when its total accepted reaches its
 total ordered, regardless of how that total is split across SOs.
 
-`VGReceivePanel` and `vgReceiveComponents` (the SO-scoped Virtual Godown
-receive paths) never show the split editor — they're already scoped to one
-SO. Instead they **cap** what's receivable from a shared line to that SO's
-own remaining `so_alloc` share, and post a trivial one-entry `so_split`
-naming just that SO — correct, because that specific receiving *event*
-really is 100% one SO's, even though the PO's line is shared (see
-[Traps](#traps)).
+`VirtualGodownView`'s own receive path (`doMarkReceived` → `vgReceiveComponents`
+— the SO-scoped Virtual Godown route) never shows the split editor — it's
+already scoped to one SO. Instead it **caps** what's receivable from a
+shared line to that SO's own remaining `so_alloc` share, and posts a
+trivial one-entry `so_split` naming just that SO — correct, because that
+specific receiving *event* really is 100% one SO's, even though the PO's
+line is shared (see [Traps](#traps)).
 
 **Receive itself is never gated on "combined."** Every entry point —
 `VendorPODetail`'s own Receive button, `SOVendorPOsTab`'s inline Receive,
@@ -276,8 +276,8 @@ default, so a one-entry array would be a second way to say nothing.
 legitimately be 100% for one SO while another SO's share of the same line
 is still outstanding (two separate lorries, two separate GRN events). Coding
 "never a 1-entry array" as a blanket rule across both would have made
-`VGReceivePanel`'s SO-scoped receiving either wrong (attribute the whole
-GRN's accepted qty to `po.so_id`, stealing from the real recipient) or
+the Virtual Godown's own SO-scoped receiving either wrong (attribute the
+whole GRN's accepted qty to `po.so_id`, stealing from the real recipient) or
 impossible. `multi-so-po-check.js` section [8] drives this exact case.
 
 **Why does `shrinkPOLineForSO`'s collapse rule check `po.so_id`
@@ -297,7 +297,7 @@ redundancy. `multi-so-po-check.js` section [6] proves both directions.
 No shared PO could exist in real data until this phase shipped, so every
 earlier phase was a *provably* zero-diff refactor — the full existing
 22-check suite had to pass unchanged, and did. Shipping the write-side
-capping (`VGReceivePanel`, `vgReceiveComponents`, `shrinkPOLineForSO`)
+capping (`vgReceiveComponents`, `shrinkPOLineForSO`)
 *before* anything could create a shared PO meant it could be proven correct
 against hand-built fixtures with zero risk of a half-finished feature being
 reachable through the UI in a broken state.
@@ -321,7 +321,7 @@ simplification, not hidden.
 | `BulkVendorPOModal`, `VendorPOList`'s Single PO / Bulk PO buttons | `frontend/src/screens-procurement.jsx` |
 | `VendorPODetail`'s Receive button, `GRNList`'s New GRN button, the "combined · N SOs" tags | `frontend/src/screens-procurement.jsx` — see [receiving-grn.md](./receiving-grn.md) |
 | `SOVendorPOsTab`'s per-line lock (`poOpenForEdit`/`lineReceived`/`lineEditable`), `LinePoSplitEditor`, `setItemSoAlloc`, `applyLineSoAlloc` | `frontend/src/screens-procurement.jsx` |
-| `VGReceivePanel`, `vgReceiveComponents` — capped per-SO, trivial one-entry `so_split` | `frontend/src/screens-godown.jsx` |
+| `vgReceiveComponents` (via `VirtualGodownView`'s `doMarkReceived`) — capped per-SO, trivial one-entry `so_split` | `frontend/src/screens-godown.jsx` |
 | `previewReceivePOMapping` — the PO/combined-SO mapping a pending receipt shows Purchase, same algorithm `vgReceiveComponents` posts with; `PendingReceiptsPanel`'s structured PO/line-item/combined-mapping display | `frontend/src/screens-godown.jsx` — see [receiving-grn.md](./receiving-grn.md) |
 | `shrinkPOLineForSO`, used by `poolAllocateToSO` | `frontend/src/screens-godown.jsx` |
 | Every migrated read path (`soDerivedStatus`, `soRejectedOutstanding`, `soOutstandingProcurement`, `allocBuildRows`, `soReceivedQty`, `SOGrnTab`, `soMetrics`, `VGAddFromPoolPanel`, `VGGrnCard`, `VGPoolSendPanel`, `VGImplPanel`, the VG main stock panel, `soFullyReceived`, `hasPOs`, `ProcurementTab.linkedPOs`, `soProfit`) | `frontend/src/utils.jsx`, `frontend/src/screens-procurement.jsx`, `frontend/src/screens-alloc.jsx`, `frontend/src/screens-billing.jsx`, `frontend/src/screens-dashboard.jsx`, `frontend/src/screens-godown.jsx`, `frontend/src/screens-so.jsx` |
@@ -333,7 +333,7 @@ simplification, not hidden.
 
 - **A GRN event's `so_split` is allowed to have one entry; a PO line's
   `so_alloc` never is.** They answer different questions — see
-  [Why it is that way](#why-it-is-that-way). Do not "fix" `VGReceivePanel`'s
+  [Why it is that way](#why-it-is-that-way). Do not "fix" `vgReceiveComponents`'s
   trivial one-entry `so_split` into something more symmetrical with
   `so_alloc`; it is correct as written.
 - **`shrinkPOLineForSO`'s collapse-to-default check is `so_alloc[0].so_id

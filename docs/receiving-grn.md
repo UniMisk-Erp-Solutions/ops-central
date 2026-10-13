@@ -257,3 +257,23 @@ it whenever this flow is doubted; it is not one of the required pre-deploy
   shape (for the fix above) would have meant either missing a second place
   that silently assumed the old flat shape, or knowingly leaving a landmine.
   Deleted rather than updated — it had no caller to preserve.
+- A SECOND dead receiving component, `VGReceivePanel`, had the exact same
+  "no approval gate" bug as `ReceiveModal`/`GRNNew` above — its own
+  `markReceived()` called `postReceiptForPO` straight through, gated only on
+  `wfCanReceive(role)` (can this role use a receiving screen AT ALL, the
+  union of both requester and approver roles) rather than "is this role the
+  configured ACCEPTOR." Found while auditing every call site of
+  `postReceiptForPO`/`vgReceiveComponents` after a bug report that a request
+  wasn't appearing. It was never reachable — grepped for `<VGReceivePanel`
+  and found no mount anywhere; `VirtualGodownView`'s own `doMarkReceived` is
+  the real, correctly-gated live path (confirmed mounted at the `godown/:id`
+  route and embedded in the SO detail page) — so this specific bug never
+  actually fired for anyone. Deleted rather than fixed, same reasoning as
+  `acceptReceipt`/`rejectReceipt`: a second, unreachable implementation of
+  "receive material at the VG" is a landmine regardless of whether its own
+  gate is correct, and `vgReceiveComponents`/`doMarkReceived` is the one
+  definition this file already relies on elsewhere. **The lesson, not just
+  the fix:** a bug search that stops at "found one, fixed it" can still miss
+  a sibling with the identical shape sitting a few hundred lines away —
+  grep every call site of the function being gated, not just the ones a
+  stack trace or a bug report points at.
