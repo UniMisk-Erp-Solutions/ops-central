@@ -4,7 +4,9 @@
 **Code:** `screens-godown.jsx`, `screens-procurement.jsx`
 **Tests:** `scripts/uitest/receive-check.js`, `scripts/uitest/receipt-engine-check.js`,
 `scripts/uitest/grn-list-check.js` (the grouped-by-project list),
-`scripts/uitest/multi-so-po-check.js` (the preview/execution-agree guarantee below)
+`scripts/uitest/multi-so-po-check.js` (the preview/execution-agree guarantee below),
+`scripts/uitest/grn-approval-e2e-sim.js` (the full journey, below — not one of
+the required pre-deploy 22, but run it whenever this flow is doubted)
 
 ---
 
@@ -186,6 +188,21 @@ blocks on missing paperwork.
 
 GRNs raised against the order are listed in the VG too, next to the action that
 creates them.
+
+## Proving the whole journey, not just each piece
+
+`grn-approval-e2e-sim.js` walks the real user story end to end against the
+actual source — Stores confirms (via the PO-centric Receive dialog, a PO
+combined across two SOs the same way, and the Virtual Godown's own flat
+"mark received") → the request **actually renders** on a server-side render
+of Purchase's own `PendingReceiptsPanel` (not just an inspection of the
+underlying `pending_receipts` array) → Purchase accepts → the GRN posts with
+exactly what Stores confirmed. It exists because unit-level proof that
+`submitPOReceipt` gates correctly, and unit-level proof that the panel
+displays a hand-built pending receipt, can both be green while the two never
+actually connect — this script is the connection, proven, not assumed. Run
+it whenever this flow is doubted; it is not one of the required pre-deploy
+22 because it duplicates coverage those already carry individually.
 
 ## Traps
 
