@@ -73,8 +73,12 @@ back too rather than leaving nobody able to receive.
 | client sends a request instead of creating the SO | off | off | **on** |
 
 Live: **Microlink** (`ml`) runs `procurement_only`; **OP Central Demo**
-(`unimisk`) runs `standard`; **Demo Org** (`dm`) runs `split_stores` — see
-[tenant-dm.md](./tenant-dm.md).
+(`unimisk`) runs `standard` with one override — `receiving_flow:
+stores_to_purchase` (`041_receiving_flow_opcdemo.sql`), so Stores confirms
+and Purchase accepts here too, same direction as Microlink and Demo Org,
+without adopting the rest of `procurement_only`'s settings (PO language,
+in-transit tracking, invoice timing all stay `standard`'s); **Demo Org**
+(`dm`) runs `split_stores` — see [tenant-dm.md](./tenant-dm.md).
 
 `split_stores` was given `standard`'s billing settings at first — both triggers
 off — then explicitly moved to match `procurement_only` exactly
