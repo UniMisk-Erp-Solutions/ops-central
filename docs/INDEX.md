@@ -42,6 +42,7 @@ _Last updated: 2026-10-12_
 
 | File | Topic | What it covers |
 |---|---|---|
+| [phase-1-audit-summary.md](./phase-1-audit-summary.md) | Phase 1 audit handoff | Read-only audit purpose and scope, architecture/request flow examined, source-confirmed findings, live-verification limits, and what was not implemented. Links to the full audit. |
 | [architecture-security-devops-audit.md](./architecture-security-devops-audit.md) | Phase 1 baseline audit | Current architecture, organization and role boundaries, request flow, module inventory, security findings, risks, and recommended next phases. |
 | [testing.md](./testing.md) | The check suite | What each `scripts/uitest/*-check.js` guards and why. **Run before every deploy.** |
 | [tenant-subdomains.md](./tenant-subdomains.md) | Subdomains and TLS | Per-tenant hosts, Vercel + Cloudflare provisioning. |
