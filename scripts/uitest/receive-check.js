@@ -184,5 +184,73 @@ check('unscoped, it names the order it belongs to', out.indexOf('SO/FY26/0001') 
 check('it disappears when nothing is pending',
   /Awaiting|post GRN/.test(renderAs(sandbox.PendingReceiptsPanel, 'Purchase', { soId: 'no-such-order' })), false);
 
+// ---------------------------------------------------------------------------
+// Purchase approving a pending receipt used to see only a flat "4× Chassis"
+// text — no PO, no SO mapping. Now it shows exactly which vendor PO each
+// item will post against, and — for a PO combined across several SOs —
+// which OTHER SO shares that line and for how much, using the SAME matching
+// vgReceiveComponents will actually run on Accept (previewReceivePOMapping).
+// ---------------------------------------------------------------------------
+console.log('\n[7] Purchase sees which PO (and, if combined, which other SO) a pending receipt will post against');
+const SO_A = { id: 'so-a', so_no: 'SO/FY26/0070', customer_id: 'c1', status: 'Draft', lines: [],
+  extra: { pending_receipts: [{
+    id: 'pr-combo', by: 'u-stores', date: '2026-05-22', status: 'Pending', flow: 'stores_to_purchase',
+    picks: [{ product_id: 'p1', qty: 4, name: 'Chassis' }],
+  }] } };
+const SO_B = { id: 'so-b', so_no: 'SO/FY26/0071', customer_id: 'c2', status: 'Draft', lines: [] };
+const COMBO_PO = { id: 'po-combo-1', po_no: 'VPO/FY26/0070', so_id: 'so-a', vendor_id: 'v1',
+  date: '2026-05-01', status: 'Issued',
+  items: [{ product_id: 'p1', qty: 9, rate: 100, so_alloc: [{ so_id: 'so-a', qty: 6 }, { so_id: 'so-b', qty: 3 }] }] };
+function renderCombo() {
+  const st = { products: PRODUCTS, vendors: [{ id: 'v1', name: 'dykin' }], customers: [], categories: [],
+    sales_orders: [SO_A, SO_B], vendor_pos: [COMBO_PO], grns: [],
+    notifications: [], audit: [], pool: [], outward_dispatches: [], users: [] };
+  const store = {
+    state: st, route: 'godown', currentUser: 'u1', authReady: true, loaded: true,
+    navigate: () => {}, mutate: () => {}, saveConfig: () => {}, addToPool: () => {},
+    consumeFromPool: () => {}, syncErrors: [], retrySync: () => {}, soSubtotal: () => 0,
+    getCustomer: () => undefined, getVendor: id => st.vendors.find(v => v.id === id),
+    getProduct: id => PRODUCTS.find(p => p.id === id), getCategory: () => undefined,
+    getUser: id => (id === 'u-stores' ? { id, name: 'Stores Guy', role: 'Stores' } : { id: 'u1', name: 'T', role: 'Purchase' }),
+    getSO: id => st.sales_orders.find(x => x.id === id),
+  };
+  return ReactDOMServer.renderToStaticMarkup(
+    React.createElement(sandbox.Store.Provider, { value: store },
+      React.createElement(sandbox.ToastProvider, null, React.createElement(sandbox.PendingReceiptsPanel, { soId: 'so-a' }))));
+}
+const comboOut = renderCombo();
+check('the PO number this pick will post against is shown', /VPO\/FY26\/0070/.test(comboOut), true);
+check('how much of this request it covers is shown', /4 of this request/.test(comboOut), true);
+check('it is flagged as a combined PO', /combined/.test(comboOut), true);
+check('the OTHER linked SO is named by its own so_no, not its raw id', /SO\/FY26\/0071/.test(comboOut), true);
+check('...with its own share of the line (3), not SO-A\'s', /\(3\)/.test(comboOut), true);
+
+// A plain, never-shared PO must show its own PO number with NO "combined" tag.
+const SO_PLAIN = { id: 'so-p', so_no: 'SO/FY26/0072', customer_id: 'c1', status: 'Draft', lines: [],
+  extra: { pending_receipts: [{ id: 'pr-plain', by: 'u-stores', date: '2026-05-22', status: 'Pending', flow: 'stores_to_purchase',
+    picks: [{ product_id: 'p2', qty: 2, name: 'Power supply' }] }] } };
+const PLAIN_PO = { id: 'po-plain-1', po_no: 'VPO/FY26/0075', so_id: 'so-p', vendor_id: 'v1', date: '2026-05-01', status: 'Issued',
+  items: [{ product_id: 'p2', qty: 4, rate: 50 }] };
+function renderPlain() {
+  const st = { products: PRODUCTS, vendors: [{ id: 'v1', name: 'dykin' }], customers: [], categories: [],
+    sales_orders: [SO_PLAIN], vendor_pos: [PLAIN_PO], grns: [],
+    notifications: [], audit: [], pool: [], outward_dispatches: [], users: [] };
+  const store = {
+    state: st, route: 'godown', currentUser: 'u1', authReady: true, loaded: true,
+    navigate: () => {}, mutate: () => {}, saveConfig: () => {}, addToPool: () => {},
+    consumeFromPool: () => {}, syncErrors: [], retrySync: () => {}, soSubtotal: () => 0,
+    getCustomer: () => undefined, getVendor: id => st.vendors.find(v => v.id === id),
+    getProduct: id => PRODUCTS.find(p => p.id === id), getCategory: () => undefined,
+    getUser: id => (id === 'u-stores' ? { id, name: 'Stores Guy', role: 'Stores' } : { id: 'u1', name: 'T', role: 'Purchase' }),
+    getSO: id => st.sales_orders.find(x => x.id === id),
+  };
+  return ReactDOMServer.renderToStaticMarkup(
+    React.createElement(sandbox.Store.Provider, { value: store },
+      React.createElement(sandbox.ToastProvider, null, React.createElement(sandbox.PendingReceiptsPanel, { soId: 'so-p' }))));
+}
+const plainOut = renderPlain();
+check('a plain PO still shows its own PO number', /VPO\/FY26\/0075/.test(plainOut), true);
+check('...but never the "combined" tag — nothing else shares this line', /combined/.test(plainOut), false);
+
 console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — one-click receiving, no double-counting, and the queue is findable');
 process.exit(bad ? 1 : 0);
