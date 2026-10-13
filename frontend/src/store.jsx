@@ -116,23 +116,40 @@ async function __syncTable(table, pk, prevArr, nextArr) {
     const before = prevMap.get(row[pk]);
     if (!before || JSON.stringify(before) !== JSON.stringify(row)) {
       const payload = __forTable(table, table === 'audit' ? __auditRow(row) : row);
-      const { error } = await sb.from(table).upsert(payload, { onConflict: pk });
-      if (error) __syncFailed(table, 'upsert', error.message, row[pk]);
+      try {
+        const { error } = await sb.from(table).upsert(payload, { onConflict: pk });
+        if (error) __syncFailed(table, 'upsert', error.message, row[pk]);
+      } catch (e) { __syncFailed(table, 'upsert', e && e.message || String(e), row[pk]); }
     }
   }
   const nextIds = new Set(next.map(r => r[pk]));
   const dels = [...prevMap.keys()].filter(id => !nextIds.has(id));
   if (dels.length) {
-    const { error } = await sb.from(table).delete().in(pk, dels);
-    if (error) __syncFailed(table, 'delete', error.message, dels.join(','));
+    try {
+      const { error } = await sb.from(table).delete().in(pk, dels);
+      if (error) __syncFailed(table, 'delete', error.message, dels.join(','));
+    } catch (e) { __syncFailed(table, 'delete', e && e.message || String(e), dels.join(',')); }
   }
 }
 
 function __syncTables(prev, next) {
-  if (!window.OPC_SB) return;
-  Object.entries(SYNCED_TABLES).forEach(([t, pk]) => {
-    if (prev[t] !== next[t]) __syncTable(t, pk, prev[t], next[t]);
-  });
+  if (!window.OPC_SB) return Promise.resolve([]);
+  return Promise.all(Object.entries(SYNCED_TABLES)
+    .filter(([t]) => prev[t] !== next[t])
+    .map(([t, pk]) => __syncTable(t, pk, prev[t], next[t])));
+}
+
+// PostgREST commonly caps one response at 1,000 rows. Fetch bounded pages so a
+// successful response cannot silently mean an incomplete tenant list.
+async function __selectAllRows(sb, table, pageSize = 500) {
+  const rows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await sb.from(table).select('*').range(offset, offset + pageSize - 1);
+    if (error) throw new Error(table + ': ' + error.message);
+    if (!Array.isArray(data)) throw new Error(table + ': invalid response');
+    rows.push(...data);
+    if (data.length < pageSize) return rows;
+  }
 }
 
 function loadInitialState() {
@@ -395,7 +412,7 @@ function StoreProvider({ children }) {
     await __loadSyncColumns();
     const empty = {};
     Object.keys(SYNCED_TABLES).forEach(t => { empty[t] = []; });
-    __syncTables(empty, cur);
+    await __syncTables(empty, cur);
   }, []);
 
   // Keep per-org feature access fresh without polling: re-check only when the tab
@@ -519,8 +536,13 @@ function StoreProvider({ children }) {
       // Offline / seed-only mode: nothing to fetch — the data we have IS the data.
       if (!window.OPC_SB) { setState(prev => prev.loaded ? prev : { ...prev, loaded: true }); return; }
       if (!realUserId) return;
+      // Do not query or recover rows until the server resolved this session's
+      // active organization. This binds local recovery to the tenant context.
+      if (!state.platform || !state.platform.ready) return;
+      const activeOrgId = state.platform.orgId || null;
+      if (!activeOrgId) { setState(prev => ({ ...prev, loaded: true })); return; }
       try {
-        const results = await Promise.all(LOADED_TABLES.map(t => window.OPC_SB.from(t).select('*')));
+        const results = await Promise.all(LOADED_TABLES.map(async t => ({ data: await __selectAllRows(window.OPC_SB, t), error: null })));
         if (cancelled) return;
         // Rows created locally while the DB was unreachable (e.g. an inquiry made
         // during an outage) live only in localStorage. A plain replace would wipe
@@ -535,8 +557,8 @@ function StoreProvider({ children }) {
         // Rows to consider rescuing: the current state for a session that has
         // been running, plus the boot cache if — and only if — it was written by
         // this same user. Anything cached by another tenant is ignored outright.
-        const cached = (cur.__cached && cur.__cached.__uid === realUserId) ? cur.__cached : null;
-        const sameIdentity = cur.__uid === realUserId;
+        const cached = (cur.__cached && cur.__cached.__uid === realUserId && cur.__cached.__orgId === activeOrgId) ? cur.__cached : null;
+        const sameIdentity = cur.__uid === realUserId && cur.__orgId === activeOrgId;
         const recoverFrom = (t) => {
           const live = sameIdentity ? (cur[t] || []) : [];
           const buffered = cached ? (cached[t] || []) : [];
@@ -600,11 +622,12 @@ function StoreProvider({ children }) {
         if (toPush.length) console.info('[OPC] recovered ' + toPush.length + ' local-only row(s) → DB');
       } catch (e) {
         console.warn('[OPC] transactional load failed', e);
+        __syncFailed('tenant data', 'load', e && e.message || String(e), realUserId);
         if (!cancelled) setState(prev => ({ ...prev, loaded: true }));   // don't hang on error
       }
     })();
     return () => { cancelled = true; };
-  }, [realUserId]);
+  }, [realUserId, state.platform && state.platform.ready, state.platform && state.platform.orgId]);
 
   // Apply saved branding (brand colour) live whenever it changes — including the
   // first load after config is fetched, so customisation survives a refresh.
@@ -783,8 +806,20 @@ function StoreProvider({ children }) {
   }, []);
 
   const setUserActive = React.useCallback(async (id, active) => {
+    if (window.OPC_SB) {
+      try {
+        const { error } = await window.OPC_SB.rpc('opc_set_org_user_active', { p_id: id, p_active: active });
+        if (error) return { ok: false, error: error.message };
+        try {
+          const roster = await window.OPC_SB.rpc('opc_org_users');
+          if (!roster.error && Array.isArray(roster.data)) setState(prev => ({ ...prev, users: roster.data }));
+          else if (!active) setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
+        } catch (_) { if (!active) setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) })); }
+        return { ok: true };
+      } catch (e) { return { ok: false, error: String(e.message || e) }; }
+    }
     setState(prev => ({ ...prev, users: prev.users.map(u => u.id === id ? { ...u, active } : u) }));
-    if (window.OPC_SB) { const { error } = await window.OPC_SB.from('users').update({ active }).eq('id', id); if (error) console.error('[OPC] setUserActive failed', error.message); }
+    return { ok: true };
   }, []);
 
   const removeUser = React.useCallback(async (id) => {
@@ -792,7 +827,11 @@ function StoreProvider({ children }) {
     if (!window.OPC_SB) return { ok: false, error: 'Cannot reach the server.' };
     const { error } = await window.OPC_SB.rpc('opc_delete_user', { p_id: id });
     if (error) return { ok: false, error: error.message };
-    setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
+    try {
+      const roster = await window.OPC_SB.rpc('opc_org_users');
+      if (!roster.error && Array.isArray(roster.data)) setState(prev => ({ ...prev, users: roster.data }));
+      else setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
+    } catch (_) { setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) })); }
     return { ok: true };
   }, [realUserId]);
 
@@ -855,11 +894,31 @@ function StoreProvider({ children }) {
       if (nq <= 0) { deletes.push(p.id); return null; }
       updates.push({ id: p.id, qty: nq }); return { ...p, qty: nq };
     }).filter(Boolean);
-    setState(prev => ({ ...prev, pool: nextPool }));
     if (window.OPC_SB) {
-      for (const u of updates) { const { error } = await window.OPC_SB.from('pool').update({ qty: u.qty }).eq('id', u.id); if (error) console.error('[OPC] pool update', error.message); }
-      if (deletes.length) { const { error } = await window.OPC_SB.from('pool').delete().in('id', deletes); if (error) console.error('[OPC] pool delete', error.message); }
+      try {
+        for (const u of updates) {
+          const { error } = await window.OPC_SB.from('pool').update({ qty: u.qty }).eq('id', u.id);
+          if (error) throw error;
+        }
+        if (deletes.length) {
+          const { error } = await window.OPC_SB.from('pool').delete().in('id', deletes);
+          if (error) throw error;
+        }
+      } catch (e) {
+        __syncFailed('pool', 'consume', e && e.message || String(e), allocs.map(a => a.id).join(','));
+        // A multi-row pool update may have partially completed. Reload the
+        // RLS-scoped table so the browser reflects the committed database state.
+        try {
+          const { data, error } = await window.OPC_SB.from('pool').select('*');
+          if (error) throw error;
+          setState(prev => ({ ...prev, pool: data || [] }));
+        } catch (reloadError) {
+          __syncFailed('pool', 'reload', reloadError && reloadError.message || String(reloadError), '');
+        }
+        return { ok: false, error: e && e.message || String(e) };
+      }
     }
+    setState(prev => ({ ...prev, pool: nextPool }));
     return { ok: true };
   }, []);
 

@@ -92,7 +92,11 @@ Deno.serve(async (req: Request) => {
     const cfg = await brevoConfig();
     if (!cfg.key) return json({ error: "Email is not configured yet (BREVO_API_KEY missing on the server)" }, 500);
     const rfqId = "rfq-" + src_id;
-    const rand = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    const rand = () => {
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    };
     // Buyer-locked fields per item (price / delivery_days / payment_terms / notes):
     // the vendor sees these as a fixed requirement and cannot change them.
     const locks = (body.locks && typeof body.locks === "object") ? body.locks : {};
@@ -127,11 +131,12 @@ Deno.serve(async (req: Request) => {
       const prev = existingVendors.find((x: any) => x.vendor_id === v.vendor_id);
       if (prev) {
         return { ...prev, name: v.name || prev.name, email: v.email, items: its, status: "sent", sent_at: now,
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           refloat_count: (Number(prev.refloat_count) || 0) + 1,
           refloat_reason: reasonStr || prev.refloat_reason || "",
           refloats: [ ...(Array.isArray(prev.refloats) ? prev.refloats : []), { reason: reasonStr, at: now } ] };
       }
-      return { vendor_id: v.vendor_id, name: v.name || "Vendor", email: v.email, token: rfqId + "~" + rand(), items: its, prices: {}, terms: {}, status: "sent", sent_at: now, refloat_count: 0 };
+      return { vendor_id: v.vendor_id, name: v.name || "Vendor", email: v.email, token: rfqId + "~" + rand(), items: its, prices: {}, terms: {}, status: "sent", sent_at: now, expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), refloat_count: 0 };
     });
     const floatedIds = new Set(withEmail.map((v: any) => v.vendor_id));
     const mergedVendors = [ ...existingVendors.filter((x: any) => !floatedIds.has(x.vendor_id)), ...floatedVendors ];
@@ -185,9 +190,11 @@ Deno.serve(async (req: Request) => {
     const rfqId = t.split("~")[0];
     const r = await fetch(SB_URL + "/rest/v1/rfqs?id=eq." + encodeURIComponent(rfqId) + "&select=*", { headers: sbHeaders() });
     const arr = await r.json().catch(() => []);
+    if (!r.ok) return json({ error: "Could not load quote" }, 502);
     const row = Array.isArray(arr) ? arr[0] : null;
     const v = row && (row.vendors || []).find((x: any) => x.token === t);
     if (!row || !v) return json({ error: "This quote link is not valid or has expired." }, 404);
+    if (v.expires_at && Date.parse(v.expires_at) < Date.now()) return json({ error: "This quote link is not valid or has expired." }, 410);
     return json({ vendor: v.name, rfq_no: row.rfq_no, items: v.items || [], prices: v.prices || {}, terms: v.terms || {}, submitted: v.status === "submitted", refloat_reason: (Number(v.refloat_count) || 0) > 0 ? (v.refloat_reason || "") : "" });
   }
 
@@ -196,16 +203,28 @@ Deno.serve(async (req: Request) => {
     if (!SB_KEY) return json({ error: "Server missing service key" }, 500);
     const body = await req.json().catch(() => ({}));
     const { t, prices, terms } = body || {};
-    if (!t || !prices || typeof prices !== "object") return json({ error: "token and prices required" }, 400);
+    if (!t || !prices || typeof prices !== "object" || Array.isArray(prices)) return json({ error: "token and prices required" }, 400);
     const rfqId = String(t).split("~")[0];
     const rr = await fetch(SB_URL + "/rest/v1/rfqs?id=eq." + encodeURIComponent(rfqId) + "&select=*", { headers: sbHeaders() });
+    if (!rr.ok) return json({ error: "Could not load quote" }, 502);
     const row = (await rr.json().catch(() => []))[0];
     if (!row) return json({ error: "Invalid link" }, 404);
     const target = (row.vendors || []).find((x: any) => x.token === t);
     if (!target) return json({ error: "Invalid link" }, 404);
+    if (target.expires_at && Date.parse(target.expires_at) < Date.now()) return json({ error: "This quote link has expired." }, 410);
+    const duplicate = target.status === "submitted";
+    const allowedIds = new Set((target.items || []).map((it: any) => String(it.product_id)));
+    for (const [id, value] of Object.entries(prices as Record<string, unknown>)) {
+      const price = Number(value);
+      if (!allowedIds.has(String(id)) || !Number.isFinite(price) || price < 0) {
+        return json({ error: "Prices must be non-negative numbers for requested items only." }, 400);
+      }
+    }
     // Enforce buyer-locked fields — a locked value always wins over whatever is sent.
-    const finalPrices: any = { ...(prices || {}) };
-    const finalTerms: any = (terms && typeof terms === "object") ? { ...terms } : {};
+    const finalPrices: any = { ...((duplicate ? target.prices : prices) || {}) };
+    const incomingTerms = duplicate ? target.terms : terms;
+    const finalTerms: any = incomingTerms && typeof incomingTerms === "object" && !Array.isArray(incomingTerms)
+      ? { ...incomingTerms } : {};
     (target.items || []).forEach((it: any) => {
       const lk = it.lock; if (!lk) return;
       if (lk.price !== undefined) finalPrices[it.product_id] = Number(lk.price) || 0;
@@ -216,19 +235,23 @@ Deno.serve(async (req: Request) => {
         if (lk.notes) finalTerms[it.product_id].notes = lk.notes;
       }
     });
-    const vendors = (row.vendors || []).map((x: any) => x.token === t ? { ...x, prices: finalPrices, terms: finalTerms, status: "submitted", submitted_at: new Date().toISOString() } : x);
+    const vendors = (row.vendors || []).map((x: any) => x.token === t ? { ...x, prices: finalPrices, terms: finalTerms, status: "submitted", submitted_at: x.submitted_at || new Date().toISOString() } : x);
     const v = vendors.find((x: any) => x.token === t);
     if (!v) return json({ error: "Invalid link" }, 404);
-    await fetch(SB_URL + "/rest/v1/rfqs?id=eq." + encodeURIComponent(rfqId), { method: "PATCH", headers: { ...sbHeaders(), Prefer: "return=minimal" }, body: JSON.stringify({ vendors }) });
+    if (!duplicate) {
+      const savedRfq = await fetch(SB_URL + "/rest/v1/rfqs?id=eq." + encodeURIComponent(rfqId), { method: "PATCH", headers: { ...sbHeaders(), Prefer: "return=minimal" }, body: JSON.stringify({ vendors }) });
+      if (!savedRfq.ok) return json({ error: "Could not save quote" }, 502);
+    }
     const sr = await fetch(SB_URL + "/rest/v1/sourcings?id=eq." + encodeURIComponent(row.so_id) + "&select=prices,quote_vendors", { headers: sbHeaders() });
     const srow = (await sr.json().catch(() => []))[0];
     if (srow) {
       const np = srow.prices || {};
       for (const pid of Object.keys(finalPrices)) { np[pid] = np[pid] || {}; np[pid][v.vendor_id] = Number((finalPrices as any)[pid]) || 0; }
       const qv = Array.from(new Set([...(srow.quote_vendors || []), v.vendor_id]));
-      await fetch(SB_URL + "/rest/v1/sourcings?id=eq." + encodeURIComponent(row.so_id), { method: "PATCH", headers: { ...sbHeaders(), Prefer: "return=minimal" }, body: JSON.stringify({ prices: np, quote_vendors: qv }) });
+      const savedSourcing = await fetch(SB_URL + "/rest/v1/sourcings?id=eq." + encodeURIComponent(row.so_id), { method: "PATCH", headers: { ...sbHeaders(), Prefer: "return=minimal" }, body: JSON.stringify({ prices: np, quote_vendors: qv }) });
+      if (!savedSourcing.ok) return json({ error: "Quote saved, but sourcing could not be updated. Retry to reconcile." }, 502);
     }
-    return json({ ok: true });
+    return json({ ok: true, duplicate });
   }
 
   // ---------- Provision a tenant subdomain (platform admins only) ----------
