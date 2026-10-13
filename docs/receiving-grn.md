@@ -22,7 +22,8 @@ the PO. That is `receiving_flow` in the workflow profile — see
 There is **one** code path. The **acceptor** posts the GRN directly (no point
 asking themselves); anyone else raises a request the acceptor approves. Labels,
 notifications, audit lines and waiting states all follow the setting rather than
-the word "Stores".
+the word "Stores". This is enforced at **every** receiving door, not only VG's
+own "mark received" — see [Traps](#traps) for the gap where it briefly wasn't.
 
 ## Finding a GRN — grouped by project, same as Vendor POs
 
@@ -86,6 +87,29 @@ accepted (another delivery posted against the same PO, say), and the live
 preview always matches what Accept will *actually* do, never a stale guess.
 A pick with no PO line left to cover it shows *"no PO line left — Accept will
 auto-create one"* instead of inventing a PO number that doesn't exist yet.
+
+### Two shapes of pending receipt, one normalized display
+
+A pending receipt is raised from two different places, carrying two different
+shapes:
+
+- **VG's own "mark received"** (`doMarkReceived`) — a flat `picks` array
+  (`{product_id, qty, name}`); which PO(s) it will post against is
+  *discovered* at Accept time via `previewReceivePOMapping`.
+- **The PO-centric Receive dialogs** (`ReceiveModal`/`GRNNew`, via
+  `submitPOReceipt` — see [Traps](#traps)) — `po_id` + the **exact** `items`
+  Stores already decided in the dialog (rejected / to-pool / a combined
+  line's `so_split`, all already filled in). The PO here is not up for
+  discovery; it's already fixed.
+
+**`pendingReceiptRows(pr, so, state, getProduct)`** (`screens-godown.jsx`)
+normalizes either shape into one row list — `{product_id, name, qty,
+poRows}` — so `PendingReceiptsPanel` renders both identically, and `accept`/
+`reject`'s own audit/notification text describes either the same way. A
+`po_id` request reads its mapping straight from that PO's own `so_alloc`,
+never through `previewReceivePOMapping` — running the general preview here
+could land on a *different* PO than the one already chosen, if more than
+one PO on this SO happens to carry the same product.
 
 ## The receive dialog
 
@@ -194,3 +218,25 @@ creates them.
   different from what the request told Purchase it would. `multi-so-po-check.js`
   section [17] proves the preview's own numbers (`take`, `shortfall`) and
   what Accept actually posts are the same numbers, not just "both reasonable."
+- **The request/approve gate only ever covered VG's "mark received" — the
+  PO-centric `ReceiveModal`/`GRNNew` dialogs called `postReceiptForPO`
+  directly, no matter who clicked Receive.** A requester role (Stores, under
+  `stores_to_purchase`) could open Receive from the Vendor PO's own page and
+  post the GRN straight through — the request that was supposed to land in
+  the acceptor's GRN dashboard was never raised at all, and the acceptor had
+  no idea anything had arrived. Reported directly as "the accept request
+  isn't appearing." **`submitPOReceipt`** is the one gate both dialogs now
+  call through: the acceptor posts directly exactly as before; anyone else's
+  items — already fully decided in the dialog — are stashed as a `po_id`
+  pending receipt instead, for the acceptor's Accept to replay verbatim.
+  `receive-check.js` section [8] proves both directions, and that Accept's
+  replay produces the identical GRN a direct receive would have.
+- A near-identical, **orphaned** copy of the accept/reject logic
+  (`acceptReceipt`/`rejectReceipt`, reading `pr.picks` only) sat unused
+  inside `GRNList` from before `PendingReceiptsPanel` was extracted as the
+  shared component — the render call had already moved to
+  `<PendingReceiptsPanel/>`, but the dead functions and the `pending` array
+  feeding them were never deleted. Left alone, updating the pending-receipt
+  shape (for the fix above) would have meant either missing a second place
+  that silently assumed the old flat shape, or knowingly leaving a landmine.
+  Deleted rather than updated — it had no caller to preserve.
