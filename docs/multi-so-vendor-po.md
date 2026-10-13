@@ -9,7 +9,7 @@ Procurement tab), `SOVendorPOsTab`'s per-line editor, `ReceiveModal`/`GRNNew`
 `SoSplitEditor`/`LinePoSplitEditor`/`buildComboPOItems`/`shrinkPOLineForSO`/
 `postReceiptForPO` (`frontend/src/screens-procurement.jsx`,
 `frontend/src/screens-godown.jsx`)
-**Test:** `scripts/uitest/multi-so-po-check.js` (all fifteen sections — see
+**Test:** `scripts/uitest/multi-so-po-check.js` (all sixteen sections — see
 below); the full existing suite proves every one of these call sites is a
 zero-diff refactor for a PO that is *not* shared, which is every PO that
 exists today
@@ -183,6 +183,17 @@ naming just that SO — correct, because that specific receiving *event*
 really is 100% one SO's, even though the PO's line is shared (see
 [Traps](#traps)).
 
+**Receive itself is never gated on "combined."** Every entry point —
+`VendorPODetail`'s own Receive button, `SOVendorPOsTab`'s inline Receive,
+`GRNNew`'s PO picker — lists and opens `ReceiveModal` for any receivable PO,
+shared or not; the only thing that differs for a plain PO is that
+`isShared(it)` (`Array.isArray(it.so_alloc) && it.so_alloc.length > 1`,
+defined identically in both `ReceiveModal` and `GRNNew`) is false for every
+line, so `SoSplitEditor` never renders and submission is never blocked
+waiting on a split. `postReceiptForPO`'s "every other linked SO" invoice
+fan-out is a genuine no-op for a plain PO — `poLinkedSoIds(po)` is just
+`[po.so_id]` — not a special case written for it.
+
 ### Moment 3 — editing an issued PO later
 
 The existing inline editor on `SOVendorPOsTab` (Purchase, after procurement
@@ -315,7 +326,7 @@ simplification, not hidden.
 | Every migrated read path (`soDerivedStatus`, `soRejectedOutstanding`, `soOutstandingProcurement`, `allocBuildRows`, `soReceivedQty`, `SOGrnTab`, `soMetrics`, `VGAddFromPoolPanel`, `VGGrnCard`, `VGPoolSendPanel`, `VGImplPanel`, the VG main stock panel, `soFullyReceived`, `hasPOs`, `ProcurementTab.linkedPOs`, `soProfit`) | `frontend/src/utils.jsx`, `frontend/src/screens-procurement.jsx`, `frontend/src/screens-alloc.jsx`, `frontend/src/screens-billing.jsx`, `frontend/src/screens-dashboard.jsx`, `frontend/src/screens-godown.jsx`, `frontend/src/screens-so.jsx` |
 | `soShareIndex` — the matching engine behind Bulk PO's SO picker | `frontend/src/screens-procurement.jsx` |
 | `soItemPOBreakdown`, `ComboPOSummary` — which PO(s) cover an SO's own on-order/received qty | `frontend/src/screens-procurement.jsx` |
-| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] `BulkVendorPOModal`/`createComboVendorPO` — ticking several SOs builds the right `so_alloc`, a zero-quantity SO is dropped from `linkedSoIds` rather than left dangling, and ticking just one SO degrades to a plain PO; [11] `soShareIndex` — who shares what with whom, correctly excluding an SO's own non-overlapping items, and an item already on a vendor PO correctly stops counting as shared; [12] a full lifecycle simulation — Bulk PO creation, a mid-flow edit adding a 4th SO to an unreceived line, two partial GRN deliveries using the real suggested split, and every one of the four SOs ending up with exactly its own units billed, not a unit more or less; [13] GRN/Vendor-PO discoverability (Receive button, New GRN button, combined-PO tags); [14] `soItemPOBreakdown` against a 3-PO-per-SO fixture, including a line also shared with a different SO, proving it reports only this SO's own share with no phantom zero-qty PO entries; [15] `ComboPOSummary`'s wiring into `VendorPODetail` itself, `ReceiveModal`/`GRNNew`/`SOVendorPOsTab` |
+| Checks | `scripts/uitest/multi-so-po-check.js` — [1]/[2] the five helpers' fallback identity and shared-line reads; [3] `suggestSoSplit`'s ranking; [4]/[5] every migrated read path against one hand-built shared PO (and a rejection replaced through a combined PO); [6] `shrinkPOLineForSO`'s shrink/collapse rules; [7] `postReceiptForPO`'s split stamping + multi-SO invoice fan-out; [8] `vgReceiveComponents` capped per-SO; [9] `buildComboPOItems`; [10] `BulkVendorPOModal`/`createComboVendorPO` — ticking several SOs builds the right `so_alloc`, a zero-quantity SO is dropped from `linkedSoIds` rather than left dangling, and ticking just one SO degrades to a plain PO; [11] `soShareIndex` — who shares what with whom, correctly excluding an SO's own non-overlapping items, and an item already on a vendor PO correctly stops counting as shared; [12] a full lifecycle simulation — Bulk PO creation, a mid-flow edit adding a 4th SO to an unreceived line, two partial GRN deliveries using the real suggested split, and every one of the four SOs ending up with exactly its own units billed, not a unit more or less; [13] GRN/Vendor-PO discoverability (Receive button, New GRN button, combined-PO tags); [14] `soItemPOBreakdown` against a 3-PO-per-SO fixture, including a line also shared with a different SO, proving it reports only this SO's own share with no phantom zero-qty PO entries; [15] `ComboPOSummary`'s wiring into `VendorPODetail` itself, `ReceiveModal`/`GRNNew`/`SOVendorPOsTab`; [16] Receive is never gated behind "combined" — every entry point stays open for a plain PO, and a plain PO's receipt posts with no `so_split` and a genuinely no-op invoice fan-out (proved by temporarily breaking the fan-out's own filter and confirming this section catches it) |
 
 ## Traps
 
