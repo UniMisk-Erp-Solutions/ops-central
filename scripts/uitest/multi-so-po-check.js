@@ -635,6 +635,43 @@ console.log('\n[15] ComboPOSummary -- Stores sees which SO(s) a PO is for, and h
     /r\.recvBreakdown\.length > 1/.test(src), true);
 }
 
+console.log('\n[16] Receive works IDENTICALLY for an ordinary PO -- the suggestion/split UI is the only thing gated behind "combined", never the Receive action itself');
+{
+  const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
+
+  const poDetailBody = src.slice(src.indexOf('function VendorPODetail('), src.indexOf('\nfunction ', src.indexOf('function VendorPODetail(') + 1));
+  const iBtn1 = poDetailBody.indexOf('setShowReceive(true)');
+  check('VendorPODetail\'s Receive button has no "combined-only" guard anywhere near it',
+    /poLinkedSoIds|linkedCount/.test(poDetailBody.slice(Math.max(0, iBtn1 - 300), iBtn1)), false);
+
+  const soTabBody = src.slice(src.indexOf('function SOVendorPOsTab('), src.indexOf('\nfunction ', src.indexOf('function SOVendorPOsTab(') + 1));
+  const iBtn2 = soTabBody.indexOf('setReceivePo(po)');
+  check('SOVendorPOsTab\'s inline Receive button has no "combined-only" guard either',
+    /poLinkedSoIds/.test(soTabBody.slice(Math.max(0, iBtn2 - 300), iBtn2)), false);
+
+  check('GRNNew\'s PO picker lists every receivable PO, combined or not -- one filter (not blocked), not a second one for "combined"',
+    /state\.vendor_pos\.filter\(p => !blockedPo\(p\.status\)\)\.map\(p => \{/.test(src), true);
+
+  // Functional proof, not just code reading: a PLAIN PO that has never been
+  // anywhere near another SO posts a receipt exactly as it always has -- no
+  // so_split ever gets stamped, nothing blocks submission waiting on a split
+  // that was never needed, and postReceiptForPO's "every OTHER linked SO"
+  // invoice fan-out is a genuine no-op (poLinkedSoIds(po) is just [po.so_id]
+  // when nothing was ever combined).
+  const poNormal = { id: 'po-plain-1', po_no: 'VPO/FY26/0200', so_id: 'so-n1', vendor_id: 'v1', status: 'Issued', amount: 500, ebill: {}, items: [{ product_id: 'p1', qty: 5, rate: 100 }] };
+  const { box, ctx } = makeCtx({ vendor_pos: [poNormal], grns: [], vendor_invoices: [], sales_orders: [{ id: 'so-n1', so_no: 'SO/FY26/0900' }], notifications: [] });
+  const invoked = [];
+  const realAuto = sandbox.autoInvoiceSO;
+  sandbox.autoInvoiceSO = (soId) => { invoked.push(soId); return null; };
+  const itemsIn = [{ product_id: 'p1', qty: 5, received: 5, rejected: 0, to_pool: 0, so_split: null }];
+  await sandbox.postReceiptForPO(poNormal, itemsIn, { lr: 'LR-X', grnDate: '2026-10-20' }, { ...ctx, state: box.state });
+  sandbox.autoInvoiceSO = realAuto;
+  check('an ordinary PO\'s GRN line carries no so_split key at all -- exactly like before this feature existed',
+    'so_split' in box.state.grns[0].items[0], false);
+  check('the PO resolves fully received, exactly as a plain receipt always has', box.state.vendor_pos[0].status, 'Material Received');
+  check('autoInvoiceSO fires exactly once, for the PO\'s own SO -- the multi-SO fan-out loop found nothing else to do', invoked, ['so-n1']);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 
