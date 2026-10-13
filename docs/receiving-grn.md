@@ -3,7 +3,8 @@
 **Who:** Stores confirm, Purchase accept. (Reversed from the standard flow.)
 **Code:** `screens-godown.jsx`, `screens-procurement.jsx`
 **Tests:** `scripts/uitest/receive-check.js`, `scripts/uitest/receipt-engine-check.js`,
-`scripts/uitest/grn-list-check.js` (the grouped-by-project list)
+`scripts/uitest/grn-list-check.js` (the grouped-by-project list),
+`scripts/uitest/multi-so-po-check.js` (the preview/execution-agree guarantee below)
 
 ---
 
@@ -56,7 +57,35 @@ queue nobody finds is a queue nobody clears:
 Same records, same actions, **one component** (`PendingReceiptsPanel`) — the GRN
 screen's private copy was deleted rather than a second one added, so the three
 cannot drift apart. Who may accept still comes from the workflow, not from where
-the panel is drawn.
+the panel is drawn. This whole mechanism is driven entirely by `receiving_flow`
+(and the `receiving_*_roles`/`_label` overrides) — not hard-coded to one
+organization. Any tenant can run it simply by setting `receiving_flow:
+'stores_to_purchase'`; an org that doesn't (`standard`, today's default)
+behaves exactly as before, Purchase marking received and Stores accepting.
+
+### The request shows exactly what Accept will post — not a flat item list
+
+Confirming a receipt used to show the acceptor a flat "4× Chassis" string —
+no PO, no idea which PO line it would actually land on. Now, for every item
+in the request, Purchase sees:
+
+- the **line item name and qty** that Stores confirmed
+- the exact **Vendor PO number** it will post against — several, if the qty
+  needed more than one PO line to cover
+- for a PO **combined across several SOs**: a *"combined · also SO/FY26/0071
+  (3)"* note naming every other SO sharing that line and its own share, so a
+  combined PO's mapping is visible before Accept is even clicked, not
+  discovered afterward in the GRN it produces
+
+**`previewReceivePOMapping(so, picks, state)`** (`screens-godown.jsx`) computes
+this — the identical greedy PO-matching `vgReceiveComponents` itself runs to
+actually post, extracted into one pure function both call. `PendingReceiptsPanel`
+calls it live, at render time, rather than freezing a snapshot into the
+request record: state can change between a request being raised and being
+accepted (another delivery posted against the same PO, say), and the live
+preview always matches what Accept will *actually* do, never a stale guess.
+A pick with no PO line left to cover it shows *"no PO line left — Accept will
+auto-create one"* instead of inventing a PO number that doesn't exist yet.
 
 ## The receive dialog
 
@@ -156,3 +185,12 @@ creates them.
   dialog. Reported directly as "I can't find where to mark received."
   Correctness and discoverability are different bugs; this was the second
   kind, and the engine underneath needed no change at all.
+- **`vgReceiveComponents`'s own PO-matching loop and `previewReceivePOMapping`
+  must stay the ONE algorithm, not two that happen to agree today.** The
+  preview was built by extracting the executor's existing greedy fill
+  verbatim, not by writing a second implementation next to it — a future
+  change to the matching rule (e.g. a different tie-break across PO lines)
+  that touches only one of them would make Accept silently post something
+  different from what the request told Purchase it would. `multi-so-po-check.js`
+  section [17] proves the preview's own numbers (`take`, `shortfall`) and
+  what Accept actually posts are the same numbers, not just "both reasonable."

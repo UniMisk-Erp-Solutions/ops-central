@@ -672,6 +672,41 @@ console.log('\n[16] Receive works IDENTICALLY for an ordinary PO -- the suggesti
   check('autoInvoiceSO fires exactly once, for the PO\'s own SO -- the multi-SO fan-out loop found nothing else to do', invoked, ['so-n1']);
 }
 
+console.log('\n[17] previewReceivePOMapping -- the exact preview a pending receipt shows Purchase can never disagree with what Accept actually posts');
+{
+  const soX = { id: 'so-x', so_no: 'SO/FY26/0601' };
+  const soY = { id: 'so-y', so_no: 'SO/FY26/0602' };
+  const getSOxy = id => (id === 'so-x' ? soX : id === 'so-y' ? soY : null);
+  const poCombo = { id: 'po-combo', po_no: 'VPO/FY26/0601', so_id: 'so-x', vendor_id: 'v1', status: 'Issued',
+    items: [{ product_id: 'p1', qty: 10, rate: 50, so_alloc: [{ so_id: 'so-x', qty: 6 }, { so_id: 'so-y', qty: 4 }] }] };
+  const { box, ctx } = makeCtx({ vendor_pos: [poCombo], grns: [], vendor_invoices: [],
+    sales_orders: [soX, soY], notifications: [], config: {}, vendors: [{ id: 'v1', name: 'Vendor' }] });
+
+  const picks = [{ product_id: 'p1', qty: 3, name: 'Widget' }];
+  const preview = sandbox.previewReceivePOMapping(soX, picks, box.state);
+  check('the preview names the combined PO, SO-X\'s own share of it, and exactly what this pick will take',
+    preview.byProduct.p1, [{ po_id: 'po-combo', po_no: 'VPO/FY26/0601', rate: 50, orderedForSO: 6, take: 3, combined: true, others: [{ so_id: 'so-y', qty: 4 }] }]);
+  check('nothing is short -- the PO line comfortably covers this pick', preview.shortfall, {});
+
+  const r = await sandbox.vgReceiveComponents(soX, picks, { ...ctx, state: box.state });
+  check('Accept posted exactly one GRN, exactly as the preview said it would', [r.posted, r.units], [1, 3]);
+  check('the GRN\'s accepted qty for SO-X matches the preview\'s "take" exactly -- no drift between preview and execution',
+    box.state.grns[0].items[0].accepted, 3);
+  check('the GRN line is stamped so_split for SO-X only -- SO-Y\'s own 4 units are untouched by this receipt',
+    box.state.grns[0].items[0].so_split, [{ so_id: 'so-x', qty: 3 }]);
+
+  // Now ask for more than the PO line has left for SO-X (6 - 3 = 3 remain) --
+  // the preview's shortfall must say exactly how much, and Accept must
+  // auto-create a PO for precisely that shortfall, matching the preview.
+  const picks2 = [{ product_id: 'p1', qty: 5, name: 'Widget' }];
+  const preview2 = sandbox.previewReceivePOMapping(soX, picks2, box.state);
+  check('the preview takes only what is left on the line (3) and reports the rest as a shortfall (2)',
+    [preview2.byProduct.p1[0].take, preview2.shortfall.p1], [3, 2]);
+  const r2 = await sandbox.vgReceiveComponents(soX, picks2, { ...ctx, state: box.state });
+  check('Accept auto-created a PO for exactly the previewed shortfall -- a new PO now exists for SO-X',
+    box.state.vendor_pos.some(p => p.so_id === 'so-x' && p.source === 'vg-receive' && p.items.some(it => it.qty === 2)), true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 

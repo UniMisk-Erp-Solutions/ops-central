@@ -182,23 +182,23 @@ function VGReceivePanel({ so }) {
   );
 }
 
-// Receive BOM components directly from the VG. picks: [{product_id, qty}].
-// Each pick is filled against this SO's existing receivable vendor POs; any
-// shortfall auto-creates ONE vendor PO (sourced vendor if known, else best
-// guess) so a GRN always posts and the 3-way match stays intact. Then a single
-// consolidated client invoice is raised. Returns a short summary.
-async function vgReceiveComponents(so, picks, ctx) {
-  const { state, mutate, getProduct } = ctx;
+// Which PO(s) a VG receive's picks will post against, and for how much of
+// THIS SO's own share — the exact same greedy fill vgReceiveComponents uses
+// to actually post, extracted so a pending request can show Purchase a
+// preview that can never disagree with what Accept will actually do. Pure,
+// writes nothing. Also names, per PO row, every OTHER SO sharing that PO's
+// line and its own qty — the "combined PO" mapping Purchase needs to see.
+function previewReceivePOMapping(so, picks, state) {
   const soPOs = (state.vendor_pos || []).filter(p => poServesSO(p, so.id) && !['Pending MD Approval', 'Rejected', 'On Hold'].includes(p.status));
   const acceptedKey = {};
   (state.grns || []).forEach(g => { const po = soPOs.find(p => p.id === g.po_id); if (po) (g.items || []).forEach(it => {
     acceptedKey[g.po_id + '|' + it.product_id] = (acceptedKey[g.po_id + '|' + it.product_id] || 0) + grnLineSoQty(it, po, so.id);
   }); });
-
-  const perPo = {};            // po.id -> { po, items:[{product_id, qty, rate, received, so_split?}] }
-  const newLines = [];         // shortfall lines for an auto PO
-  for (const pick of picks) {
+  const byProduct = {};   // product_id -> [{po_id, po_no, rate, orderedForSO, take, combined, others:[{so_id,qty}]}]
+  const shortfall = {};   // product_id -> qty with no PO line left to cover it
+  for (const pick of (picks || [])) {
     let need = Math.max(0, pick.qty);
+    const rows = [];
     for (const po of soPOs) {
       if (need <= 0) break;
       const line = (po.items || []).find(it => it.product_id === pick.product_id);
@@ -209,14 +209,40 @@ async function vgReceiveComponents(so, picks, ctx) {
       const cap = orderedForSO - (acceptedKey[po.id + '|' + pick.product_id] || 0);
       if (cap <= 0) continue;
       const take = Math.min(need, cap);
-      const shared = poLinkedSoIds(po).length > 1;
-      (perPo[po.id] = perPo[po.id] || { po, items: [] }).items.push({ product_id: pick.product_id, qty: orderedForSO, rate: line.rate, received: take,
-        ...(shared ? { so_split: [{ so_id: so.id, qty: take }] } : {}) });
+      const linked = poLinkedSoIds(po);
+      rows.push({ po_id: po.id, po_no: po.po_no, rate: line.rate, orderedForSO, take,
+        combined: linked.length > 1,
+        others: linked.filter(id => id !== so.id).map(id => ({ so_id: id, qty: poLineSoQty(po, pick.product_id, id) })) });
       acceptedKey[po.id + '|' + pick.product_id] = (acceptedKey[po.id + '|' + pick.product_id] || 0) + take;   // reserve
       need -= take;
     }
-    if (need > 0) { const p = getProduct(pick.product_id); newLines.push({ product_id: pick.product_id, qty: need, rate: p ? (p.buy || 0) : 0 }); }
+    if (rows.length) byProduct[pick.product_id] = rows;
+    if (need > 0) shortfall[pick.product_id] = need;
   }
+  return { byProduct, shortfall };
+}
+window.previewReceivePOMapping = previewReceivePOMapping;
+
+// Receive BOM components directly from the VG. picks: [{product_id, qty}].
+// Each pick is filled against this SO's existing receivable vendor POs (via
+// previewReceivePOMapping — the same matching a pending request already
+// showed Purchase, so Accept can never disagree with its own preview); any
+// shortfall auto-creates ONE vendor PO (sourced vendor if known, else best
+// guess) so a GRN always posts and the 3-way match stays intact. Then a single
+// consolidated client invoice is raised. Returns a short summary.
+async function vgReceiveComponents(so, picks, ctx) {
+  const { state, mutate, getProduct } = ctx;
+  const { byProduct, shortfall } = previewReceivePOMapping(so, picks, state);
+
+  const perPo = {};            // po.id -> { po, items:[{product_id, qty, rate, received, so_split?}] }
+  Object.entries(byProduct).forEach(([product_id, rows]) => {
+    rows.forEach(r => {
+      const po = state.vendor_pos.find(p => p.id === r.po_id);
+      (perPo[r.po_id] = perPo[r.po_id] || { po, items: [] }).items.push({ product_id, qty: r.orderedForSO, rate: r.rate, received: r.take,
+        ...(r.combined ? { so_split: [{ so_id: so.id, qty: r.take }] } : {}) });
+    });
+  });
+  const newLines = Object.entries(shortfall).map(([product_id, qty]) => { const p = getProduct(product_id); return { product_id, qty, rate: p ? (p.buy || 0) : 0 }; });   // shortfall lines for an auto PO
 
   // Auto-create one PO for any shortfall (so receiving never blocks on missing POs).
   let createdPONeedsMD = false;
@@ -543,7 +569,7 @@ function PoolReceiptModal({ receipt: r, so, onClose }) {
 //
 // `soId` limits it to one order; leaving it out shows every order's queue.
 function PendingReceiptsPanel({ soId, title }) {
-  const { state, mutate, navigate, getUser, getProduct, getVendor, addToPool, currentUser } = useStore();
+  const { state, mutate, navigate, getUser, getProduct, getVendor, getSO, addToPool, currentUser } = useStore();
   const toast = useToast();
   const [busy, setBusy] = React.useState('');
   const role = (getUser(currentUser) || {}).role;
@@ -600,28 +626,57 @@ function PendingReceiptsPanel({ soId, title }) {
         <table className="t">
           <thead><tr>
             {!soId && <th>Sales order</th>}
-            <th>Confirmed by</th><th>Date</th><th>Items received</th><th className="num">Units</th><th></th>
+            <th>Confirmed by</th><th>Date</th><th>Line item</th><th className="num">Qty</th><th>Vendor PO</th><th></th>
           </tr></thead>
           <tbody>
-            {pending.map(({ so, pr }) => (
-              <tr key={pr.id}>
-                {!soId && <td><a className="mono small" style={{ cursor: 'pointer' }} onClick={() => navigate(`godown/${so.id}`)}>{so.so_no}</a></td>}
-                <td className="small">{(getUser(pr.by) || {}).name || pr.by}</td>
-                <td className="mono small">{fmtDate(pr.date)}</td>
-                <td className="small" style={{ maxWidth: 380 }}>{pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}</td>
-                <td className="num mono">{pr.picks.reduce((a, p) => a + (Number(p.qty) || 0), 0)}</td>
-                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  {canAccept ? (
-                    <>
-                      <button className="btn btn-sm btn-primary" disabled={busy === pr.id} onClick={() => accept({ so, pr })}>
-                        {busy === pr.id ? 'Posting…' : 'Accept & post GRN'}
-                      </button>
-                      <button className="btn btn-sm" disabled={busy === pr.id} onClick={() => reject({ so, pr })} style={{ marginLeft: 6 }}>Reject</button>
-                    </>
-                  ) : <span className="tiny muted">awaiting {flow.approverLabel}</span>}
-                </td>
-              </tr>
-            ))}
+            {pending.map(({ so, pr }) => {
+              // Same matching vgReceiveComponents will actually use on Accept
+              // (previewReceivePOMapping, screens-godown.jsx) — so what Purchase
+              // sees here can never disagree with what pressing Accept does.
+              const mapping = window.previewReceivePOMapping ? window.previewReceivePOMapping(so, pr.picks, state) : { byProduct: {} };
+              const span = Math.max(1, pr.picks.length);
+              return (
+                <Fragment key={pr.id}>
+                  {pr.picks.map((p, i) => {
+                    const rows = mapping.byProduct[p.product_id] || [];
+                    return (
+                      <tr key={pr.id + '-' + i}>
+                        {i === 0 && !soId && <td rowSpan={span}><a className="mono small" style={{ cursor: 'pointer' }} onClick={() => navigate(`godown/${so.id}`)}>{so.so_no}</a></td>}
+                        {i === 0 && <td className="small" rowSpan={span}>{(getUser(pr.by) || {}).name || pr.by}</td>}
+                        {i === 0 && <td className="mono small" rowSpan={span}>{fmtDate(pr.date)}</td>}
+                        <td className="small">{p.name}</td>
+                        <td className="num mono">{qty(p.qty)}</td>
+                        <td className="small" style={{ maxWidth: 260 }}>
+                          {rows.length === 0
+                            ? <span className="tiny muted">no PO line left — Accept will auto-create one</span>
+                            : rows.map(r => (
+                              <div key={r.po_id} className="mb-1">
+                                <a className="mono tiny" style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate(`vendor-pos/${r.po_id}`)}>{r.po_no}</a>
+                                <span className="tiny muted"> · {qty(r.take)} of this request</span>
+                                {r.combined && (
+                                  <div className="tiny" style={{ color: 'var(--accent)' }}>
+                                    <Icon name="arrowLeftRight" size={10}/> combined · also {r.others.map(o => `${(getSO(o.so_id) || {}).so_no || o.so_id} (${qty(o.qty)})`).join(', ')}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                        </td>
+                        {i === 0 && <td rowSpan={span} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          {canAccept ? (
+                            <>
+                              <button className="btn btn-sm btn-primary" disabled={busy === pr.id} onClick={() => accept({ so, pr })}>
+                                {busy === pr.id ? 'Posting…' : 'Accept & post GRN'}
+                              </button>
+                              <button className="btn btn-sm" disabled={busy === pr.id} onClick={() => reject({ so, pr })} style={{ marginLeft: 6 }}>Reject</button>
+                            </>
+                          ) : <span className="tiny muted">awaiting {flow.approverLabel}</span>}
+                        </td>}
+                      </tr>
+                    );
+                  })}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
