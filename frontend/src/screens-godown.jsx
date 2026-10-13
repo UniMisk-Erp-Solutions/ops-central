@@ -223,6 +223,34 @@ function previewReceivePOMapping(so, picks, state) {
 }
 window.previewReceivePOMapping = previewReceivePOMapping;
 
+// A pending receipt comes in two shapes: VG's flat `picks` ({product_id,
+// qty, name}), or a request raised from the PO-centric Receive dialog
+// (pr.po_id + pr.items, the EXACT line items Stores already decided —
+// rejected/to_pool/so_split included). Normalizes either into one row list
+// — {product_id, name, qty, poRows} — so PendingReceiptsPanel renders both
+// identically. A po_id request already names its PO; it is read directly
+// from that PO's own so_alloc rather than re-run through
+// previewReceivePOMapping, which could pick a DIFFERENT PO if more than one
+// covers the same product on this SO — the PO here is not up for discovery.
+function pendingReceiptRows(pr, so, state, getProduct) {
+  if (pr.po_id) {
+    const po = (state.vendor_pos || []).find(p => p.id === pr.po_id);
+    if (!po) return [];
+    const linked = poLinkedSoIds(po);
+    return (pr.items || []).map(it => {
+      const qtyThis = Math.max(0, (it.received || 0) - (it.rejected || 0) - (it.to_pool || 0));
+      return {
+        product_id: it.product_id, name: (getProduct(it.product_id) || {}).name || it.product_id, qty: qtyThis,
+        poRows: qtyThis > 0.0001 ? [{ po_id: po.id, po_no: po.po_no, take: qtyThis, combined: linked.length > 1,
+          others: linked.filter(id => id !== po.so_id).map(id => ({ so_id: id, qty: poLineSoQty(po, it.product_id, id) })) }] : [],
+      };
+    });
+  }
+  const mapping = previewReceivePOMapping(so, pr.picks, state);
+  return (pr.picks || []).map(p => ({ product_id: p.product_id, name: p.name, qty: p.qty, poRows: mapping.byProduct[p.product_id] || [] }));
+}
+window.pendingReceiptRows = pendingReceiptRows;
+
 // Receive BOM components directly from the VG. picks: [{product_id, qty}].
 // Each pick is filled against this SO's existing receivable vendor POs (via
 // previewReceivePOMapping — the same matching a pending request already
@@ -587,25 +615,35 @@ function PendingReceiptsPanel({ soId, title }) {
 
   const accept = async ({ so, pr }) => {
     setBusy(pr.id);
-    let r = { units: 0 };
-    if (window.vgReceiveComponents) {
-      r = await window.vgReceiveComponents(so, pr.picks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
+    const rows = pendingReceiptRows(pr, so, state, getProduct);
+    const desc = rows.map(r => `${qty(r.qty)}× ${r.name}`).join(', ');
+    let units = rows.reduce((a, r) => a + r.qty, 0);
+    if (pr.po_id) {
+      // The exact items Stores already decided at the PO-centric Receive
+      // dialog — rejected / to_pool / so_split included — replayed verbatim,
+      // never re-derived from the pending request's own summary.
+      const po = (state.vendor_pos || []).find(p => p.id === pr.po_id);
+      if (po) await window.postReceiptForPO(po, pr.items, { lr: pr.lr, grnDate: pr.grnDate }, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
+    } else if (window.vgReceiveComponents) {
+      const r = await window.vgReceiveComponents(so, pr.picks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
+      units = r.units;
     }
     mutate(s => ({
       ...s,
       sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Accepted', accepted_by: currentUser, accepted_date: TODAY } : p) } } : x),
       notifications: [{ id: 'n-reca-' + Date.now(), kind: 'grn', text: `${so.so_no}: receipt accepted by ${flow.approverLabel} · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice auto-raised' : ''}`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
-    }), { action: 'receipt-accept', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} accepted receipt · GRN posted · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+    }), { action: 'receipt-accept', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} accepted receipt · GRN posted · ${desc}` });
     setBusy('');
-    toast(`Accepted · ${r.units} unit(s) received · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice raised' : ''}`, 'success');
+    toast(`Accepted · ${units} unit(s) received · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice raised' : ''}`, 'success');
   };
 
   const reject = ({ so, pr }) => {
+    const desc = pendingReceiptRows(pr, so, state, getProduct).map(r => `${qty(r.qty)}× ${r.name}`).join(', ');
     mutate(s => ({
       ...s,
       sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Rejected', rejected_by: currentUser, rejected_date: TODAY } : p) } } : x),
       notifications: [{ id: 'n-recr-' + Date.now(), kind: 'grn', text: `${so.so_no}: ${flow.approverLabel} could not accept the confirmed receipt — please re-check`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
-    }), { action: 'receipt-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} rejected confirmed receipt · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
+    }), { action: 'receipt-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} rejected confirmed receipt · ${desc}` });
     toast(`Receipt returned to ${flow.requesterLabel}`, '');
   };
 
@@ -630,15 +668,17 @@ function PendingReceiptsPanel({ soId, title }) {
           </tr></thead>
           <tbody>
             {pending.map(({ so, pr }) => {
-              // Same matching vgReceiveComponents will actually use on Accept
-              // (previewReceivePOMapping, screens-godown.jsx) — so what Purchase
-              // sees here can never disagree with what pressing Accept does.
-              const mapping = window.previewReceivePOMapping ? window.previewReceivePOMapping(so, pr.picks, state) : { byProduct: {} };
-              const span = Math.max(1, pr.picks.length);
+              // Same matching vgReceiveComponents/postReceiptForPO will
+              // actually use on Accept — so what Purchase sees here can
+              // never disagree with what pressing Accept does. Normalizes
+              // both pending-receipt shapes (VG's flat picks, or the exact
+              // items a PO-centric Receive request already decided).
+              const items = pendingReceiptRows(pr, so, state, getProduct);
+              const span = Math.max(1, items.length);
               return (
                 <Fragment key={pr.id}>
-                  {pr.picks.map((p, i) => {
-                    const rows = mapping.byProduct[p.product_id] || [];
+                  {items.map((p, i) => {
+                    const rows = p.poRows;
                     return (
                       <tr key={pr.id + '-' + i}>
                         {i === 0 && !soId && <td rowSpan={span}><a className="mono small" style={{ cursor: 'pointer' }} onClick={() => navigate(`godown/${so.id}`)}>{so.so_no}</a></td>}

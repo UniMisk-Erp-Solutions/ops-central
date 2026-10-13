@@ -252,5 +252,69 @@ const plainOut = renderPlain();
 check('a plain PO still shows its own PO number', /VPO\/FY26\/0075/.test(plainOut), true);
 check('...but never the "combined" tag — nothing else shares this line', /combined/.test(plainOut), false);
 
-console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — one-click receiving, no double-counting, and the queue is findable');
-process.exit(bad ? 1 : 0);
+// ---------------------------------------------------------------------------
+// ReceiveModal/GRNNew used to call postReceiptForPO directly no matter who
+// clicked Receive, so a requester role (Stores, under stores_to_purchase)
+// could post a GRN straight through — the request that's supposed to land
+// in Purchase's GRN dashboard was never raised at all. submitPOReceipt is
+// the fix: the SAME wfReceiving() gate VG's own "mark received" already
+// uses, applied to the PO-centric dialogs too.
+// ---------------------------------------------------------------------------
+console.log('\n[8] the PO-centric Receive dialog respects receiving_flow too -- a requester raises a request instead of posting, the acceptor still posts directly, and Accept replays the exact items');
+(async () => {
+  const PRODUCTS8 = [{ id: 'p1', code: 'P1', name: 'Gate Widget', buy: 0, sell: 0 }];
+  const makeState = () => ({
+    products: PRODUCTS8, vendors: [{ id: 'v1', name: 'Vendor' }], customers: [], categories: [],
+    sales_orders: [{ id: 'so-gate', so_no: 'SO/FY26/0900', status: 'Approved', lines: [] }],
+    vendor_pos: [{ id: 'po-gate-1', po_no: 'VPO/FY26/0900', so_id: 'so-gate', vendor_id: 'v1', status: 'Issued', amount: 50,
+      items: [{ product_id: 'p1', qty: 5, rate: 10 }] }],
+    grns: [], vendor_invoices: [], notifications: [], config: {},
+  });
+  const ctxFor = (role, box) => ({
+    state: box.state, mutate: fn => { box.state = fn(box.state); }, toast: null,
+    addToPool: async () => {}, getProduct: id => PRODUCTS8.find(p => p.id === id),
+    getVendor: () => ({ name: 'Vendor' }), getUser: () => ({ name: 'T', role }), currentUser: 'u1',
+  });
+
+  // A: Stores (the REQUESTER under stores_to_purchase, __opcWorkflow above)
+  // submits -- must raise a request, never post a GRN directly.
+  const boxA = { state: makeState() };
+  const poA = boxA.state.vendor_pos[0];
+  const itemsA = [{ product_id: 'p1', qty: 5, received: 5, rejected: 0, to_pool: 0, so_split: null }];
+  const rA = await sandbox.submitPOReceipt(poA, itemsA, { lr: 'LR-A', grnDate: '2026-10-20' }, ctxFor('Stores', boxA));
+  check('Stores\' submission is NOT posted directly', rA.posted, false);
+  check('no GRN was created', boxA.state.grns.length, 0);
+  const prA = ((boxA.state.sales_orders[0].extra || {}).pending_receipts || [])[0];
+  check('a pending request was raised instead, naming the PO', prA && prA.po_id, 'po-gate-1');
+  check('...carrying the EXACT items Stores decided, not a re-derived summary', prA && prA.items, itemsA);
+  check('...sitting on the PO\'s own SO, visible in the GRN dashboard\'s shared queue', prA && prA.status, 'Pending');
+
+  // B: Purchase (the ACCEPTOR) submits directly -- unchanged, posts at once,
+  // and raises no request for its own submission.
+  const boxB = { state: makeState() };
+  const poB = boxB.state.vendor_pos[0];
+  const itemsB = [{ product_id: 'p1', qty: 5, received: 5, rejected: 0, to_pool: 0, so_split: null }];
+  const rB = await sandbox.submitPOReceipt(poB, itemsB, { lr: 'LR-B', grnDate: '2026-10-20' }, ctxFor('Purchase', boxB));
+  check('Purchase\'s own submission posts directly, exactly as before this fix', rB.posted, true);
+  check('a GRN exists immediately -- no request needed from the acceptor', boxB.state.grns.length, 1);
+  check('no pending request was raised for the acceptor\'s own submission',
+    (boxB.state.sales_orders[0].extra && boxB.state.sales_orders[0].extra.pending_receipts) || [], []);
+
+  // C: Accept (PendingReceiptsPanel) replays Stores' pending request from
+  // [A] verbatim -- same accepted qty, same outcome as a direct receive.
+  await sandbox.postReceiptForPO(poA, prA.items, { lr: prA.lr, grnDate: prA.grnDate }, ctxFor('Purchase', boxA));
+  check('accepting the request posts the GRN with the SAME accepted qty Stores confirmed', boxA.state.grns[0].items[0].accepted, 5);
+  check('the PO resolves fully received, same as if Purchase had received it directly', boxA.state.vendor_pos[0].status, 'Material Received');
+
+  console.log('\n[9] wiring: both PO-centric dialogs actually go through the gate, and the old, orphaned GRNList copy of this logic is gone');
+  const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
+  check('ReceiveModal\'s submit calls submitPOReceipt, not postReceiptForPO directly',
+    /const r = await submitPOReceipt\(po, items, \{ lr, grnDate \}/.test(src), true);
+  check('GRNNew\'s post calls submitPOReceipt too', (src.match(/const r = await submitPOReceipt\(po, items, \{ lr, grnDate \}/g) || []).length, 2);
+  check('submitPOReceipt itself checks wfReceiving().approverRoles before deciding whether to post', /flow\.approverRoles\.includes\(role\)/.test(src), true);
+  check('the dead, pre-PendingReceiptsPanel acceptReceipt/rejectReceipt copy inside GRNList is gone -- one definition, not two that could drift',
+    /function acceptReceipt|function rejectReceipt/.test(src), false);
+
+  console.log(bad ? `\nFAILED — ${bad} check(s)` : '\nPASS — one-click receiving, no double-counting, and the queue is findable');
+  process.exit(bad ? 1 : 0);
+})();

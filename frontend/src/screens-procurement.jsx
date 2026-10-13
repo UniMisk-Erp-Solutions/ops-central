@@ -1190,10 +1190,6 @@ function GRNList() {
   const [grnSearch, setGrnSearch] = React.useState('');
   const [grnVendorF, setGrnVendorF] = React.useState('');
   const [grnGroupBySO, setGrnGroupBySO] = React.useState(true);
-  // Receipts marked by Purchase/PM at the Virtual Godown, awaiting Stores' acceptance.
-  // Stores accepts → GRN + client invoice are posted (via the same receive engine).
-  const pending = [];
-  (state.sales_orders || []).forEach(so => ((so.extra && so.extra.pending_receipts) || []).forEach(pr => { if (pr.status === 'Pending') pending.push({ so, pr }); }));
   // Purchase's Master-Pool requests (add-from / send-to) awaiting Stores' approval.
   const poolPending = [];
   (state.sales_orders || []).forEach(so => ((so.extra && so.extra.pool_requests) || []).forEach(req => { if (req.status === 'Pending') poolPending.push({ so, req }); }));
@@ -1227,27 +1223,6 @@ function GRNList() {
       notifications: [{ id: 'n-plrj-' + Date.now(), kind: 'transfer', text: `${so.so_no}: Stores declined your Master-Pool ${req.kind === 'add' ? 'pull' : 'send'} request`, date: TODAY, read: false, user_id: req.by }, ...s.notifications],
     }), { action: 'pool-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Stores declined pool ${req.kind} · ${so.so_no}` });
     toast('Request returned to Purchase', '');
-  };
-
-  const acceptReceipt = async ({ so, pr }) => {
-    setBusy(pr.id);
-    let r = { units: 0 };
-    if (window.vgReceiveComponents) r = await window.vgReceiveComponents(so, pr.picks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
-    mutate(s => ({
-      ...s,
-      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Accepted', accepted_by: currentUser, accepted_date: TODAY } : p) } } : x),
-      notifications: [{ id: 'n-reca-' + Date.now(), kind: 'grn', text: `${so.so_no}: receipt accepted by ${flow.approverLabel} · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice auto-raised' : ''}`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
-    }), { action: 'receipt-accept', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} accepted receipt · GRN posted · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
-    setBusy('');
-    toast(`Accepted · ${r.units} unit(s) received · GRN posted${wfOn('auto_invoice_on_grn') ? ' · client invoice raised' : ''}`, 'success');
-  };
-  const rejectReceipt = ({ so, pr }) => {
-    mutate(s => ({
-      ...s,
-      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: ((x.extra && x.extra.pending_receipts) || []).map(p => p.id === pr.id ? { ...p, status: 'Rejected', rejected_by: currentUser, rejected_date: TODAY } : p) } } : x),
-      notifications: [{ id: 'n-recr-' + Date.now(), kind: 'grn', text: `${so.so_no}: ${flow.approverLabel} could not accept the confirmed receipt — please re-check`, date: TODAY, read: false, user_id: pr.by }, ...s.notifications],
-    }), { action: 'receipt-reject', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `${flow.approverLabel} rejected confirmed receipt · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
-    toast(`Receipt returned to ${flow.requesterLabel}`, '');
   };
 
   return (
@@ -1599,6 +1574,39 @@ async function postReceiptForPO(po, items, meta, ctx) {
   return { grn, surplusUnits, billCut, poComplete };
 }
 window.postReceiptForPO = postReceiptForPO;
+
+// The PO-centric receive dialogs (ReceiveModal, GRNNew) used to call
+// postReceiptForPO directly, no matter who clicked Receive — so a requester
+// role (Stores, when receiving_flow is stores_to_purchase) could post a GRN
+// straight through, and the request Purchase's GRN dashboard is supposed to
+// show never got raised at all. wfReceiving() already gates VG's own "mark
+// received"; this is the SAME gate, applied here too, so the setting
+// actually governs every receiving door, not just one of them.
+//
+// The acceptor posts directly, unchanged. Anyone else's exact items —
+// rejected / to_pool / so_split already decided in the dialog — are stashed
+// as a pending request on the PO's own SO, replayed verbatim by
+// PendingReceiptsPanel's Accept (screens-godown.jsx) later. Nothing here
+// re-derives what was already decided.
+async function submitPOReceipt(po, items, meta, ctx) {
+  const { state, mutate, getUser, currentUser } = ctx;
+  const role = (getUser(currentUser) || {}).role;
+  const flow = wfReceiving();
+  if (flow.approverRoles.includes(role)) {
+    return { posted: true, result: await postReceiptForPO(po, items, meta, ctx) };
+  }
+  const units = items.reduce((a, it) => a + Math.max(0, (Number(it.received) || 0) - (Number(it.rejected) || 0) - (Number(it.to_pool) || 0)), 0);
+  const so = state.sales_orders.find(x => x.id === po.so_id);
+  const pr = { id: 'pr-' + Date.now(), by: currentUser, date: TODAY, status: 'Pending', flow: flow.mode,
+    po_id: po.id, items, lr: (meta && meta.lr) || '', grnDate: (meta && meta.grnDate) || TODAY };
+  mutate(s => ({
+    ...s,
+    sales_orders: s.sales_orders.map(x => x.id === po.so_id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: [...((x.extra && x.extra.pending_receipts) || []), pr] } } : x),
+    notifications: [{ id: 'n-recq-' + Date.now(), kind: 'grn', text: `${po.po_no}${so ? ' · ' + so.so_no : ''}: ${units} unit(s) confirmed by ${role} · ${flow.approverLabel} to accept & post GRN`, date: TODAY, read: false, role: flow.approverLabel }, ...s.notifications],
+  }), { action: 'receipt-request', entity: 'VendorPO', entity_id: po.id, user_id: currentUser, detail: `Receipt sent to ${flow.approverLabel} · ${po.po_no} · ${units} unit(s)` });
+  return { posted: false, units };
+}
+window.submitPOReceipt = submitPOReceipt;
 
 // ===== Suggesting how a shared PO line's receipt splits across its SOs =====
 // A SUGGESTION only — GRN can override every number before submitting; this
@@ -2223,8 +2231,8 @@ function ReceiveModal({ po, onClose }) {
         return;
       }
     }
-    await postReceiptForPO(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
-    toast(`Receipt posted for ${po.po_no}`, 'success');
+    const r = await submitPOReceipt(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
+    toast(r.posted ? `Receipt posted for ${po.po_no}` : `Sent to ${wfReceiving().approverLabel} for acceptance · ${r.units} unit(s)`, 'success');
     onClose();
   };
   return (
@@ -2347,9 +2355,15 @@ function GRNNew() {
         return;
       }
     }
-    const r = await postReceiptForPO(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
-    toast(`${r.grn.grn_no} posted · ${po.po_no} received${r.surplusUnits ? ` · ${r.surplusUnits} → Master Pool` : ''}${r.billCut ? ` · bill −${inrK(r.billCut)}` : ''}`, 'success');
-    navigate(`vendor-pos/${po.id}`);
+    const r = await submitPOReceipt(po, items, { lr, grnDate }, { state, mutate, toast, addToPool, getProduct, getVendor, currentUser, getUser });
+    if (r.posted) {
+      const posted = r.result;
+      toast(`${posted.grn.grn_no} posted · ${po.po_no} received${posted.surplusUnits ? ` · ${posted.surplusUnits} → Master Pool` : ''}${posted.billCut ? ` · bill −${inrK(posted.billCut)}` : ''}`, 'success');
+      navigate(`vendor-pos/${po.id}`);
+    } else {
+      toast(`Sent to ${wfReceiving().approverLabel} for acceptance · ${r.units} unit(s)`, 'success');
+      navigate('grn');
+    }
   };
 
   return (
