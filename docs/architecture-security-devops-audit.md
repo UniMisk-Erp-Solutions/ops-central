@@ -687,3 +687,69 @@ Key function names and SQL evidence are called out in the findings above. The au
 - **Other external systems:** Vercel, Cloudflare, email API, storage bucket, and other Supabase/Coolify services were not accessed.
 - **Change verification:** this phase changed only `docs/architecture-security-devops-audit.md` and its `docs/INDEX.md` entry. Pre-existing uncommitted changes in `docs/client-requests.md`, `frontend/src/screens-client-requests.jsx`, and `frontend/package-lock.json` remain untouched by this phase; therefore the overall working tree includes other earlier changes.
 - **Accuracy limits:** migration files may not reflect deployed schema; feature config may be overridden per tenant; live runtime policies, secrets, Edge version, logs, network controls, data volume, and provider settings were not verified. The SSH availability result is a point-in-time observation and may change if the service is deployed later. Findings requiring runtime evidence are labeled suspected/unverified.
+
+## 17. Phase 2 implementation record (2026-10-12)
+
+This is a partial hardening pass. It does not close the full Phase 2 roadmap.
+No database migrations, schema, policies, role definitions, permissions, or
+business statuses were changed.
+
+### Changes made
+
+- `frontend/src/store.jsx`: table loading now reads bounded 500-row PostgREST
+  pages; the database load waits for the authenticated user's active-org
+  context; local recovery requires both the same user and the same active org;
+  rejected loads and rejected/network-failed upserts/deletes enter the existing
+  visible sync-error path; retry waits for its sync requests; pool consumption
+  checks each response and reloads the RLS-scoped pool after a partial failure.
+- `supabase/functions/main/index.ts`: newly created and re-floated vendor quote
+  links use a cryptographically random token and a 30-day expiry; load/submit
+  reject expired links; submissions validate item keys and non-negative finite
+  prices; repeated completed submissions reuse stored quote values and can
+  reconcile the linked Sourcing row; RFQ/Sourcing write responses are checked.
+- `docs/so-float-rfq.md`, `docs/testing.md`, and this audit document describe
+  behavior and limitations; `docs/INDEX.md` reflects the audit update.
+
+### Verification performed
+
+- The 22 repository UI check scripts were attempted. All stopped before
+  executing because the local checkout lacks `@babel/standalone`, React,
+  ReactDOM, and/or jsdom. No dependency installation was attempted.
+- The focused workflow was not run in a browser; there was no local disposable
+  Supabase environment available in this pass. No database, SSH, Coolify, or
+  production service was accessed.
+- `git diff --check` is the final whitespace check for this implementation.
+
+### Remaining Phase 2 work and risks
+
+- The legacy `is_admin()` / `opc_delete_user()` global-admin issue and
+  membership-only operational RLS policies remain. UI role checks are not
+  server-side action authorization. RFQ floating still lacks a tenant Purchase
+  JWT check. These are confirmed authorization gaps and need carefully staged
+  compatible policy/RPC work.
+- Quote RFQ and Sourcing JSON updates remain separate requests; simultaneous
+  submissions can race, and partial completion is not transactional. The
+  `float-rfq` multi-write/email flow is likewise not atomic or idempotent.
+- The shared `mutate()` contract remains optimistic for existing screens.
+  Generic multi-table transitions (SO conversion, GRN/stock, dispatch, invoice,
+  payment, and transfer) still need transaction RPCs or checked compensation
+  before they can promise exactly-once behavior.
+- Pagination uses PostgREST ranges; a changing dataset during a multi-page read
+  can shift offsets. Large live datasets and row limits have not been exercised.
+- Only quote links with the new `expires_at` value expire; legacy JSON entries
+  without it remain valid to avoid unexpectedly invalidating sent vendor links.
+- This pass does not establish DevOps state, migration status, backups, TLS,
+  CORS, runtime role behavior, or cross-org behavior against a live/test DB.
+
+### Recommended next implementation order
+
+1. Add disposable-environment regression tests and run the business workflow
+   against authenticated test users in two organizations.
+2. Design compatible server authorization from existing per-org configured
+   roles, then repair the global user-delete RPC and operational write policies.
+3. Add transaction RPCs for GRN/stock, dispatch/invoice, payments, transfers,
+   request conversion, and quote submission; include idempotency keys and
+   concurrency checks without changing existing status labels or screens.
+4. Convert high-value form saves to await committed responses and reconcile
+   failed saves; add database-backed unique document-number allocation.
+5. Complete runtime DevOps evidence and isolated backup-restore verification.

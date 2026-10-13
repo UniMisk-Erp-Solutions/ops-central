@@ -42,8 +42,8 @@ _Last updated: 2026-10-12_
 
 | File | Topic | What it covers |
 |---|---|---|
-| [architecture-security-devops-audit.md](./architecture-security-devops-audit.md) | Phase 1 baseline audit | Current architecture, organization and role boundaries, request flow, module inventory, security findings, risks, and recommended next phases. |
-| [testing.md](./testing.md) | The check suite | What each `scripts/uitest/*-check.js` guards and why. **Run before every deploy.** |
+| [architecture-security-devops-audit.md](./architecture-security-devops-audit.md) | Architecture and security audit | Phase 1 baseline plus a Phase 2 implementation record, verification limits, remaining security/reliability gaps, and recommended rollout order. |
+| [testing.md](./testing.md) | The check suite | What each `scripts/uitest/*-check.js` guards and why, plus available local verification commands. **Run before every deploy.** |
 | [tenant-subdomains.md](./tenant-subdomains.md) | Subdomains and TLS | Per-tenant hosts, Vercel + Cloudflare provisioning. |
 | [COOLIFY_OPC_SUPABASE_SETUP.md](./COOLIFY_OPC_SUPABASE_SETUP.md) | Self-hosted Supabase | The Coolify stack, service ids, what must not be touched. |
 | [REMOTE_SERVER_SETUP.md](./REMOTE_SERVER_SETUP.md) | The host | Server access and layout. |

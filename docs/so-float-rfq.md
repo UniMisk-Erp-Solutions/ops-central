@@ -11,6 +11,22 @@ vendors" additions to `ProcurementTab` (`frontend/src/screens-so.jsx`); the
 org-lookup fallback in `supabase/functions/main/index.ts`
 **Test:** `scripts/uitest/so-rfq-check.js`
 
+### Quote-link reliability notes
+
+New vendor quote links use a cryptographically random token and carry a
+30-day expiry. The quote endpoints reject expired links, invalid item keys,
+negative/non-finite prices, and report RFQ or sourcing write failures instead
+of always returning success. Repeated submissions for a quote already marked
+submitted reuse its saved prices and reconcile the linked Sourcing price row.
+Existing links without an `expires_at` field remain accepted for compatibility;
+they need an explicit expiry/backfill plan before they can be retired safely.
+
+These checks do not make the two JSON-row updates transactional, and simultaneous
+submissions can still race. `/float-rfq` also still relies on the service role
+without validating a tenant Purchase JWT. Those require an additive database
+transaction and a server-side authorization design that preserves configured
+organization roles; they remain security work, not a verified fix here.
+
 ---
 
 ## What it is

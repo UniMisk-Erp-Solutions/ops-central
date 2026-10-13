@@ -9,6 +9,12 @@ done
 Needs `npm i --no-save @babel/standalone@7.29.0 react@18.3.1 react-dom@18.3.1 jsdom`
 once, at the repository root.
 
+The suite is local and does not connect to Supabase. It could not run in the
+Phase 2 checkout when these packages were absent; dependency installation was
+not attempted. The source changes to pagination, tenant cache recovery, and
+Edge quote handling therefore still need execution-level tests in a disposable
+Supabase environment. Never point these checks at a production project.
+
 Pin those versions, and install them **in one command**. Two traps:
 
 - `index.html` loads `@babel/standalone@7.29.0`. Babel 8 defaults to the
