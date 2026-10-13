@@ -806,8 +806,20 @@ function StoreProvider({ children }) {
   }, []);
 
   const setUserActive = React.useCallback(async (id, active) => {
+    if (window.OPC_SB) {
+      try {
+        const { error } = await window.OPC_SB.rpc('opc_set_org_user_active', { p_id: id, p_active: active });
+        if (error) return { ok: false, error: error.message };
+        try {
+          const roster = await window.OPC_SB.rpc('opc_org_users');
+          if (!roster.error && Array.isArray(roster.data)) setState(prev => ({ ...prev, users: roster.data }));
+          else if (!active) setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
+        } catch (_) { if (!active) setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) })); }
+        return { ok: true };
+      } catch (e) { return { ok: false, error: String(e.message || e) }; }
+    }
     setState(prev => ({ ...prev, users: prev.users.map(u => u.id === id ? { ...u, active } : u) }));
-    if (window.OPC_SB) { const { error } = await window.OPC_SB.from('users').update({ active }).eq('id', id); if (error) console.error('[OPC] setUserActive failed', error.message); }
+    return { ok: true };
   }, []);
 
   const removeUser = React.useCallback(async (id) => {
@@ -815,7 +827,11 @@ function StoreProvider({ children }) {
     if (!window.OPC_SB) return { ok: false, error: 'Cannot reach the server.' };
     const { error } = await window.OPC_SB.rpc('opc_delete_user', { p_id: id });
     if (error) return { ok: false, error: error.message };
-    setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
+    try {
+      const roster = await window.OPC_SB.rpc('opc_org_users');
+      if (!roster.error && Array.isArray(roster.data)) setState(prev => ({ ...prev, users: roster.data }));
+      else setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
+    } catch (_) { setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) })); }
     return { ok: true };
   }, [realUserId]);
 

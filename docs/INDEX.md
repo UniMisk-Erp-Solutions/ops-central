@@ -42,7 +42,7 @@ _Last updated: 2026-10-13_
 
 | File | Topic | What it covers |
 |---|---|---|
-| [phase-2-hardening.md](./phase-2-hardening.md) | Phase 2 hardening handoff | Implemented store and quote-link reliability changes, preserved workflow/tenant behavior, verification limits, deployment notes, and remaining work. |
+| [phase-2-hardening.md](./phase-2-hardening.md) | Phase 2 hardening handoff | Store and quote-link reliability changes plus organization-scoped user administration, separate Settings and role-switcher rosters, membership toggles, migration/test requirements, verification limits, and remaining authorization/transaction work. |
 | [architecture-security-devops-audit.md](./architecture-security-devops-audit.md) | Architecture and security audit | Phase 1 baseline plus a Phase 2 implementation record, verification limits, remaining security/reliability gaps, and recommended rollout order. |
 | [testing.md](./testing.md) | The check suite | What each `scripts/uitest/*-check.js` guards and why, plus available local verification commands. **Run before every deploy.** |
 | [tenant-subdomains.md](./tenant-subdomains.md) | Subdomains and TLS | Per-tenant hosts, Vercel + Cloudflare provisioning. |

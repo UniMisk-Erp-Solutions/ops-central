@@ -1120,6 +1120,16 @@ function ReportsPane() {
 function UsersPane() {
   const { state, createUser, setUserActive, removeUser, realUserId } = useStore();
   const toast = useToast();
+  const [users, setUsers] = React.useState(state.users || []);
+  const loadUsers = React.useCallback(async () => {
+    if (!window.OPC_SB) { setUsers(state.users || []); return; }
+    try {
+      const { data, error } = await window.OPC_SB.rpc('opc_org_managed_users');
+      if (error) { toast('Could not load organization users: ' + error.message); return; }
+      setUsers(Array.isArray(data) ? data : []);
+    } catch (e) { toast('Could not load organization users: ' + String(e.message || e)); }
+  }, [state.users]);
+  React.useEffect(() => { loadUsers(); }, [loadUsers]);
   // Always include every defined role (code PERMISSIONS + any saved custom roles),
   // so newly added roles like Supervisor always appear even if a roles list was saved.
   const roles = [...new Set([...(state.config.roles || []), ...Object.keys(PERMISSIONS), ...(state.config.permissions ? Object.keys(state.config.permissions) : [])])];
@@ -1133,6 +1143,7 @@ function UsersPane() {
     const res = await createUser(form);
     setBusy(false);
     if (!res.ok) { toast('Create failed: ' + (res.error || ''), ''); return; }
+    await loadUsers();
     toast(`${form.name} added as ${form.role}`, 'success');
     setForm({ name: '', email: '', password: '', role: form.role });
   };
@@ -1163,20 +1174,24 @@ function UsersPane() {
         </div>
       </div>
       <div className="card">
-        <div className="card-header"><h3 className="card-title">Existing users · {state.users.length}</h3></div>
+        <div className="card-header"><h3 className="card-title">Existing users · {users.length}</h3></div>
         <div className="card-body flush">
           <table className="t">
             <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th></th></tr></thead>
             <tbody>
-              {state.users.map(u => (
+              {users.map(u => (
                 <tr key={u.id}>
                   <td><div style={{ display: 'flex', gap: 6, alignItems: 'center' }}><Avatar user={u} size={20}/>{u.name}</div></td>
                   <td className="mono small">{u.email || '—'}</td>
                   <td><span className="badge">{u.role}</span></td>
-                  <td><Toggle value={u.active !== false} onChange={v => setUserActive(u.id, v)}/></td>
+                  <td><Toggle value={u.active !== false} onChange={async v => {
+                    const result = await setUserActive(u.id, v);
+                    if (!result || !result.ok) toast('Could not update this organization membership: ' + ((result && result.error) || 'Unknown error'));
+                    else await loadUsers();
+                  }}/></td>
                   <td>{u.id !== realUserId && (
                     <button className="btn btn-ghost btn-sm" onClick={async () => {
-                      if (confirm('Remove ' + u.name + '?')) { const r = await removeUser(u.id); toast(r.ok ? 'User removed' : (r.error || 'Failed'), r.ok ? '' : ''); }
+                      if (confirm('Remove ' + u.name + '?')) { const r = await removeUser(u.id); if (r.ok) await loadUsers(); toast(r.ok ? 'User removed from this organization' : (r.error || 'Failed'), r.ok ? '' : ''); }
                     }}><Icon name="trash" size={11} color="var(--danger)"/></button>
                   )}</td>
                 </tr>

@@ -83,3 +83,70 @@ the existing RFQ vendor JSON data. The Edge Function code must be deployed to
 an authorized non-production/test environment before its quote-link changes
 can be exercised. Deployment was not performed here. Verify legacy quote-link
 handling and rollback behavior in staging before any production rollout.
+
+## Follow-up: organization-scoped user administration
+
+The Phase 2 branch now includes the additive migration
+`supabase/migrations/040_org_scoped_user_admin.sql`. It addresses the user
+administration authorization gap found in the audit without changing screens,
+role names, navigation defaults, or workflow statuses:
+
+- `opc_create_user` requires effective Settings access in the active
+  organization, and stamps the new membership into that organization instead
+  of the caller's default organization.
+- `opc_delete_user` lets a tenant administrator deactivate only a target
+  membership in the active organization. A tenant removal no longer deletes a
+  shared auth login/profile. Platform master admins retain the global delete
+  path.
+- `opc_org_users` remains the active-user roster used by the app-wide role
+  switcher, with an active-org membership guard. A separate
+  `opc_org_managed_users` roster lets Settings show inactive memberships for
+  reactivation without adding them to the role switcher. The existing Users
+  toggle calls `opc_set_org_user_active`; direct writes to the shared
+  `public.users` profile are limited to platform master admins.
+- `opc_can_manage_org_users` resolves the caller's profile role against the
+  active organization's configured navigation override. An explicit `nav`
+  array takes precedence; absent an override, only the built-in `Org Admin`
+  role includes Settings, matching `permissions.jsx`.
+
+Affected code is `frontend/src/store.jsx` (wait for the scoped membership RPCs
+before changing local state), `frontend/src/screens-config.jsx` (load the
+separate managed roster, report failed toggle writes, and clarify organization
+removal), plus the migration above.
+
+The role compatibility constraint remains: `public.users.role` is one global
+value per login, while membership role and organization permission overrides
+are separate. This migration does not create per-organization app roles. A
+future staged migration should add an organization-scoped app-role assignment,
+backfill each current user's role to every active membership, compare each
+organization's effective `can`/`nav` values against current behavior, and only
+then move reads and writes behind that assignment. Do not reinterpret
+`organization_memberships.role` (`admin`/`member`) as the app role.
+
+### Follow-up verification and remaining scope
+
+- Added `supabase/tests/040_org_scoped_user_admin.test.sql`, a transactional
+  pgTAP test for active-org Settings authorization, cross-org removal denial,
+  active-org assignment on create, preservation of the other tenant's
+  membership, denial for an unlinked global Org Admin profile, and refusal of
+  direct tenant writes to global user profiles. It also checks that inactive
+  organization memberships remain visible in Settings but outside the
+  active-user switcher roster.
+- The migration and database test were not executed in this environment:
+  Supabase CLI and `psql` are unavailable, Docker is installed but its local
+  daemon is not running, and this checkout has no `supabase/config.toml` for a
+  local CLI project. The test has not been validated by a database parser.
+  Run it against a disposable local Supabase project after setting up its
+  config and applying migrations locally; never point the test runner at the
+  hosted database.
+- High-impact workflows (client-request conversion, RFQ/Sourcing, GRN/stock,
+  dispatch/invoice, payment and transfer) still lack atomic transactions and
+  comprehensive retry/concurrency protection. Operational table policies also
+  remain membership-based in several areas, so this is not a complete
+  server-side authorization pass.
+- App role and global account-active values remain on the shared profile;
+  platform master admins still control those values. Per-organization app-role
+  assignments require the staged migration described above and remain
+  outstanding.
+- No migration was applied, and no database, Edge Function, frontend runtime,
+  or hosted service was accessed for live verification.
