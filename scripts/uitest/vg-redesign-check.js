@@ -164,11 +164,10 @@ console.log('\n[5] a role that cannot receive or edit the BOM sees the data with
   check('the data itself is still fully visible', has(viewOnly, /Server CPU/), true);
 }
 
-console.log('\n[6] the flow diagram and the repositioned card clusters are actually in the markup, not just in the CSS');
+console.log('\n[6] the repositioned card clusters are actually in the markup, not just in the CSS (round 2 dropped the flow diagram after live review)');
 {
   const soHtml = render(sandbox.VirtualGodownView, { soId: 'so-1' }, 'Stores');
-  check('the flow strip renders with all three outer nodes', ['Master Pool', 'Receiving', 'Dispatch'].every(l => has(soHtml, new RegExp(l))), true);
-  check('the flow strip\'s hub node is this SO, not a generic label', has(soHtml, /SO\/FY26\/0801/), true);
+  check('the flow diagram is gone -- rejected after the user saw it live on the preview deploy', has(soHtml, /vg-flow/), false);
   check('both the inflow AND outflow cards sit in a cluster, not the old single-column stack', (soHtml.match(/vg-cluster/g) || []).length, 2);
   check('the Pool-first Engine is now a connected step timeline, same six steps as before', has(soHtml, /vg-steps/) && ['Check Master Pool', 'Allocate available qty', 'Route balance to RFQ', 'GRN', 'Outflow to customer', 'Surplus'].every(l => has(soHtml, new RegExp(l))), true);
   check('the table is wrapped for contained horizontal scroll on narrow screens', has(soHtml, /vg-table-scroll/), true);

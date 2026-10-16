@@ -1367,27 +1367,6 @@ function VirtualGodownView({ soId, embedded }) {
         </div>
       )}
       {StatsStrip}
-      <div className="vg-flow">
-        <div className="vg-flow-node">
-          <div className="vg-flow-icon accent"><Icon name="layers" size={15}/></div>
-          <div className="vg-flow-label">Master Pool</div>
-        </div>
-        <div className="vg-flow-line"><span className="vg-flow-dot" style={{ animationDelay: '0s' }}/></div>
-        <div className="vg-flow-node">
-          <div className="vg-flow-icon info"><Icon name="truck" size={15}/></div>
-          <div className="vg-flow-label">Receiving</div>
-        </div>
-        <div className="vg-flow-line"><span className="vg-flow-dot" style={{ animationDelay: '0.8s' }}/></div>
-        <div className="vg-flow-node primary">
-          <div className="vg-flow-icon accent"><Icon name="boxes" size={18}/></div>
-          <div className="vg-flow-label">{so.so_no}</div>
-        </div>
-        <div className="vg-flow-line"><span className="vg-flow-dot" style={{ animationDelay: '1.6s' }}/></div>
-        <div className="vg-flow-node">
-          <div className="vg-flow-icon success"><Icon name="cart" size={15}/></div>
-          <div className="vg-flow-label">Dispatch</div>
-        </div>
-      </div>
       <div className="split-2to1">
         <div className="stack">
         <div className="vg-cluster">

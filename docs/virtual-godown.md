@@ -89,13 +89,14 @@ monitor, and still reading as "everything in one line." All three fixed:
   `.vg-table-scroll` gives it its own horizontal scroll instead of blowing
   out the whole page's layout, and three more `.vg-page`-scoped breakpoints
   (1100/860/600px) reflow the hero, stats and list rows underneath it.
-- **A flow diagram** (`.vg-flow`) now sits above the two-column layout —
-  Master Pool → Receiving → *this SO* → Dispatch, four small icon nodes
-  connected by a line with a single animated dot per segment. Purely
-  decorative (nothing here reads data beyond the SO number); it answers
-  "what is this page, structurally" in one glance for someone who has never
-  seen it before. One 6px dot, CSS `@keyframes`, `prefers-reduced-motion`
-  respected — the cheapest animation there is, not a graphics engine.
+- **A flow diagram was tried and removed.** A `.vg-flow` strip (Master Pool
+  → Receiving → *this SO* → Dispatch, four icon nodes on an animated line)
+  shipped first, purely decorative, meant to answer "what is this page,
+  structurally" in one glance. Seen live on the preview deploy, it read as
+  clutter rather than clarity and was deleted — JSX and CSS both, nothing
+  left behind. The lesson stays even though the component doesn't: a
+  decorative diagram that doesn't read live data earns its space by being
+  judged live, not by how it sounds described.
 - **The left column stopped being one long vertical line.** The small
   cards (Pending Receipts, Add from Pool above the table; Send to Pool,
   GRN history, Pool history below it) now sit in `.vg-cluster` — a
@@ -104,18 +105,21 @@ monitor, and still reading as "everything in one line." All three fixed:
   add) and a flex row collapses gracefully where a fixed grid would leave a
   gap.
 - **Pool-first Engine** (right column) is the same six static steps it
-  always was, now drawn as a connected vertical timeline (`.vg-steps`) —
-  the same "connected nodes" idea as the flow diagram, applied to an
-  explainer that was already describing a pipeline in words.
+  always was, now drawn as a connected vertical timeline (`.vg-steps`) — the
+  same "connected nodes" idea the flow diagram tried, applied here to an
+  explainer that was already describing a pipeline in words. This one
+  stayed; unlike the flow diagram it's labeling real static content, not
+  standing alone as pure decoration.
 - **A brief flash on success** — receiving a row, adding from the pool, or
   sending to the pool each briefly highlight the row/item that changed
   (`.vg-row-flash` / `.vg-pulse`, ~1.1s, one CSS transition, cleared from
   React state on a timeout so it can never get stuck "on"). No new
   dependency, no animation loop running when nothing just happened.
 - Two new icons (`warehouse`, `boxes`) added to the shared `Icon` component
-  — purely additive, every existing icon name is untouched — used in the
-  hero eyebrow and the flow diagram's hub node for a page that's
-  specifically supposed to feel like a godown, not just another table.
+  — purely additive, every existing icon name is untouched. `warehouse`
+  stayed in the hero eyebrow on both pages; `boxes` was only used as the
+  removed flow diagram's hub icon and is currently unused, left in place
+  since it's harmless and may get used again.
 
 ### Reading the main table
 
@@ -204,3 +208,13 @@ nothing else touched.
   this one. Fixed by counting occurrences (`.match(/vg-cluster/g).length`)
   instead of testing presence. Worth remembering for any future assertion
   on a class/string that a redesign might legitimately use more than once.
+- **A decorative visual that sounds right in text can still read as clutter
+  live.** The Round 2 flow diagram was built to spec (connected icon nodes,
+  the exact ask) and shipped clean, but the first time it was actually seen
+  running — on the branch's own preview deployment, not a description of
+  it — it was rejected outright. Removed in full (JSX in
+  `screens-godown.jsx`, CSS in `styles.css`, assertions in
+  `vg-redesign-check.js`), nothing partial left behind. Don't treat a
+  purely-decorative addition as done until it's been seen live; "matches
+  what was asked for" and "actually reads well on screen" are not the same
+  check.
