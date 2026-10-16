@@ -14,7 +14,7 @@ function VirtualGodownList() {
     <div className="page vg-page">
       <div className="vg-hero">
         <div className="vg-hero-id">
-          <div className="vg-hero-eyebrow"><Icon name="box" size={13}/>Inventory · one bucket per order</div>
+          <div className="vg-hero-eyebrow"><Icon name="warehouse" size={13}/>Inventory · one bucket per order</div>
           <div className="vg-hero-title">Virtual Godowns</div>
           <div className="vg-hero-sub">Isolated per SO · Master Pool checked first, before a fresh PO is ever raised</div>
         </div>
@@ -316,6 +316,7 @@ function VGAddFromPoolPanel({ so }) {
   const [q, setQ] = React.useState('');
   const [qty, setQty] = React.useState({});
   const [busy, setBusy] = React.useState(false);
+  const [justAdded, setJustAdded] = React.useState(null);   // purely cosmetic flash, see flashRows elsewhere
   if (!canEdit) return null;
 
   const poolByProd = {};
@@ -356,13 +357,14 @@ function VGAddFromPoolPanel({ so }) {
         notifications: [{ id: 'n-plq-' + Date.now(), kind: 'transfer', text: `${so.so_no}: Purchase requests ${n}× ${p ? p.name : pid} FROM Master Pool · Stores to approve`, date: TODAY, read: false, role: 'Stores' }, ...s.notifications],
       }), { action: 'pool-request', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Requested ${n}× ${p ? p.name : pid} from Master Pool → ${so.so_no}` });
       setBusy(false); setQty(m => ({ ...m, [pid]: '' })); setQ('');
+      setJustAdded(pid); setTimeout(() => setJustAdded(j => j === pid ? null : j), 1100);
       toast(`Sent to Stores for approval · ${n}× ${p ? p.name : pid}`, 'success');
       return;
     }
     // PM / Org Admin act directly (unchanged) — the shared executor also writes a receipt.
     const r = await window.poolAllocateToSO(so, { product_id: pid, qty: n }, { state, mutate, consumeFromPool, getProduct, currentUser });
     setBusy(false); setQty(m => ({ ...m, [pid]: '' })); setQ('');
-    if (r && r.ok) toast(`Added ${n}× ${p ? p.name : pid} from Master Pool`, 'success');
+    if (r && r.ok) { toast(`Added ${n}× ${p ? p.name : pid} from Master Pool`, 'success'); setJustAdded(pid); setTimeout(() => setJustAdded(j => j === pid ? null : j), 1100); }
     else toast((r && r.error) || 'Could not add from pool');
   };
 
@@ -374,7 +376,7 @@ function VGAddFromPoolPanel({ so }) {
           <div className="mb-2">
             <div className="tiny muted mb-1">Suggested for this SO · fills the remaining gap, best savings first</div>
             {suggestions.map(s => (
-              <div key={s.pid} className="queue-item">
+              <div key={s.pid} className={`queue-item${justAdded === s.pid ? ' vg-pulse' : ''}`}>
                 <div className="grow"><div className="small">{s.product ? s.product.name : s.pid}</div><div className="tiny muted">gap {s.gap} · {s.inPool} in pool · saves ~{inr(s.save)}</div></div>
                 <input type="number" min="0" max={Math.min(s.gap, s.inPool)} className="input mono" placeholder={String(s.fill)} value={qty[s.pid] || ''} onChange={e => setQty(m => ({ ...m, [s.pid]: e.target.value }))} style={{ width: 58, height: 26, textAlign: 'right' }}/>
                 <button className="btn btn-sm" disabled={busy} onClick={() => add(s.pid, qty[s.pid] || s.fill)}><Icon name="plus" size={11}/>Add</button>
@@ -386,7 +388,7 @@ function VGAddFromPoolPanel({ so }) {
           <input className="input" placeholder="Search any pool component…" value={q} onChange={e => setQ(e.target.value)}/>
         </div>
         {results.map(r => (
-          <div key={r.pid} className="queue-item">
+          <div key={r.pid} className={`queue-item${justAdded === r.pid ? ' vg-pulse' : ''}`}>
             <div className="grow"><div className="small">{r.product ? r.product.name : r.pid}</div><div className="tiny muted">{r.inPool} in pool</div></div>
             <input type="number" min="0" max={r.inPool} className="input mono" value={qty[r.pid] || ''} onChange={e => setQty(m => ({ ...m, [r.pid]: e.target.value }))} style={{ width: 58, height: 26, textAlign: 'right' }}/>
             <button className="btn btn-sm" disabled={busy} onClick={() => add(r.pid, qty[r.pid])}><Icon name="plus" size={11}/>Add</button>
@@ -754,6 +756,7 @@ function VGPoolSendPanel({ so }) {
 
   const [sel, setSel] = React.useState({});
   const [busy, setBusy] = React.useState(false);
+  const [justSent, setJustSent] = React.useState({});   // purely cosmetic flash, product_id -> true
   const checked = Object.keys(sel).filter(k => sel[k] != null);
   const toggle = (h) => setSel(s => { const n = { ...s }; if (n[h.product_id] != null) delete n[h.product_id]; else n[h.product_id] = h.held; return n; });
   const setQty = (h, v) => setSel(s => ({ ...s, [h.product_id]: Math.max(0, Math.min(Number(v) || 0, h.held)) }));
@@ -775,15 +778,19 @@ function VGPoolSendPanel({ so }) {
         sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pool_requests: [...((x.extra && x.extra.pool_requests) || []), req] } } : x),
         notifications: [{ id: 'n-plq-' + Date.now(), kind: 'transfer', text: `${so.so_no}: Purchase requests ${units} unit(s) TO Master Pool · Stores to approve`, date: TODAY, read: false, role: 'Stores' }, ...s.notifications],
       }), { action: 'pool-request', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Requested ${units} unit(s) from ${so.so_no} → Master Pool` });
-      setBusy(false); setSel({});
+      setBusy(false); setSel({}); flashSent(rows.map(r => r.product_id));
       toast(`Sent to Stores for approval · ${units} unit(s)`, 'success');
       return;
     }
     // PM / Org Admin act directly (unchanged) — the shared executor also writes a receipt.
     const r = await window.poolSendFromSO(so, rows, { state, mutate, addToPool, getProduct, currentUser });
     setBusy(false); setSel({});
-    if (r && r.ok) toast(`Sent ${units} unit(s) to Master Pool · client bill auto-reduced`, 'success');
+    if (r && r.ok) { toast(`Sent ${units} unit(s) to Master Pool · client bill auto-reduced`, 'success'); flashSent(rows.map(x => x.product_id)); }
     else toast((r && r.error) || 'Could not send to pool');
+  };
+  const flashSent = (ids) => {
+    setJustSent(m => { const n = { ...m }; ids.forEach(id => { n[id] = true; }); return n; });
+    setTimeout(() => setJustSent(m => { const n = { ...m }; ids.forEach(id => { delete n[id]; }); return n; }), 1100);
   };
 
   return (
@@ -803,7 +810,7 @@ function VGPoolSendPanel({ so }) {
               const p = getProduct(h.product_id) || { name: h.product_id, code: h.product_id };
               const on = sel[h.product_id] != null;
               return (
-                <tr key={h.product_id} style={{ opacity: on ? 1 : 0.85 }}>
+                <tr key={h.product_id} className={justSent[h.product_id] ? 'vg-row-flash' : ''} style={{ opacity: on ? 1 : 0.85 }}>
                   <td><input type="checkbox" checked={on} onChange={() => toggle(h)}/></td>
                   <td>{p.name}<div className="tiny muted mono">{p.code}</div></td>
                   <td className="num"><strong>{h.held}</strong></td>
@@ -1154,6 +1161,14 @@ function VirtualGodownView({ soId, embedded }) {
   const toast = useToast();
   const [recvSel, setRecvSel] = React.useState({});   // product_id -> receive-now qty
   const [recvBusy, setRecvBusy] = React.useState(false);
+  // Purely cosmetic: which rows just got ticked off, so they can flash for a
+  // moment. Never read for anything but the CSS class below — clearing it
+  // late or never would change nothing except how long a row keeps glowing.
+  const [justDone, setJustDone] = React.useState({});
+  const flashRows = (productIds) => {
+    setJustDone(m => { const n = { ...m }; productIds.forEach(id => { n[id] = true; }); return n; });
+    setTimeout(() => setJustDone(m => { const n = { ...m }; productIds.forEach(id => { delete n[id]; }); return n; }), 1100);
+  };
   const so = getSO(soId);
   if (!so) return <div className="empty">{state.loaded ? 'Godown not found' : 'Loading…'}</div>;
   const cust = getCustomer(so.customer_id);
@@ -1264,15 +1279,16 @@ function VirtualGodownView({ soId, embedded }) {
     // The acceptor posts directly (no point asking themselves); anyone else
     // raises a request the acceptor approves. One path, two directions.
     const flow = wfReceiving();
+    const pickedIds = recvPicks.map(p => p.product_id);
     if (flow.approverRoles.includes(role)) {
       const r = await vgReceiveComponents(so, recvPicks, { state, mutate, toast: null, addToPool, getProduct, getVendor, getUser, currentUser });
-      setRecvBusy(false); setRecvSel({});
+      setRecvBusy(false); setRecvSel({}); flashRows(pickedIds);
       toast(`Received ${r.units} unit(s) · ${r.posted} GRN(s) posted${wfOn('auto_invoice_on_grn') ? ' · client invoice auto-raised' : ''}${r.createdPONeedsMD ? ' · a high-value PO needs MD approval first' : ''}`, 'success');
     } else {
       const units = recvPicks.reduce((a, p) => a + (Number(p.qty) || 0), 0);
       const pr = { id: 'pr-' + Date.now(), by: currentUser, date: TODAY, status: 'Pending', flow: flow.mode, picks: recvPicks.map(p => ({ product_id: p.product_id, qty: p.qty, name: getProduct(p.product_id)?.name || p.product_id })) };
       mutate(s => ({ ...s, sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, extra: { ...(x.extra || {}), pending_receipts: [...((x.extra && x.extra.pending_receipts) || []), pr] } } : x), notifications: [{ id: 'n-recq-' + Date.now(), kind: 'grn', text: `${so.so_no}: ${units} unit(s) confirmed by ${role} · ${flow.approverLabel} to accept & post GRN`, date: TODAY, read: false, role: flow.approverLabel }, ...s.notifications] }), { action: 'receipt-request', entity: 'SalesOrder', entity_id: so.id, user_id: currentUser, detail: `Receipt sent to ${flow.approverLabel} · ${pr.picks.map(p => `${p.qty}× ${p.name}`).join(', ')}` });
-      setRecvBusy(false); setRecvSel({});
+      setRecvBusy(false); setRecvSel({}); flashRows(pickedIds);
       toast(`Sent to ${flow.approverLabel} for acceptance · ${units} unit(s)`, 'success');
     }
   };
@@ -1295,7 +1311,7 @@ function VirtualGodownView({ soId, embedded }) {
           <div className="vg-hero-back" style={{ cursor: 'pointer' }} onClick={() => navigate('godown')}>
             <Icon name="chevronLeft" size={12}/> Virtual Godowns
           </div>
-          <div className="vg-hero-eyebrow"><Icon name="box" size={13}/>Virtual Godown</div>
+          <div className="vg-hero-eyebrow"><Icon name="warehouse" size={13}/>Virtual Godown</div>
           <div className="vg-hero-title">{so.so_no}</div>
           <div className="vg-hero-sub">{cust.name} · {so.lines.length} bundle{so.lines.length > 1 ? 's' : ''} · isolated from other SOs</div>
         </div>
@@ -1351,13 +1367,33 @@ function VirtualGodownView({ soId, embedded }) {
         </div>
       )}
       {StatsStrip}
+      <div className="vg-flow">
+        <div className="vg-flow-node">
+          <div className="vg-flow-icon accent"><Icon name="layers" size={15}/></div>
+          <div className="vg-flow-label">Master Pool</div>
+        </div>
+        <div className="vg-flow-line"><span className="vg-flow-dot" style={{ animationDelay: '0s' }}/></div>
+        <div className="vg-flow-node">
+          <div className="vg-flow-icon info"><Icon name="truck" size={15}/></div>
+          <div className="vg-flow-label">Receiving</div>
+        </div>
+        <div className="vg-flow-line"><span className="vg-flow-dot" style={{ animationDelay: '0.8s' }}/></div>
+        <div className="vg-flow-node primary">
+          <div className="vg-flow-icon accent"><Icon name="boxes" size={18}/></div>
+          <div className="vg-flow-label">{so.so_no}</div>
+        </div>
+        <div className="vg-flow-line"><span className="vg-flow-dot" style={{ animationDelay: '1.6s' }}/></div>
+        <div className="vg-flow-node">
+          <div className="vg-flow-icon success"><Icon name="cart" size={15}/></div>
+          <div className="vg-flow-label">Dispatch</div>
+        </div>
+      </div>
       <div className="split-2to1">
         <div className="stack">
-        <PendingReceiptsPanel soId={so.id}/>
-        <VGAddFromPoolPanel so={so}/>
-        <VGPoolSendPanel so={so}/>
-        <VGGrnCard so={so}/>
-        <VGPoolHistoryCard so={so}/>
+        <div className="vg-cluster">
+          <PendingReceiptsPanel soId={so.id}/>
+          <VGAddFromPoolPanel so={so}/>
+        </div>
         <div className="card">
           <div className="card-header">
             <h3 className="card-title"><Icon name="grid" size={14}/>VG Contents · {so.so_no}</h3>
@@ -1369,7 +1405,7 @@ function VirtualGodownView({ soId, embedded }) {
                   : <span className="tiny muted">{receivable.length} remaining</span>}
             </div>
           </div>
-          <div className="card-body flush">
+          <div className="card-body flush vg-table-scroll">
             <table className="t zebra">
               <thead><tr>
                 {canReceive && <th style={{ width: 60 }}><input type="checkbox" checked={allTicked} onChange={toggleAllRecv} title="Select all to receive"/></th>}
@@ -1383,7 +1419,7 @@ function VirtualGodownView({ soId, embedded }) {
                   const net = c.transferredIn - c.transferredOut;
                   const rowPct = c.qty > 0 ? Math.min(100, Math.round((c.inHand / c.qty) * 100)) : (c.inHand > 0 ? 100 : 0);
                   return (
-                    <tr key={c.product_id}>
+                    <tr key={c.product_id} className={justDone[c.product_id] ? 'vg-row-flash' : ''}>
                       {canReceive && <td>{c.remaining > 0 ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                           <input type="checkbox" checked={recvSel[c.product_id] != null} onChange={() => toggleRecv(c)}/>
@@ -1422,6 +1458,11 @@ function VirtualGodownView({ soId, embedded }) {
               </tbody>
             </table>
           </div>
+        </div>
+        <div className="vg-cluster">
+          <VGPoolSendPanel so={so}/>
+          <VGGrnCard so={so}/>
+          <VGPoolHistoryCard so={so}/>
         </div>
         </div>
 
@@ -1475,16 +1516,16 @@ function VirtualGodownView({ soId, embedded }) {
           </div>
 
           <div className="card">
-            <div className="card-header"><h3 className="card-title">Pool-first Engine</h3></div>
+            <div className="card-header"><h3 className="card-title"><Icon name="arrows" size={14}/>Pool-first Engine</h3></div>
             <div className="card-body">
               <div className="tiny muted mb-2">Per-line allocation rule</div>
-              <div className="dl" style={{ gridTemplateColumns: '1fr auto', fontSize: 12 }}>
-                <dt>1. Check Master Pool</dt><dd><Icon name="check" size={12} color="var(--success)"/></dd>
-                <dt>2. Allocate available qty</dt><dd><Icon name="check" size={12} color="var(--success)"/></dd>
-                <dt>3. Route balance to RFQ</dt><dd><Icon name="check" size={12} color="var(--success)"/></dd>
-                <dt>4. GRN → into this VG</dt><dd><Icon name="spinner" size={12} color="var(--accent)"/></dd>
-                <dt>5. Outflow to customer</dt><dd className="muted"><Icon name="spinner" size={12}/></dd>
-                <dt>6. Surplus → back to Pool</dt><dd className="muted"><Icon name="spinner" size={12}/></dd>
+              <div className="vg-steps">
+                <div className="vg-step done"><div className="vg-step-dot"><Icon name="check" size={11}/></div><div className="vg-step-label">Check Master Pool</div></div>
+                <div className="vg-step done"><div className="vg-step-dot"><Icon name="check" size={11}/></div><div className="vg-step-label">Allocate available qty</div></div>
+                <div className="vg-step done"><div className="vg-step-dot"><Icon name="check" size={11}/></div><div className="vg-step-label">Route balance to RFQ</div></div>
+                <div className="vg-step active"><div className="vg-step-dot"><Icon name="spinner" size={11}/></div><div className="vg-step-label">GRN → into this VG</div></div>
+                <div className="vg-step"><div className="vg-step-dot"><Icon name="spinner" size={11}/></div><div className="vg-step-label">Outflow to customer</div></div>
+                <div className="vg-step"><div className="vg-step-dot"><Icon name="spinner" size={11}/></div><div className="vg-step-label">Surplus → back to Pool</div></div>
               </div>
               <div className="divider"/>
               <div className="tiny muted">Pool-first toggle: <strong style={{ color: 'var(--text)' }}>ON</strong> · admin can override per line</div>

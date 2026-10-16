@@ -164,5 +164,21 @@ console.log('\n[5] a role that cannot receive or edit the BOM sees the data with
   check('the data itself is still fully visible', has(viewOnly, /Server CPU/), true);
 }
 
+console.log('\n[6] the flow diagram and the repositioned card clusters are actually in the markup, not just in the CSS');
+{
+  const soHtml = render(sandbox.VirtualGodownView, { soId: 'so-1' }, 'Stores');
+  check('the flow strip renders with all three outer nodes', ['Master Pool', 'Receiving', 'Dispatch'].every(l => has(soHtml, new RegExp(l))), true);
+  check('the flow strip\'s hub node is this SO, not a generic label', has(soHtml, /SO\/FY26\/0801/), true);
+  check('both the inflow AND outflow cards sit in a cluster, not the old single-column stack', (soHtml.match(/vg-cluster/g) || []).length, 2);
+  check('the Pool-first Engine is now a connected step timeline, same six steps as before', has(soHtml, /vg-steps/) && ['Check Master Pool', 'Allocate available qty', 'Route balance to RFQ', 'GRN', 'Outflow to customer', 'Surplus'].every(l => has(soHtml, new RegExp(l))), true);
+  check('the table is wrapped for contained horizontal scroll on narrow screens', has(soHtml, /vg-table-scroll/), true);
+}
+
+console.log('\n[7] VirtualGodownList also carries the redesign\'s row styling, same data as section [1] already proved');
+{
+  const listHtml = render(sandbox.VirtualGodownList, {}, 'Purchase');
+  check('rows use the new vg-list-row treatment, not the old plain table row', has(listHtml, /vg-list-row/), true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the redesigned Virtual Godown screens keep every number, control and sub-panel the originals had');
 process.exit(bad ? 1 : 0);

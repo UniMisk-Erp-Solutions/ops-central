@@ -316,6 +316,8 @@ function Icon({ name, size = 14, color = "currentColor", strokeWidth = 1.75 }) {
     users: <><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><circle cx="17" cy="9" r="2"/><path d="M21 19c0-2-2-3.5-4-3.5"/></>,
     user: <><circle cx="12" cy="8" r="3.5"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></>,
     factory: <><path d="M3 21V10l5 3V10l5 3V10l5 3v8z"/><path d="M9 17h2M14 17h2"/></>,
+    warehouse: <><path d="M3 10L12 4l9 6v10H3V10z"/><path d="M9 20v-6h6v6"/><path d="M3 10h18"/></>,
+    boxes: <><rect x="3" y="12" width="7" height="7" rx="1"/><rect x="12" y="12" width="7" height="7" rx="1"/><rect x="7.5" y="4" width="7" height="7" rx="1"/></>,
     settings: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></>,
     chart: <><path d="M4 19V5M4 19h16"/><rect x="7" y="11" width="3" height="6"/><rect x="12" y="7" width="3" height="10"/><rect x="17" y="13" width="3" height="4"/></>,
     bell: <><path d="M6 8a6 6 0 0112 0c0 5 2 7 2 7H4s2-2 2-7"/><path d="M10 19a2 2 0 004 0"/></>,
