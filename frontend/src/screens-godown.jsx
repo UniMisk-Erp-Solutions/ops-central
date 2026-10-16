@@ -3,6 +3,7 @@
 function VirtualGodownList() {
   const { state, navigate, getCustomer, soSubtotal, getProduct, getUser, currentUser } = useStore();
   const role = getUser(currentUser)?.role;
+  const allowedNav = perm(role).nav;
   const orders = state.sales_orders.filter(s => !['Closed','Cancelled'].includes(s.status))
     .filter(s => role !== 'Supervisor' || (s.extra && s.extra.implementation && s.extra.implementation.supervisor_id === currentUser));
 
@@ -13,9 +14,12 @@ function VirtualGodownList() {
           <h1 className="page-title">Virtual Godowns</h1>
           <div className="page-sub">One inventory bucket per SO · isolated from other orders · checks Master Pool first</div>
         </div>
+        {/* Virtual Godown is now a universal page every role keeps, so these two
+            shortcuts must not assume the viewer also has Pool/Transfers in their
+            own nav -- hidden rather than left to silently bounce back on click. */}
         <div className="page-actions">
-          <button className="btn" onClick={() => navigate('pool')}><Icon name="layers" size={13}/>Master Pool</button>
-          <button className="btn" onClick={() => navigate('transfers')}><Icon name="arrowLeftRight" size={13}/>Transfers</button>
+          {allowedNav.includes('pool') && <button className="btn" onClick={() => navigate('pool')}><Icon name="layers" size={13}/>Master Pool</button>}
+          {allowedNav.includes('transfers') && <button className="btn" onClick={() => navigate('transfers')}><Icon name="arrowLeftRight" size={13}/>Transfers</button>}
         </div>
       </div>
 
@@ -500,6 +504,12 @@ function PendingReceiptsPanel({ soId, title }) {
   const role = (getUser(currentUser) || {}).role;
   const flow = wfReceiving();
   const canAccept = flow.approverRoles.includes(role);
+  // This panel now reaches every role via the universal Virtual Godown page,
+  // but opening a specific PO is still gated on the PO's own module (or
+  // the SO's, which can already drill into a PO's detail from its own
+  // Vendor POs tab) -- never assume whoever can see this list can also
+  // open what it links to.
+  const canOpenPO = perm(role).nav.includes('vendor-pos') || perm(role).nav.includes('sales-orders');
 
   const pending = [];
   (state.sales_orders || []).forEach(so => {
@@ -588,7 +598,9 @@ function PendingReceiptsPanel({ soId, title }) {
                             ? <span className="tiny muted">no PO line left — Accept will auto-create one</span>
                             : rows.map(r => (
                               <div key={r.po_id} className="mb-1">
-                                <a className="mono tiny" style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate(`vendor-pos/${r.po_id}`)}>{r.po_no}</a>
+                                {canOpenPO
+                                  ? <a className="mono tiny" style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate(`vendor-pos/${r.po_id}`)}>{r.po_no}</a>
+                                  : <span className="mono tiny">{r.po_no}</span>}
                                 <span className="tiny muted"> · {qty(r.take)} of this request</span>
                                 {r.combined && (
                                   <div className="tiny" style={{ color: 'var(--accent)' }}>
@@ -623,7 +635,13 @@ function PendingReceiptsPanel({ soId, title }) {
 window.PendingReceiptsPanel = PendingReceiptsPanel;
 
 function VGGrnCard({ so }) {
-  const { state, navigate, getProduct, getVendor } = useStore();
+  const { state, navigate, getProduct, getVendor, getUser, currentUser } = useStore();
+  const role = (getUser(currentUser) || {}).role;
+  // Same reasoning as PendingReceiptsPanel's canOpenPO -- this card now
+  // reaches every role via the universal Virtual Godown page, but a GRN's
+  // own detail route stays gated on GRN (or SO, which already links into a
+  // GRN from its own tab) membership.
+  const canOpenGRN = perm(role).nav.includes('grn') || perm(role).nav.includes('sales-orders');
   const poById = {};
   (state.vendor_pos || []).forEach(p => { if (poServesSO(p, so.id)) poById[p.id] = p; });
   const grns = (state.grns || []).filter(g => poById[g.po_id]);
@@ -645,7 +663,9 @@ function VGGrnCard({ so }) {
               const units = (g.items || []).reduce((a, i) => a + grnLineSoQty(i, po, so.id), 0);
               return (
                 <tr key={g.id}>
-                  <td><a className="mono small" style={{ cursor: 'pointer' }} onClick={() => navigate(`grn/${g.id}`)}>{g.grn_no}</a>
+                  <td>{canOpenGRN
+                      ? <a className="mono small" style={{ cursor: 'pointer' }} onClick={() => navigate(`grn/${g.id}`)}>{g.grn_no}</a>
+                      : <span className="mono small">{g.grn_no}</span>}
                     {g.lr && <div className="tiny muted mono">LR {g.lr}</div>}</td>
                   <td className="mono small">{fmtDate(g.date)}</td>
                   <td className="small">{v ? v.name : '—'}<div className="tiny muted mono">{po.po_no || ''}</div></td>
@@ -654,7 +674,7 @@ function VGGrnCard({ so }) {
                   </td>
                   <td className="num mono">{units}</td>
                   <td style={{ textAlign: 'right' }}>
-                    <button className="btn btn-sm" onClick={() => navigate(`grn/${g.id}`)}>Open</button>
+                    {canOpenGRN && <button className="btn btn-sm" onClick={() => navigate(`grn/${g.id}`)}>Open</button>}
                   </td>
                 </tr>
               );
@@ -1152,6 +1172,9 @@ function VirtualGodownView({ soId, embedded }) {
   const canEditBOM = ['Purchase', 'Project Manager', 'Org Admin'].includes(role);
   const canReceive = wfCanReceive(role)
     || wfReceiving().requesterRoles.includes(role) || wfReceiving().approverRoles.includes(role);
+  // Virtual Godown is now a page every role keeps, so "View SO" must not
+  // assume the viewer also has Sales Orders in their own nav.
+  const canOpenSO = perm(role).nav.includes('sales-orders');
   const removeComponent = (pid) => {
     const p = getProduct(pid);
     if (!window.confirm(`Remove ${p ? p.name : pid} from this SO's requirements? Procurement & receiving will no longer expect it.`)) return;
@@ -1281,8 +1304,7 @@ function VirtualGodownView({ soId, embedded }) {
           <div className="page-sub">{cust.name} · {so.lines.length} bundle{so.lines.length > 1 ? 's' : ''} · isolated from other SOs</div>
         </div>
         <div className="page-actions">
-          <button className="btn" onClick={() => navigate(`sales-orders/${so.id}`)}><Icon name="receipt" size={13}/>View SO</button>
-
+          {canOpenSO && <button className="btn" onClick={() => navigate(`sales-orders/${so.id}`)}><Icon name="receipt" size={13}/>View SO</button>}
         </div>
       </div>
       {children}

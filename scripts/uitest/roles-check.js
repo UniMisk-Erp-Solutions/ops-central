@@ -110,12 +110,13 @@ console.log('\n[2] the three roles a split-stores company needs');
 check('Stores In can open GRN', s.canAccess('Stores In', 'grn'), true);
 check('Stores Out can open SCM tracking, which is where dispatch lives',
   s.canAccess('Stores Out', 'scm'), true);
-// Only two pages, by request: Item Requests and SCM Tracking. Everything this
-// desk used to see directly (Sales Orders, Customers, Invoices, Collections,
-// Products) is gone from its nav -- it now only reaches the request it wrote
-// and the pure-quantity tracking screen.
-check('Client Facing has exactly two pages', s.PERMISSIONS['Client Facing'].nav.slice().sort(),
-  ['client-requests', 'scm']);
+// Item Requests and SCM Tracking, by request. Everything this desk used to
+// see directly (Sales Orders, Customers, Invoices, Collections, Products) is
+// gone from its nav -- it now only reaches the request it wrote, the
+// pure-quantity tracking screen, and Dashboard + Virtual Godowns, which
+// every role keeps (2026-10 role-nav cleanup).
+check('Client Facing has exactly the four pages every role-this-thin gets', s.PERMISSIONS['Client Facing'].nav.slice().sort(),
+  ['client-requests', 'dashboard', 'godown', 'scm']);
 check('it can open Item Requests (workflow flag assumed on for this check)', (() => {
   const before = s.__opcWorkflow;
   s.__opcWorkflow = { client_order_requests: true };
