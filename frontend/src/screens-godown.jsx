@@ -994,163 +994,179 @@ function VGImplPanel({ so }) {
   const openReqs = requests.filter(r => r.status !== 'Fulfilled');
   const isDone = im && im.status === 'Done';
   return (
-    <div className="card mt-2" style={{ borderLeft: '3px solid var(--accent)' }}>
-      <div className="card-header">
-        <div><h3 className="card-title">Implementation — site tracking</h3><span className="card-sub">Supervisor: {sup ? sup.name : '—'} · {totalHours}h logged · billed {inr(im ? im.hourly_rate || 0 : 0)}/hr = {inr((im ? im.hourly_rate || 0 : 0) * totalHours)}</span></div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <span className="badge accent dot">{im ? im.status || 'BOQ Pending' : ''}</span>
-          {canFulfil && sendable.length > 0 && <button className="btn btn-sm btn-primary" disabled={picked.length === 0} onClick={sendSelected}><Icon name="arrowRight" size={12}/>Send to supervisor ({picked.length})</button>}
-          {canLog && !isDone && <button className="btn btn-sm btn-primary" onClick={markDone}><Icon name="check" size={12}/>Mark done &amp; bill</button>}
+    <div className="stack mt-2 vg-impl">
+      {/* Site items -- its own card, no longer sharing a box with requests/log/history */}
+      <div className="card">
+        <div className="card-header">
+          <div><h3 className="card-title"><Icon name="warehouse" size={14}/>Implementation — site tracking</h3><span className="card-sub">Supervisor: {sup ? sup.name : '—'} · {totalHours}h logged · {inr(im ? im.hourly_rate || 0 : 0)}/hr → {inr((im ? im.hourly_rate || 0 : 0) * totalHours)}</span></div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span className={`badge ${isDone ? 'success' : 'accent'} dot`}>{im ? im.status || 'BOQ Pending' : ''}</span>
+            {canFulfil && sendable.length > 0 && <button className="btn btn-sm btn-primary" disabled={picked.length === 0} onClick={sendSelected}><Icon name="arrowRight" size={12}/>Send to supervisor ({picked.length})</button>}
+            {canLog && !isDone && <button className="btn btn-sm btn-primary" onClick={markDone}><Icon name="check" size={12}/>Mark done &amp; bill</button>}
+          </div>
         </div>
-      </div>
-      <div className="card-body flush">
-        {rows.length === 0 ? <div className="empty">No BOQ items yet — the supervisor prepares the BOQ on the inquiry.</div> : (
-          <table className="t">
-            <thead><tr>{canFulfil && <th style={{ width: 40 }}><input type="checkbox" checked={allTicked} onChange={toggleAllSend} title="Select all to send"/></th>}<th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Sent</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
-            <tbody>{rows.map(r => (
-              <tr key={r.id}>
-                {canFulfil && <td>{r.available > 0
-                  ? <input type="checkbox" checked={sel[r.id] != null} onChange={() => toggleSend(r)}/>
-                  : <Icon name="check" size={12} color="var(--success)"/>}</td>}
-                <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}{r.fromPool > 0 && <span className="badge accent tiny" style={{ marginLeft: 4 }} title="Taken from the Master Surplus Pool — off the vendor PO"><Icon name="layers" size={9}/> {r.fromPool} from master pool</span>}</td>
-                <td className="num">{canFulfil && r.sentQty === 0 ? <input type="number" min="0" className="input mono" value={r.qty} onChange={e => editBoqQty(r, e.target.value)} style={{ width: 56, height: 24, textAlign: 'right' }}/> : r.required}</td>
-                <td className="num">{r.procurable ? <>{r.received}{r.fromPool > 0 && <div className="tiny muted">{r.fromPool} from pool</div>}</> : <span className="muted">—</span>}</td>
-                <td className="num">{r.sentQty || <span className="muted">0</span>}</td>
-                <td className="num">{r.used || <span className="muted">0</span>}</td>
-                <td className="num"><strong style={{ color: r.onSite > 0 ? 'var(--success)' : 'var(--text-muted)' }}>{r.onSite}</strong></td>
-                <td>{r.required > 0 && r.sentQty >= r.required ? <span className="badge success dot">Fulfilled</span>
-                  : r.sentQty > 0 ? <span className="badge accent dot">Pending {r.sentQty}/{r.required}</span>
-                    : <span className="badge warning dot">Procuring</span>}</td>
-                {canFulfil && <td style={{ whiteSpace: 'nowrap' }}>
-                  {r.available > 0 && <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                    <input type="number" min="1" max={r.available} className="input mono" placeholder={String(r.available)} value={sel[r.id] != null ? sel[r.id] : ''} onChange={e => setSendQty(r, e.target.value)} style={{ width: 46, height: 24, textAlign: 'right' }} title={`Up to ${r.available}`}/>
-                    <button className="btn btn-sm btn-primary" title="Send to supervisor" onClick={() => sendOne(r)}><Icon name="arrowRight" size={11}/>Send</button>
-                  </span>}
-                  {r.sentQty === 0 && r.available > 0 && <button className="btn btn-ghost btn-sm" title="Remove from BOQ" onClick={() => removeBoq(r)}><Icon name="x" size={11} color="var(--danger)"/></button>}
-                </td>}
-              </tr>
-            ))}</tbody>
-          </table>
-        )}
-        {canFulfil && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--border)' }}>
-            <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 0 }}>
-              <input className="input" placeholder="Add an item to the site BOQ (search or type)…" value={pAddSearch} onChange={e => setPAddSearch(e.target.value)} style={{ width: '100%' }}/>
-              {pAddResults.length > 0 && <div style={{ position: 'absolute', zIndex: 20, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, marginTop: 2, width: '100%' }}>{pAddResults.map(p => <div key={p.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => purchaseAddBoq(p)}><div className="grow small">{p.name}<span className="tiny muted mono"> · {p.code}</span></div><Icon name="plus" size={11}/></div>)}</div>}
-            </div>
-            <input type="number" min="1" className="input mono" value={pAddQty} onChange={e => setPAddQty(e.target.value)} style={{ width: 64 }} title="Qty"/>
-            <button className="btn btn-sm" onClick={() => purchaseAddBoq(null)}><Icon name="plus" size={11}/>Add item</button>
-          </div>
-        )}
-      </div>
-
-      {/* Item requests (supervisor → Purchase) */}
-      <div className="card-body" style={{ borderTop: '1px solid var(--border)' }}>
-        <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Item requests {openReqs.length > 0 && <span className="badge warning">{openReqs.length} open</span>}</div>
-        {requests.length > 0 && (
-          <div className="stack" style={{ gap: 4, marginBottom: 8 }}>
-            {requests.map(r => (
-              <div key={r.id} className="queue-item">
-                <div className="grow"><div className="small">{r.qty}× {r.name}</div><div className="tiny muted">{fmtDate(r.date)} · {r.status}</div></div>
-                {r.status !== 'Fulfilled' && canFulfil && <button className="btn btn-sm btn-primary" onClick={() => fulfilRequest(r)}><Icon name="plus" size={11}/>Add to BOQ</button>}
-                {r.status === 'Fulfilled' && <span className="badge success dot">Fulfilled</span>}
+        <div className="card-body flush vg-table-scroll">
+          {rows.length === 0 ? <div className="empty">No BOQ items yet — the supervisor prepares the BOQ on the inquiry.</div> : (
+            <table className="t zebra">
+              <thead><tr>{canFulfil && <th style={{ width: 40 }}><input type="checkbox" checked={allTicked} onChange={toggleAllSend} title="Select all to send"/></th>}<th>Site item</th><th className="num">Required</th><th className="num">Received</th><th className="num">Sent</th><th className="num">Used</th><th className="num">On site</th><th>Status</th>{canFulfil && <th></th>}</tr></thead>
+              <tbody>{rows.map(r => (
+                <tr key={r.id}>
+                  {canFulfil && <td>{r.available > 0
+                    ? <input type="checkbox" checked={sel[r.id] != null} onChange={() => toggleSend(r)}/>
+                    : <Icon name="check" size={12} color="var(--success)"/>}</td>}
+                  <td>{r.name}{r.procurable ? '' : <span className="badge tiny" style={{ marginLeft: 4 }}>service</span>}{r.fromPool > 0 && <span className="badge accent tiny" style={{ marginLeft: 4 }} title="Taken from the Master Surplus Pool — off the vendor PO"><Icon name="layers" size={9}/> {r.fromPool} from master pool</span>}</td>
+                  <td className="num">{canFulfil && r.sentQty === 0 ? <input type="number" min="0" className="input mono" value={r.qty} onChange={e => editBoqQty(r, e.target.value)} style={{ width: 56, height: 24, textAlign: 'right' }}/> : r.required}</td>
+                  <td className="num">{r.procurable ? <>{r.received}{r.fromPool > 0 && <div className="tiny muted">{r.fromPool} from pool</div>}</> : <span className="muted">—</span>}</td>
+                  <td className="num">{r.sentQty || <span className="muted">0</span>}</td>
+                  <td className="num">{r.used || <span className="muted">0</span>}</td>
+                  <td className="num"><strong style={{ color: r.onSite > 0 ? 'var(--success)' : 'var(--text-muted)' }}>{r.onSite}</strong></td>
+                  <td>{r.required > 0 && r.sentQty >= r.required ? <span className="badge success dot">Fulfilled</span>
+                    : r.sentQty > 0 ? <span className="badge accent dot">Pending {r.sentQty}/{r.required}</span>
+                      : <span className="badge warning dot">Procuring</span>}</td>
+                  {canFulfil && <td style={{ whiteSpace: 'nowrap' }}>
+                    {r.available > 0 && <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                      <input type="number" min="1" max={r.available} className="input mono" placeholder={String(r.available)} value={sel[r.id] != null ? sel[r.id] : ''} onChange={e => setSendQty(r, e.target.value)} style={{ width: 46, height: 24, textAlign: 'right' }} title={`Up to ${r.available}`}/>
+                      <button className="btn btn-sm btn-primary" title="Send to supervisor" onClick={() => sendOne(r)}><Icon name="arrowRight" size={11}/>Send</button>
+                    </span>}
+                    {r.sentQty === 0 && r.available > 0 && <button className="btn btn-ghost btn-sm" title="Remove from BOQ" onClick={() => removeBoq(r)}><Icon name="x" size={11} color="var(--danger)"/></button>}
+                  </td>}
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+          {canFulfil && (
+            <div className="vg-impl-addbar">
+              <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 0 }}>
+                <input className="input" placeholder="Add an item to the site BOQ (search or type)…" value={pAddSearch} onChange={e => setPAddSearch(e.target.value)} style={{ width: '100%' }}/>
+                {pAddResults.length > 0 && <div style={{ position: 'absolute', zIndex: 20, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, marginTop: 2, width: '100%' }}>{pAddResults.map(p => <div key={p.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => purchaseAddBoq(p)}><div className="grow small">{p.name}<span className="tiny muted mono"> · {p.code}</span></div><Icon name="plus" size={11}/></div>)}</div>}
               </div>
-            ))}
-          </div>
-        )}
-        {canLog && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 0 }}>
-              <input className="input" placeholder="Request an item (search catalogue or type)…" value={reqSearch || reqName} onChange={e => { setReqSearch(e.target.value); setReqName(e.target.value); }} style={{ width: '100%' }}/>
-              {reqResults.length > 0 && <div style={{ position: 'absolute', zIndex: 20, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, marginTop: 2, width: '100%' }}>{reqResults.map(p => <div key={p.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => addRequest(p)}><div className="grow small">{p.name}</div><Icon name="plus" size={11}/></div>)}</div>}
-            </div>
-            <input type="number" min="1" className="input mono" value={reqQty} onChange={e => setReqQty(e.target.value)} style={{ width: 64 }} title="Qty"/>
-            <button className="btn btn-sm" onClick={() => addRequest(null)}><Icon name="plus" size={11}/>Request</button>
-          </div>
-        )}
-      </div>
-
-      {/* Daily usage log (supervisor) */}
-      {canLog && (
-        <div className="card-body" style={{ borderTop: '1px solid var(--border)' }}>
-          <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Post today's update</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
-            <input type="date" className="input mono" value={logDate} onChange={e => setLogDate(e.target.value)} style={{ width: 150 }}/>
-            <input type="number" min="0" className="input mono" placeholder="hours worked" value={logHours} onChange={e => setLogHours(e.target.value)} style={{ width: 120 }}/>
-          </div>
-          {rows.length > 0 && (
-            <div className="stack" style={{ gap: 6, marginBottom: 6 }}>
-              {rows.map(r => { const files = logFiles[r.id] || []; return (
-                <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-                    <label className="btn btn-ghost btn-sm" style={{ cursor: 'pointer', margin: 0 }} title="Attach site photo / PDF">
-                      <Icon name="upload" size={12}/>{files.length > 0 ? ` ${files.length}` : ''}
-                      <input type="file" accept="image/*,application/pdf,.doc,.docx" multiple style={{ display: 'none' }} onChange={e => { addFiles(r.id, e.target.files); e.target.value = ''; }}/>
-                    </label>
-                  </div>
-                  <div className="grow" style={{ minWidth: 0 }}>
-                    <span className="small trunc" style={{ display: 'block' }}>{r.name} <span className="tiny muted">(on site {r.onSite})</span></span>
-                    {files.length > 0 && (
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
-                        {files.map((f, i) => (
-                          <span key={i} className="badge tiny" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, maxWidth: 160 }} title={f.name}>
-                            <Icon name={/^image\//.test(f.type) ? 'eye' : 'file'} size={9}/>
-                            <span className="trunc" style={{ maxWidth: 110 }}>{f.name}</span>
-                            <a onClick={() => removeFile(r.id, i)} style={{ cursor: 'pointer' }} title="Remove">✕</a>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <input type="number" min="0" className="input mono" placeholder="used" value={logItems[r.id] || ''} onChange={e => setLI(r.id, e.target.value)} style={{ width: 72, height: 26, flexShrink: 0 }}/>
-                </div>
-              ); })}
+              <input type="number" min="1" className="input mono" value={pAddQty} onChange={e => setPAddQty(e.target.value)} style={{ width: 64 }} title="Qty"/>
+              <button className="btn btn-sm" onClick={() => purchaseAddBoq(null)}><Icon name="plus" size={11}/>Add item</button>
             </div>
           )}
-          <textarea className="textarea" rows="2" placeholder="Notes (optional)…" value={logNotes} onChange={e => setLogNotes(e.target.value)} style={{ marginBottom: 6 }}/>
-          <div className="tiny muted" style={{ marginBottom: 6 }}>Attach at least one site photo or PDF (per item) as proof with your update.</div>
-          <button className="btn btn-primary btn-sm" onClick={postLog} disabled={posting}><Icon name="check" size={12}/>{posting ? 'Uploading & posting…' : 'Post daily update'}</button>
         </div>
-      )}
+      </div>
 
-      {/* Day-by-day report */}
-      <div className="card-body" style={{ borderTop: '1px solid var(--border)' }}>
-        <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Daily reports ({logs.length}) · {totalHours}h total</div>
-        {logs.length === 0 ? <div className="tiny muted">No updates yet.</div> : (
-          <div className="stack" style={{ gap: 6 }}>
-            {logs.map(lg => {
-              const by = getUser(lg.by);
-              return (
-                <div key={lg.id} style={{ padding: 8, border: '1px solid var(--border)', borderRadius: 6 }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <strong className="small mono">{fmtDate(lg.date)}</strong>
-                    <span className="badge accent tiny">{lg.hours || 0}h</span>
-                    {by && <span className="tiny muted">· {by.name}</span>}
+      {/* Item requests (supervisor → Purchase) and today's update, side by side like the panels above -- two separate jobs, no longer stacked under the same border-top lines */}
+      <div className="vg-cluster">
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title"><Icon name="bell" size={14}/>Item requests</h3>
+            {openReqs.length > 0 && <span className="badge warning">{openReqs.length} open</span>}
+          </div>
+          <div className="card-body">
+            {requests.length === 0 ? <div className="tiny muted">No requests from site yet.</div> : (
+              <div className="stack" style={{ gap: 6, marginBottom: canLog ? 10 : 0 }}>
+                {requests.map(r => (
+                  <div key={r.id} className="queue-item">
+                    <div className="grow"><div className="small">{r.qty}× {r.name}</div><div className="tiny muted">{fmtDate(r.date)} · {r.status}</div></div>
+                    {r.status !== 'Fulfilled' && canFulfil && <button className="btn btn-sm btn-primary" onClick={() => fulfilRequest(r)}><Icon name="plus" size={11}/>Add to BOQ</button>}
+                    {r.status === 'Fulfilled' && <span className="badge success dot">Fulfilled</span>}
                   </div>
-                  {(lg.items || []).filter(it => Number(it.qty) > 0).length > 0 && <div className="tiny" style={{ marginTop: 3 }}>Used: {lg.items.filter(it => Number(it.qty) > 0).map(it => `${qty(it.qty)}× ${it.name}`).join(' · ')}</div>}
-                  {lg.notes && <div className="tiny muted" style={{ marginTop: 2 }}>{lg.notes}</div>}
-                  {(() => {
-                    const atts = (lg.items || []).flatMap(it => (it.files || []).map(f => ({ ...f, item: it.name })));
-                    if (!atts.length) return null;
-                    return (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                        {atts.map((f, i) => /^image\//.test(f.type || '') ? (
-                          <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" title={`${f.item} — ${f.name}`}>
-                            <img src={f.url} alt={f.name} loading="lazy" style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)', display: 'block' }}/>
-                          </a>
-                        ) : (
-                          <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: 180 }} title={`${f.item} — ${f.name}`}>
-                            <Icon name={/pdf/.test(f.type || '') ? 'file' : 'file'} size={11}/><span className="trunc">{f.name || 'document'}</span>
-                          </a>
-                        ))}
-                      </div>
-                    );
-                  })()}
+                ))}
+              </div>
+            )}
+            {canLog && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 0 }}>
+                  <input className="input" placeholder="Request an item (search catalogue or type)…" value={reqSearch || reqName} onChange={e => { setReqSearch(e.target.value); setReqName(e.target.value); }} style={{ width: '100%' }}/>
+                  {reqResults.length > 0 && <div style={{ position: 'absolute', zIndex: 20, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, marginTop: 2, width: '100%' }}>{reqResults.map(p => <div key={p.id} className="queue-item" style={{ cursor: 'pointer' }} onClick={() => addRequest(p)}><div className="grow small">{p.name}</div><Icon name="plus" size={11}/></div>)}</div>}
                 </div>
-              );
-            })}
+                <input type="number" min="1" className="input mono" value={reqQty} onChange={e => setReqQty(e.target.value)} style={{ width: 64 }} title="Qty"/>
+                <button className="btn btn-sm" onClick={() => addRequest(null)}><Icon name="plus" size={11}/>Request</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {canLog && (
+          <div className="card">
+            <div className="card-header"><h3 className="card-title"><Icon name="upload" size={14}/>Post today's update</h3></div>
+            <div className="card-body">
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                <input type="date" className="input mono" value={logDate} onChange={e => setLogDate(e.target.value)} style={{ width: 150 }}/>
+                <input type="number" min="0" className="input mono" placeholder="hours worked" value={logHours} onChange={e => setLogHours(e.target.value)} style={{ width: 120 }}/>
+              </div>
+              {rows.length > 0 && (
+                <div className="stack" style={{ gap: 8, marginBottom: 10 }}>
+                  {rows.map(r => { const files = logFiles[r.id] || []; return (
+                    <div key={r.id} className="vg-log-item">
+                      <label className="btn btn-ghost btn-sm" style={{ cursor: 'pointer', margin: 0, flexShrink: 0 }} title="Attach site photo / PDF">
+                        <Icon name="upload" size={12}/>{files.length > 0 ? ` ${files.length}` : ''}
+                        <input type="file" accept="image/*,application/pdf,.doc,.docx" multiple style={{ display: 'none' }} onChange={e => { addFiles(r.id, e.target.files); e.target.value = ''; }}/>
+                      </label>
+                      <div className="grow" style={{ minWidth: 0 }}>
+                        <span className="small trunc" style={{ display: 'block' }}>{r.name} <span className="tiny muted">(on site {r.onSite})</span></span>
+                        {files.length > 0 && (
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                            {files.map((f, i) => (
+                              <span key={i} className="badge tiny" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, maxWidth: 160 }} title={f.name}>
+                                <Icon name={/^image\//.test(f.type) ? 'eye' : 'file'} size={9}/>
+                                <span className="trunc" style={{ maxWidth: 110 }}>{f.name}</span>
+                                <a onClick={() => removeFile(r.id, i)} style={{ cursor: 'pointer' }} title="Remove">✕</a>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <input type="number" min="0" className="input mono" placeholder="used" value={logItems[r.id] || ''} onChange={e => setLI(r.id, e.target.value)} style={{ width: 72, height: 26, flexShrink: 0 }}/>
+                    </div>
+                  ); })}
+                </div>
+              )}
+              <textarea className="textarea" rows="2" placeholder="Notes (optional)…" value={logNotes} onChange={e => setLogNotes(e.target.value)} style={{ marginBottom: 6 }}/>
+              <div className="tiny muted" style={{ marginBottom: 8 }}>Attach at least one site photo or PDF (per item) as proof with your update.</div>
+              <button className="btn btn-primary btn-sm" onClick={postLog} disabled={posting}><Icon name="check" size={12}/>{posting ? 'Uploading & posting…' : 'Post daily update'}</button>
+            </div>
           </div>
         )}
+      </div>
+
+      {/* Day-by-day report -- its own card, a plain feed instead of sharing the table's card */}
+      <div className="card">
+        <div className="card-header">
+          <h3 className="card-title"><Icon name="layers" size={14}/>Daily reports</h3>
+          <span className="card-sub">{logs.length} update{logs.length === 1 ? '' : 's'} · {totalHours}h total</span>
+        </div>
+        <div className="card-body">
+          {logs.length === 0 ? <div className="tiny muted">No updates yet.</div> : (
+            <div className="stack" style={{ gap: 8 }}>
+              {logs.map(lg => {
+                const by = getUser(lg.by);
+                return (
+                  <div key={lg.id} className="vg-log-entry">
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <strong className="small mono">{fmtDate(lg.date)}</strong>
+                        <span className="badge accent tiny">{lg.hours || 0}h</span>
+                      </div>
+                      {by && <span className="tiny muted">{by.name}</span>}
+                    </div>
+                    {(lg.items || []).filter(it => Number(it.qty) > 0).length > 0 && <div className="tiny" style={{ marginTop: 5 }}>Used: {lg.items.filter(it => Number(it.qty) > 0).map(it => `${qty(it.qty)}× ${it.name}`).join(' · ')}</div>}
+                    {lg.notes && <div className="tiny muted" style={{ marginTop: 3 }}>{lg.notes}</div>}
+                    {(() => {
+                      const atts = (lg.items || []).flatMap(it => (it.files || []).map(f => ({ ...f, item: it.name })));
+                      if (!atts.length) return null;
+                      return (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 7 }}>
+                          {atts.map((f, i) => /^image\//.test(f.type || '') ? (
+                            <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" title={`${f.item} — ${f.name}`}>
+                              <img src={f.url} alt={f.name} loading="lazy" style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)', display: 'block' }}/>
+                            </a>
+                          ) : (
+                            <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: 180 }} title={`${f.item} — ${f.name}`}>
+                              <Icon name={/pdf/.test(f.type || '') ? 'file' : 'file'} size={11}/><span className="trunc">{f.name || 'document'}</span>
+                            </a>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1352,42 +1368,6 @@ function VirtualGodownView({ soId, embedded }) {
     </div>
   );
 
-  // A real CSS-3D godown floor -- genuine perspective/rotateX/translateZ
-  // crates, no canvas/WebGL/library, GPU-composited so it stays cheap on
-  // weak hardware. Crates are slots of this SO's own fulfilled proportion
-  // (inHandTotal/reqTotal), same relationship StatsStrip's Fulfilled bar
-  // already shows -- a different picture of the same proven number, not a
-  // new one. Replaces round 2's flow diagram in the same spot, after that
-  // was rejected on live review -- this one is data-driven, not decorative.
-  const ISO_SLOTS = 10;
-  const isoFilled = reqTotal > 0 ? Math.min(ISO_SLOTS, Math.max(0, Math.round((inHandTotal / reqTotal) * ISO_SLOTS))) : 0;
-  const isoBoxes = reqTotal > 0 ? Array.from({ length: ISO_SLOTS }, (_, i) => i < isoFilled) : [];
-  const justReceivedAny = Object.keys(justDone).length > 0;
-  const WarehouseScene = reqTotal > 0 && (
-    <div className="card vg-iso-card mb-3">
-      <div className="card-header">
-        <h3 className="card-title"><Icon name="warehouse" size={14}/>Godown floor</h3>
-        <span className="card-sub">{qty(inHandTotal)} in hand of {qty(reqTotal)} required · each crate ≈ {Math.max(1, Math.round(reqTotal / ISO_SLOTS))} unit(s)</span>
-      </div>
-      <div className="card-body">
-        <div className={`vg-iso-stage${justReceivedAny ? ' vg-iso-dropping' : ''}`}>
-          <div className="vg-iso-floor"/>
-          <div className="vg-iso-shelf">
-            {isoBoxes.map((filled, i) => (
-              <div key={i} className={`vg-iso-box ${filled ? 'filled' : 'empty'}`}>
-                <div className="f top"/><div className="f front"/><div className="f side"/>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="vg-iso-legend">
-          <span><i className="sw filled"/>In hand</span>
-          <span><i className="sw empty"/>Still to receive</span>
-        </div>
-      </div>
-    </div>
-  );
-
   return (
     <Wrap>
       {so.on_hold && (
@@ -1403,7 +1383,6 @@ function VirtualGodownView({ soId, embedded }) {
         </div>
       )}
       {StatsStrip}
-      {WarehouseScene}
       <div className="split-2to1">
         <div className="stack">
         <div className="vg-cluster">

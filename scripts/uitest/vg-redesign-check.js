@@ -168,7 +168,7 @@ console.log('\n[6] the repositioned card clusters are actually in the markup, no
 {
   const soHtml = render(sandbox.VirtualGodownView, { soId: 'so-1' }, 'Stores');
   check('the flow diagram is gone -- rejected after the user saw it live on the preview deploy', has(soHtml, /vg-flow/), false);
-  check('both the inflow AND outflow cards sit in a cluster, not the old single-column stack', (soHtml.match(/vg-cluster/g) || []).length, 2);
+  check('the inflow/outflow cards AND the Implementation panel\'s requests/update pair all sit in clusters, not the old single-column stack', (soHtml.match(/vg-cluster/g) || []).length, 3);
   check('the Pool-first Engine is now a connected step timeline, same six steps as before', has(soHtml, /vg-steps/) && ['Check Master Pool', 'Allocate available qty', 'Route balance to RFQ', 'GRN', 'Outflow to customer', 'Surplus'].every(l => has(soHtml, new RegExp(l))), true);
   check('the table is wrapped for contained horizontal scroll on narrow screens', has(soHtml, /vg-table-scroll/), true);
 }
@@ -179,20 +179,35 @@ console.log('\n[7] VirtualGodownList also carries the redesign\'s row styling, s
   check('rows use the new vg-list-row treatment, not the old plain table row', has(listHtml, /vg-list-row/), true);
 }
 
-console.log('\n[8] the godown floor -- the CSS-3D crate scene reflects the SAME fulfilled proportion StatsStrip already proves correct, never a second, possibly-disagreeing calculation');
+console.log('\n[8] the round 3 CSS-3D godown floor is gone -- rejected on live review, same as round 2\'s flow diagram before it');
 {
   const soHtml = render(sandbox.VirtualGodownView, { soId: 'so-1' }, 'Stores');
-  check('the scene renders for an SO with real required qty', has(soHtml, /vg-iso-stage/), true);
-  check('ten crate slots are always drawn -- a fixed proportion scale, not one crate per physical unit', (soHtml.match(/vg-iso-box (filled|empty)/g) || []).length, 10);
-  const reqM = soHtml.match(/vg-stat-value">([\d,]+)<\/div><div class="vg-stat-label">Required/);
-  const inHandM = soHtml.match(/vg-stat-value">([\d,]+)<\/div><div class="vg-stat-label">In hand/);
-  const reqTotal = reqM ? Number(reqM[1].replace(/,/g, '')) : null;
-  const inHandTotal = inHandM ? Number(inHandM[1].replace(/,/g, '')) : null;
-  check('both numbers were actually found in the markup (fixture sanity)', reqTotal > 0 && inHandTotal != null, true);
-  const expectedFilled = reqTotal > 0 ? Math.min(10, Math.max(0, Math.round((inHandTotal / reqTotal) * 10))) : 0;
-  const filledCount = (soHtml.match(/vg-iso-box filled/g) || []).length;
-  check('filled-crate count is round((In hand / Required) * 10), computed from the exact numbers StatsStrip shows', filledCount, expectedFilled);
-  check('a receive-triggered drop animation class exists in source, gated on the same justDone signal the row flash already uses', has(fs.readFileSync(path.join(dir, 'src', 'screens-godown.jsx'), 'utf8'), /vg-iso-dropping/), true);
+  check('no trace of the iso crate scene remains in the markup', has(soHtml, /vg-iso-/), false);
+}
+
+console.log('\n[9] the Implementation panel -- split from one overloaded card into four clearly separated ones, every number and row still present');
+{
+  const SO_IMPL = {
+    id: 'so-2', so_no: 'SO/FY26/0900', customer_id: 'c1', status: 'Procurement Started',
+    lines: [{ id: 'l1', bundle_qty: 1, components: [] }],
+    extra: { implementation: {
+      supervisor_id: 'u1', hourly_rate: 500,
+      boq: [{ id: 'b1', product_id: 'p1', name: 'Server CPU', qty: 4, sent_qty: 2 }],
+      daily_logs: [{ id: 'dl1', date: '2026-10-01', hours: 3, by: 'u1', notes: 'Site survey done', items: [{ boq_id: 'b1', name: 'Server CPU', qty: 1, files: [] }] }],
+      requests: [{ id: 'rq1', date: '2026-10-02', name: 'Cable ties', qty: 10, status: 'Requested', by: 'u1' }],
+    } },
+  };
+  const st = makeState({ sales_orders: [SO, SO_IMPL] });
+  const html = render(sandbox.VirtualGodownView, { soId: 'so-2' }, 'Purchase', st);
+  check('the site-items card heading is present', has(html, /Implementation — site tracking/), true);
+  check('the item-requests card is now its own heading, not a buried sub-section label', has(html, /Item requests/) && has(html, /1 open/), true);
+  check('the daily-update card is now its own heading', has(html, /Post today&#x27;s update|Post today's update/), true);
+  check('the daily-reports card is now its own heading', has(html, /Daily reports/), true);
+  check('the BOQ row\'s computed numbers (required 4, sent 2, used 1, on site 1) all survived the restructure', ['>4<', '>2<', '>1<'].every(s => has(html, new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))), true);
+  check('the partial-send status badge still computes correctly', has(html, /Pending 2\/4/), true);
+  check('the open item request (Cable ties × 10) still renders with its Add to BOQ action', has(html, /Cable ties/) && has(html, /Add to BOQ/), true);
+  check('the daily report entry\'s hours, notes and used-item line all survived', has(html, />3h</) && has(html, /Site survey done/) && has(html, /Used: 1× Server CPU/), true);
+  check('the four implementation sections now render as four separate cards, not one card with border-top dividers', (html.match(/class="card-header"/g) || []).length >= 6, true);
 }
 
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the redesigned Virtual Godown screens keep every number, control and sub-panel the originals had');

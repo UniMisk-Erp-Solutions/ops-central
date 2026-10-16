@@ -121,41 +121,56 @@ monitor, and still reading as "everything in one line." All three fixed:
   removed flow diagram's hub icon and is currently unused, left in place
   since it's harmless and may get used again.
 
-### Round 3: a real CSS-3D godown floor, not an image or a library
+### Round 3: a real CSS-3D godown floor, tried and removed
 
 The user wanted this page to actually feel like a godown — "boxes and
 inventory" — on hardware as modest as 4GB RAM with several other tabs open.
-That rules out a WebGL/Three.js scene (its own script payload, a GPU
-context per open tab, real risk of being the thing that makes the machine
-feel slow) in favor of what the browser already does for free: CSS
-`perspective` + `rotateX`/`rotateY` + `translateZ`. This is genuine 3D
-geometry — the compositor renders it exactly like it renders a hover
-shadow — not a flat isometric illustration faked with `skew()`.
+That ruled out a WebGL/Three.js scene (its own script payload, a GPU
+context per open tab) in favor of genuine CSS 3D: `perspective` +
+`rotateX`/`rotateY` + `translateZ` crates on a floor plane, proportional to
+`inHandTotal/reqTotal` (the same relationship the StatsStrip "Fulfilled"
+bar already shows, never a second calculation that could disagree with
+it), with a receive briefly bouncing the shelf via the same `justDone`
+signal the table row flash already uses.
 
-- **`.vg-iso-stage`** sits in `VirtualGodownView`, in the exact slot the
-  removed flow diagram used to occupy (right under the stats strip). A
-  floor plane (`rotateX(62deg)`, a faint grid background) grounds a row of
-  ten small CSS cubes (`.vg-iso-box`, three visible faces each — top,
-  front, side — built from `rotateX(90deg)`/`rotateY(90deg)`/`translateZ`,
-  shaded with `filter: brightness()` per face to fake directional light).
-- **The crates are proportional, not literal.** Always exactly ten slots;
-  `Math.round((inHandTotal / reqTotal) * 10)` of them render filled (solid
-  green) and the rest render as dashed outline crates. This is the same
-  relationship the StatsStrip "Fulfilled" bar already shows as a flat
-  percentage — a different picture of the one number already proven
-  correct there, never a second computation of "how much is fulfilled"
-  that could quietly disagree with it. `vg-redesign-check.js` section [8]
-  asserts the filled count is literally derived from the StatsStrip
-  numbers in the rendered markup, not hand-matched against the fixture.
-- **A receive drops a crate into place.** The scene reads the same
-  `justDone` state the table row flash already uses — no second signal for
-  "something was just received" — and briefly bounces the shelf
-  (`vgIsoDrop`, 0.5s, `prefers-reduced-motion` respected) when it's
-  non-empty. One more reflection of a receive event, not a new source of
-  truth for whether one happened.
-- Zero new dependencies, zero WebGL context, zero per-frame JS — every
-  frame is GPU compositor work the browser already does for `box-shadow`
-  and `transform` elsewhere on this page.
+It shipped, was seen live on the preview deploy, and was removed outright
+— "remove this i dont want it," no qualification. JSX, CSS and the
+`vg-redesign-check.js` assertions that proved it were all removed in the
+same change (section [8] now just asserts no `vg-iso-` trace remains).
+Second time this exact pattern has played out on this page (round 2's flow
+diagram was the first) — see the Traps entry below on what that repetition
+says about judging a decorative addition only after it's seen live, not
+before.
+
+### Round 3 (continued): the Implementation panel, simplified
+
+Many SOs are Supply + Implementation — they get a site-tracking panel
+(`VGImplPanel`) below the main VG contents: a BOQ/send table, item
+requests from the supervisor, a daily-update form, and a day-by-day
+report feed. All four used to share **one card**, separated only by
+`border-top` lines — dense, and with no visual cue for a new user about
+which block did what.
+
+- **Split into four separate cards**, same pattern the rest of this page
+  already uses: site items (its own card, now `zebra`-striped and wrapped
+  in `.vg-table-scroll` like the main VG table), then item requests paired
+  with the daily-update form in a `.vg-cluster` (the same side-by-side
+  treatment `PendingReceiptsPanel`/`VGAddFromPoolPanel` already use above
+  the main table), then daily reports as its own feed.
+- **Nothing was removed or rewired.** Every handler (`sendSelected`,
+  `postLog`, `addRequest`, `fulfilRequest`, `markDone`, `editBoqQty`,
+  `removeBoq`, …) is untouched — this was a presentation-only restructure,
+  proven by `vg-redesign-check.js` section [9] against a fixture with a
+  partially-sent BOQ line, an open item request, and a logged day with
+  hours/notes/a used item, checked card-by-card.
+- **The daily-update form's per-item rows** (`.vg-log-item`) got their own
+  bordered box instead of a bare flex line — with several BOQ items this
+  was the easiest place to lose track of which qty box belonged to which
+  item; a border per row fixes that without changing a single input.
+- **Daily report entries** (`.vg-log-entry`) got the same formalized
+  bordered-card treatment instead of one-off inline styles, with the
+  author's name moved to the opposite side of the date/hours for a
+  cleaner scan.
 
 ### Reading the main table
 
@@ -245,15 +260,17 @@ nothing else touched.
   instead of testing presence. Worth remembering for any future assertion
   on a class/string that a redesign might legitimately use more than once.
 - **A decorative visual that sounds right in text can still read as clutter
-  live.** The Round 2 flow diagram was built to spec (connected icon nodes,
-  the exact ask) and shipped clean, but the first time it was actually seen
-  running — on the branch's own preview deployment, not a description of
-  it — it was rejected outright. Removed in full (JSX in
-  `screens-godown.jsx`, CSS in `styles.css`, assertions in
-  `vg-redesign-check.js`), nothing partial left behind. Don't treat a
-  purely-decorative addition as done until it's been seen live; "matches
-  what was asked for" and "actually reads well on screen" are not the same
-  check.
+  live — and it happened twice on this page.** Round 2's flow diagram
+  (connected icon nodes) and round 3's CSS-3D godown floor (crates on a
+  perspective shelf) were each built to spec, shipped clean, and each was
+  rejected outright the first time they were actually seen running on the
+  branch's own preview deployment rather than described in a message.
+  Both were removed in full — JSX, CSS, and the `vg-redesign-check.js`
+  assertions that proved them, nothing partial left behind either time.
+  Don't treat a purely-decorative, non-data-bearing addition to this page
+  as done until it's been seen live; "matches what was asked for" and
+  "actually reads well on screen" are not the same check, and this page
+  specifically has now shown that twice.
 - **A fixed-pixel wrapper around `white-space: nowrap` text overflows
   instead of wrapping, and overflow is invisible by default.**
   `VirtualGodownList`'s status column was a bare `<div style={{ width: 90
@@ -267,11 +284,13 @@ nothing else touched.
   `white-space: normal` scoped to `.badge` only inside it) so any status
   text wraps within its own column instead of bleeding into a sibling,
   regardless of length — not a width tuned to fit today's longest label.
-- **The godown-floor crates are a proportion, not a literal unit count, and
-  that's a deliberate choice, not a corner cut.** Ten slots always render,
-  scaled by `inHandTotal/reqTotal` — an SO needing 4,000 units does not get
-  4,000 crates. The legend's exact numbers carry the literal count; the
-  crates carry the shape of "how full," the same job the `Fulfilled`
-  percentage bar already does. Don't change this to "one crate per unit"
-  without separately deciding how to cap a godown needing thousands of
-  units, which would otherwise render thousands of DOM nodes.
+- **Splitting one card into four is a presentation change only if every
+  handler stays wired to the same state.** `VGImplPanel`'s restructure
+  (one card → site items / requests+update / daily reports) touched only
+  the `return` block — `rows`, `sendSelected`, `postLog`, `addRequest`,
+  `fulfilRequest`, `markDone` and every other computation above it were
+  never touched. `vg-redesign-check.js` section [9] proves this against a
+  fixture with a *partially* sent BOQ line (not an empty or fully-done
+  one, which the panel's original fixture happened to be — an empty-BOQ
+  fixture would never have exercised the table, the per-item log rows, or
+  a real status badge, and could have passed even with a broken split).
