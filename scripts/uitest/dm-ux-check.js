@@ -99,8 +99,17 @@ check('converting notifies the SPECIFIC user who sent the request, by user_id',
   /kind: 'client-request', user_id: req\.created_by/.test(crJsx), true);
 check('Purchase still gets its own confirmation too (unchanged)',
   /role: 'Purchase',\s*\n\s*text: `\$\{newSO\.so_no\} created from/.test(crJsx), true);
-check("a client-request notification opens the requests list when clicked",
-  /n\.kind === 'client-request'\) navigate\('client-requests'\)/.test(shellJsx), true);
+check("a client-request notification opens the requests list when clicked", (() => {
+  // Behavioral, not a source-shape regex: notificationRoute() is the one
+  // definition of where a notification kind lands (see role-permissions.md),
+  // and it also checks the viewer can actually reach the destination -- so
+  // this needs the workflow flag on, same as canAccess would require live.
+  const before = sandbox.__opcWorkflow;
+  sandbox.__opcWorkflow = { client_order_requests: true };
+  const r = sandbox.notificationRoute({ kind: 'client-request' }, 'Purchase');
+  sandbox.__opcWorkflow = before;
+  return r;
+})(), 'client-requests');
 check('the bell/drawer in the topbar is not gated by nav -- every role reaches it, including one with only two pages',
   /function Topbar\(/.test(shellJsx) && !/function Topbar\([^)]*\)\s*\{\s*if\s*\(!perm/.test(shellJsx), true);
 

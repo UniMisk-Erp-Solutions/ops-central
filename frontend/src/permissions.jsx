@@ -1,14 +1,21 @@
 // OP Central — Permissions matrix + tasks engine
 // Defines what each role can see and do, and converts state into role-specific tasks.
 
+// Every nav id the Sidebar knows about (see opcNavGroups in shell.jsx),
+// minus 'platform' (gated separately, to platform master accounts, never
+// to an app role). Org Admin and Managing Director both get literally
+// every module — the one definition of "everything", so the two lists
+// can never quietly drift apart.
+const ALL_MODULES = ['dashboard','inbox','client-requests','sourcing','sales-orders','customers','godown','scm','pool','transfers','rfq','vendor-pos','grn','three-way','vendors','mapping','invoices','collections','products','settings','audit','onboarding'];
+
 const PERMISSIONS = {
   'Org Admin': {
-    nav: ['dashboard','inbox','sourcing','sales-orders','customers','godown','pool','transfers','rfq','vendor-pos','grn','three-way','vendors','invoices','collections','products','settings','audit','onboarding'],
+    nav: ALL_MODULES,
     primary: { route: 'dashboard', label: 'Dashboard' },
     can: { all: true },
   },
   'Sales': {
-    nav: ['dashboard','inbox','sourcing','sales-orders','customers','products'],
+    nav: ['dashboard','inbox','sourcing','sales-orders','customers','products','godown'],
     primary: { route: 'sourcing', label: 'Sourcing / Inquiries', icon: 'bookmark' },
     can: {
       createSO: true,
@@ -19,7 +26,7 @@ const PERMISSIONS = {
     },
   },
   'Pre-sales': {
-    nav: ['dashboard','inbox','sourcing','sales-orders','customers','vendors','products'],
+    nav: ['dashboard','inbox','sourcing','sales-orders','customers','vendors','products','godown'],
     primary: { route: 'sourcing', label: 'Sourcing / Inquiries' },
     // Pre-sales now does the inquiry vendor sourcing + margin (the step Purchase
     // used to do on inquiries). Purchase keeps post-SO procurement unchanged.
@@ -35,7 +42,10 @@ const PERMISSIONS = {
     },
   },
   'Purchase': {
-    nav: ['dashboard','inbox','client-requests','sourcing','sales-orders','godown','transfers','rfq','vendor-pos','grn','vendors','pool','products'],
+    // No 'transfers' -- Cross-SO Transfers is initiated/approved/confirmed
+    // entirely by Project Manager (+ MD/Org Admin); Purchase has no
+    // interactive role on that screen anywhere in the app.
+    nav: ['dashboard','inbox','client-requests','sourcing','sales-orders','godown','rfq','vendor-pos','grn','vendors','pool','products'],
     primary: { route: 'sourcing', label: 'Sourcing', icon: 'bookmark' },
     can: {
       createRFQ: true, selectVendor: true, createVendorPO: true, doSourcing: true,
@@ -48,12 +58,14 @@ const PERMISSIONS = {
     },
   },
   'Stores': {
-    nav: ['dashboard','inbox','vendor-pos','grn','godown','pool','products'],
+    // No 'inbox' -- this role never appears as a task owner in buildTasks(),
+    // so My Tasks would always be an empty page.
+    nav: ['dashboard','vendor-pos','grn','godown','pool','products'],
     primary: { route: 'grn', label: 'GRN', icon: 'package' },
     can: { createGRN: true, reconcileSurplus: true, viewProducts: true },
   },
   'Billing': {
-    nav: ['dashboard','inbox','sales-orders','three-way','invoices','vendor-pos'],
+    nav: ['dashboard','inbox','sales-orders','three-way','invoices','vendor-pos','godown'],
     primary: { route: 'three-way', label: '3-Way Match', icon: 'check' },
     can: {
       do3way: true, raiseInvoice: true, generateEWB: true,
@@ -61,12 +73,12 @@ const PERMISSIONS = {
     },
   },
   'Managing Director': {
-    nav: ['dashboard','inbox','sourcing','sales-orders','rfq','vendor-pos','godown','pool','transfers','invoices','collections','audit'],
+    nav: ALL_MODULES,
     primary: { route: 'inbox', label: 'Approvals queue', icon: 'bell' },
     can: { approveAll: true, viewCost: true, viewMD: true },
   },
   'Collections': {
-    nav: ['dashboard','inbox','collections','customers','invoices'],
+    nav: ['dashboard','inbox','collections','customers','invoices','godown'],
     primary: { route: 'collections', label: 'Collections', icon: 'cash' },
     can: { logFollowup: true, viewCustomers: true },
   },
@@ -80,12 +92,14 @@ const PERMISSIONS = {
   // that splits its stores may still put either half on either side of the
   // hand-off. See docs/workflow-profiles.md.
   'Stores In': {
-    nav: ['dashboard','inbox','vendor-pos','grn','godown','scm','pool','products'],
+    // No 'inbox' -- never a task owner in buildTasks().
+    nav: ['dashboard','vendor-pos','grn','godown','scm','pool','products'],
     primary: { route: 'grn', label: 'GRN', icon: 'package' },
     can: { createGRN: true, reconcileSurplus: true, viewProducts: true },
   },
   'Stores Out': {
-    nav: ['dashboard','inbox','sales-orders','godown','scm','pool','products'],
+    // No 'inbox' -- never a task owner in buildTasks().
+    nav: ['dashboard','sales-orders','godown','scm','pool','products'],
     primary: { route: 'scm', label: 'Dispatch', icon: 'truck' },
     can: { dispatch: true, viewProducts: true },
   },
@@ -99,12 +113,14 @@ const PERMISSIONS = {
   // Purchase, who does the item-name mapping and creates the real SO. See
   // docs/client-requests.md.
   //
-  // Only two pages, by request: Item Requests and SCM Tracking (pure
-  // quantities — ordered/on PO/in transit/received/dispatched — no cost, no
-  // vendor price, so it is safe for this desk the same way the rest of its
-  // access always excluded cost).
+  // Item Requests and SCM Tracking, by request (pure quantities —
+  // ordered/on PO/in transit/received/dispatched — no cost, no vendor
+  // price, so it is safe for this desk the same way the rest of its access
+  // always excluded cost), plus Dashboard and Virtual Godowns, which every
+  // role keeps. VG's main table is quantities only, same as SCM Tracking;
+  // nothing here grants this role a view of vendor cost or margin.
   'Client Facing': {
-    nav: ['client-requests', 'scm'],
+    nav: ['dashboard', 'client-requests', 'scm', 'godown'],
     // NOT 'client-requests' — that route is workflow-gated and off for most
     // organizations, and a role's primary must always be a route it can
     // actually open (roles-check asserts this for every role). 'scm' carries
@@ -116,7 +132,8 @@ const PERMISSIONS = {
   // Site supervisor for Supply+Implementation / Implementation-only orders. Sees
   // ONLY the SOs assigned to them (enforced by filtering on extra.implementation.supervisor_id).
   'Supervisor': {
-    nav: ['dashboard','inbox','sourcing','sales-orders','godown'],
+    // No 'inbox' -- never a task owner in buildTasks().
+    nav: ['dashboard','sourcing','sales-orders','godown'],
     primary: { route: 'sales-orders', label: 'My Sites', icon: 'briefcase' },
     can: { superviseImpl: true, viewProducts: true },
   },
@@ -820,6 +837,7 @@ function tasksForRole(state, role, mutate, navigate, toast) {
 }
 
 window.PERMISSIONS = PERMISSIONS;
+window.ALL_MODULES = ALL_MODULES;
 window.featureOn = featureOn;
 window.featureBlocks = featureBlocks;
 window.wf = wf;

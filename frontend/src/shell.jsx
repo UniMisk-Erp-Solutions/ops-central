@@ -251,6 +251,25 @@ function Topbar({ onOpenTweaks }) {
   );
 }
 
+// Where clicking a notification should land. A notification's role/user_id
+// TARGET and the route its KIND points at have always been two separate
+// lists — nothing guaranteed the recipient's own nav also carries that
+// route (e.g. a 'grn'-kind notification targets Billing, which has never
+// carried 'grn' in its own nav). Dashboard is the one route every role
+// keeps, so a kind the viewer cannot actually open lands there instead of
+// bouncing silently off the app-level route guard.
+function notificationRoute(n, role) {
+  const dest = n.kind === 'transfer' ? 'transfers'
+    : n.kind === 'grn' ? 'grn'
+    : n.kind === 'overdue' ? 'collections'
+    : n.kind === 'match' ? 'three-way'
+    : n.kind === 'sourcing' ? 'sourcing'
+    : n.kind === 'client-request' ? 'client-requests'
+    : 'inbox';
+  return canAccess(role, dest) ? dest : 'dashboard';
+}
+window.notificationRoute = notificationRoute;
+
 function NotificationsDrawer({ onClose, role }) {
   const { state, mutate, navigate, currentUser } = useStore();
   const items = state.notifications.filter(n => (!n.role && !n.user_id) || (n.role && n.role === role) || (n.user_id && n.user_id === currentUser));
@@ -321,13 +340,7 @@ function NotificationsDrawer({ onClose, role }) {
             <div key={n.id} className="queue-item" style={{ background: n.read ? 'transparent' : 'var(--accent-bg)' }}
                  onClick={() => {
                    mutate(s => ({ ...s, notifications: s.notifications.map(x => x.id === n.id ? {...x, read: true} : x) }));
-                   if (n.kind === 'transfer') navigate('transfers');
-                   else if (n.kind === 'grn') navigate('grn');
-                   else if (n.kind === 'overdue') navigate('collections');
-                   else if (n.kind === 'match') navigate('three-way');
-                   else if (n.kind === 'sourcing') navigate('sourcing');
-                   else if (n.kind === 'client-request') navigate('client-requests');
-                   else navigate('inbox');
+                   navigate(notificationRoute(n, role));
                    onClose();
                  }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: n.read ? 'var(--border-strong)' : 'var(--accent)' }}/>

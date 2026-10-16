@@ -4,7 +4,7 @@ Every document in `docs/`, what it covers, and who it is for. **Keep this file
 current**: when a feature changes, update its document *and* the row here. When
 something new is built, add the document *and* a row here in the same change.
 
-_Last updated: 2026-10-06_
+_Last updated: 2026-10-16_
 
 ---
 
@@ -15,6 +15,7 @@ _Last updated: 2026-10-06_
 | [architecture.md](./architecture.md) | How the app is put together | No build step, in-browser Babel, one global scope, the store, why a typo is a runtime error. **Read before touching any `.jsx`.** |
 | [multi-tenancy.md](./multi-tenancy.md) | One deployment, many companies | RLS on membership, org-scoped tables, feature flags vs workflow profiles, per-org state that lives on `window`. |
 | [workflow-profiles.md](./workflow-profiles.md) | Per-company behaviour | How `standard` and `procurement_only` differ, every switch and what it does, how to add a third company type. |
+| [role-permissions.md](./role-permissions.md) | Who sees which module | `PERMISSIONS`/`ALL_MODULES`/`perm()`/`canAccess()`; Org Admin and MD get every module, every other role only what's evidenced; why a page becoming universal (Virtual Godown) exposed dead cross-navigation links, and why the fix gates the UI element rather than broadening access. |
 
 ## The Microlink flow, end to end
 
