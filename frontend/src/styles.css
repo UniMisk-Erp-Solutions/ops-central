@@ -1059,6 +1059,8 @@ body.kbd-alt [data-kbd-shadowed]::after {
 .vg-list-row:last-child { border-bottom: none; }
 .vg-list-row:hover { background: var(--bg-subtle); }
 .vg-list-row-id { min-width: 190px; }
+.vg-list-row-status { width: 112px; flex-shrink: 0; }
+.vg-list-row-status .badge { white-space: normal; text-align: center; line-height: 1.35; }
 .vg-list-row-id .so-no { font-family: var(--mono); font-weight: 600; font-size: 13px; }
 .vg-list-row-id .cust { color: var(--text-3); font-size: 11.5px; margin-top: 1px; }
 .vg-list-row-bar { flex: 1; min-width: 120px; display: flex; flex-direction: column; gap: 4px; }
@@ -1129,6 +1131,69 @@ body.kbd-alt [data-kbd-shadowed]::after {
 .vg-page .queue-item.vg-pulse { animation: vgRowFlash 1.1s ease-out; border-radius: var(--radius); }
 @media (prefers-reduced-motion: reduce) {
   .vg-page .queue-item.vg-pulse { animation: none; }
+}
+
+/* A real CSS-3D godown floor inside each SO's own VG page -- genuine
+   perspective + rotateX/rotateY + translateZ crates, not an image, not a
+   WebGL canvas, no library. Every transform here is handled by the
+   compositor the same way a CSS hover-shadow is -- no per-frame JS, no
+   WebGL context to spin up per open tab -- which is what keeps it cheap
+   enough for a 4GB-RAM machine with several other tabs open. */
+.vg-iso-stage {
+  position: relative; height: 150px;
+  perspective: 700px;
+  display: flex; align-items: flex-end; justify-content: center;
+  overflow: hidden;
+}
+.vg-iso-floor {
+  position: absolute; left: 50%; bottom: 10px; width: 420px; height: 160px;
+  transform: translateX(-50%) rotateX(62deg);
+  background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 30px 30px;
+  background-color: var(--bg-subtle);
+  border-radius: var(--radius-lg);
+  opacity: 0.55;
+}
+.vg-iso-shelf {
+  position: relative; z-index: 1;
+  display: flex; align-items: flex-end; gap: 6px;
+  transform-style: preserve-3d;
+  transform: rotateX(20deg) rotateY(-18deg);
+}
+.vg-iso-box { position: relative; width: 28px; height: 28px; transform-style: preserve-3d; }
+.vg-iso-box .f { position: absolute; inset: 0; border-radius: 2px; }
+.vg-iso-box .top { transform: rotateX(90deg) translateZ(14px); filter: brightness(1.18); }
+.vg-iso-box .front { transform: translateZ(14px); }
+.vg-iso-box .side { transform: rotateY(90deg) translateZ(14px); filter: brightness(0.8); }
+.vg-iso-box.filled .f { background: var(--success); }
+.vg-iso-box.empty .f { background: var(--surface-2); border: 1px dashed var(--border-strong); }
+.vg-iso-legend { display: flex; gap: 16px; justify-content: center; margin-top: 10px; font-size: 11px; color: var(--text-3); }
+.vg-iso-legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.vg-iso-legend .sw.filled { background: var(--success); }
+.vg-iso-legend .sw.empty { background: var(--surface-2); border: 1px dashed var(--border-strong); }
+
+/* The "a crate just landed" cue, triggered off the exact same justDone
+   signal the table row flash already uses -- one more reflection of a
+   receive, not a second source of truth for whether one happened. */
+.vg-iso-stage.vg-iso-dropping .vg-iso-shelf { animation: vgIsoDrop 0.5s ease-out; }
+@keyframes vgIsoDrop {
+  0% { transform: rotateX(20deg) rotateY(-18deg) translateY(-14px); }
+  60% { transform: rotateX(20deg) rotateY(-18deg) translateY(3px); }
+  100% { transform: rotateX(20deg) rotateY(-18deg) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vg-iso-stage.vg-iso-dropping .vg-iso-shelf { animation: none; }
+}
+@media (max-width: 860px) {
+  .vg-iso-stage { height: 120px; }
+  .vg-iso-shelf { transform: scale(0.8) rotateX(20deg) rotateY(-18deg); }
+}
+@media (max-width: 600px) {
+  .vg-iso-box { width: 22px; height: 22px; }
+  .vg-iso-box .top, .vg-iso-box .front, .vg-iso-box .side { transform: none; }
+  .vg-iso-box .top { transform: rotateX(90deg) translateZ(11px); }
+  .vg-iso-box .front { transform: translateZ(11px); }
+  .vg-iso-box .side { transform: rotateY(90deg) translateZ(11px); }
 }
 
 /* The same "connected nodes" idea, vertical this time, for the Pool-first

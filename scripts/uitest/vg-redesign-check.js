@@ -179,5 +179,21 @@ console.log('\n[7] VirtualGodownList also carries the redesign\'s row styling, s
   check('rows use the new vg-list-row treatment, not the old plain table row', has(listHtml, /vg-list-row/), true);
 }
 
+console.log('\n[8] the godown floor -- the CSS-3D crate scene reflects the SAME fulfilled proportion StatsStrip already proves correct, never a second, possibly-disagreeing calculation');
+{
+  const soHtml = render(sandbox.VirtualGodownView, { soId: 'so-1' }, 'Stores');
+  check('the scene renders for an SO with real required qty', has(soHtml, /vg-iso-stage/), true);
+  check('ten crate slots are always drawn -- a fixed proportion scale, not one crate per physical unit', (soHtml.match(/vg-iso-box (filled|empty)/g) || []).length, 10);
+  const reqM = soHtml.match(/vg-stat-value">([\d,]+)<\/div><div class="vg-stat-label">Required/);
+  const inHandM = soHtml.match(/vg-stat-value">([\d,]+)<\/div><div class="vg-stat-label">In hand/);
+  const reqTotal = reqM ? Number(reqM[1].replace(/,/g, '')) : null;
+  const inHandTotal = inHandM ? Number(inHandM[1].replace(/,/g, '')) : null;
+  check('both numbers were actually found in the markup (fixture sanity)', reqTotal > 0 && inHandTotal != null, true);
+  const expectedFilled = reqTotal > 0 ? Math.min(10, Math.max(0, Math.round((inHandTotal / reqTotal) * 10))) : 0;
+  const filledCount = (soHtml.match(/vg-iso-box filled/g) || []).length;
+  check('filled-crate count is round((In hand / Required) * 10), computed from the exact numbers StatsStrip shows', filledCount, expectedFilled);
+  check('a receive-triggered drop animation class exists in source, gated on the same justDone signal the row flash already uses', has(fs.readFileSync(path.join(dir, 'src', 'screens-godown.jsx'), 'utf8'), /vg-iso-dropping/), true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the redesigned Virtual Godown screens keep every number, control and sub-panel the originals had');
 process.exit(bad ? 1 : 0);

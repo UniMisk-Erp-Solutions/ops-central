@@ -68,7 +68,7 @@ function VirtualGodownList() {
                   <div className="so-no">{so.so_no}</div>
                   <div className="cust trunc">{cust.name}</div>
                 </div>
-                <div style={{ width: 90 }}><StatusBadge status={so.status}/></div>
+                <div className="vg-list-row-status"><StatusBadge status={so.status}/></div>
                 <div className="vg-list-row-bar">
                   <div className="vg-bar"><span className="seg-pool" style={{ width: `${pct}%` }}/></div>
                   <div className="pct"><span>{fromPool} from pool</span><span>{totalComp} required</span></div>
@@ -1352,6 +1352,42 @@ function VirtualGodownView({ soId, embedded }) {
     </div>
   );
 
+  // A real CSS-3D godown floor -- genuine perspective/rotateX/translateZ
+  // crates, no canvas/WebGL/library, GPU-composited so it stays cheap on
+  // weak hardware. Crates are slots of this SO's own fulfilled proportion
+  // (inHandTotal/reqTotal), same relationship StatsStrip's Fulfilled bar
+  // already shows -- a different picture of the same proven number, not a
+  // new one. Replaces round 2's flow diagram in the same spot, after that
+  // was rejected on live review -- this one is data-driven, not decorative.
+  const ISO_SLOTS = 10;
+  const isoFilled = reqTotal > 0 ? Math.min(ISO_SLOTS, Math.max(0, Math.round((inHandTotal / reqTotal) * ISO_SLOTS))) : 0;
+  const isoBoxes = reqTotal > 0 ? Array.from({ length: ISO_SLOTS }, (_, i) => i < isoFilled) : [];
+  const justReceivedAny = Object.keys(justDone).length > 0;
+  const WarehouseScene = reqTotal > 0 && (
+    <div className="card vg-iso-card mb-3">
+      <div className="card-header">
+        <h3 className="card-title"><Icon name="warehouse" size={14}/>Godown floor</h3>
+        <span className="card-sub">{qty(inHandTotal)} in hand of {qty(reqTotal)} required · each crate ≈ {Math.max(1, Math.round(reqTotal / ISO_SLOTS))} unit(s)</span>
+      </div>
+      <div className="card-body">
+        <div className={`vg-iso-stage${justReceivedAny ? ' vg-iso-dropping' : ''}`}>
+          <div className="vg-iso-floor"/>
+          <div className="vg-iso-shelf">
+            {isoBoxes.map((filled, i) => (
+              <div key={i} className={`vg-iso-box ${filled ? 'filled' : 'empty'}`}>
+                <div className="f top"/><div className="f front"/><div className="f side"/>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="vg-iso-legend">
+          <span><i className="sw filled"/>In hand</span>
+          <span><i className="sw empty"/>Still to receive</span>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <Wrap>
       {so.on_hold && (
@@ -1367,6 +1403,7 @@ function VirtualGodownView({ soId, embedded }) {
         </div>
       )}
       {StatsStrip}
+      {WarehouseScene}
       <div className="split-2to1">
         <div className="stack">
         <div className="vg-cluster">

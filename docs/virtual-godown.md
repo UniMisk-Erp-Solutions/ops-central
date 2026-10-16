@@ -121,6 +121,42 @@ monitor, and still reading as "everything in one line." All three fixed:
   removed flow diagram's hub icon and is currently unused, left in place
   since it's harmless and may get used again.
 
+### Round 3: a real CSS-3D godown floor, not an image or a library
+
+The user wanted this page to actually feel like a godown — "boxes and
+inventory" — on hardware as modest as 4GB RAM with several other tabs open.
+That rules out a WebGL/Three.js scene (its own script payload, a GPU
+context per open tab, real risk of being the thing that makes the machine
+feel slow) in favor of what the browser already does for free: CSS
+`perspective` + `rotateX`/`rotateY` + `translateZ`. This is genuine 3D
+geometry — the compositor renders it exactly like it renders a hover
+shadow — not a flat isometric illustration faked with `skew()`.
+
+- **`.vg-iso-stage`** sits in `VirtualGodownView`, in the exact slot the
+  removed flow diagram used to occupy (right under the stats strip). A
+  floor plane (`rotateX(62deg)`, a faint grid background) grounds a row of
+  ten small CSS cubes (`.vg-iso-box`, three visible faces each — top,
+  front, side — built from `rotateX(90deg)`/`rotateY(90deg)`/`translateZ`,
+  shaded with `filter: brightness()` per face to fake directional light).
+- **The crates are proportional, not literal.** Always exactly ten slots;
+  `Math.round((inHandTotal / reqTotal) * 10)` of them render filled (solid
+  green) and the rest render as dashed outline crates. This is the same
+  relationship the StatsStrip "Fulfilled" bar already shows as a flat
+  percentage — a different picture of the one number already proven
+  correct there, never a second computation of "how much is fulfilled"
+  that could quietly disagree with it. `vg-redesign-check.js` section [8]
+  asserts the filled count is literally derived from the StatsStrip
+  numbers in the rendered markup, not hand-matched against the fixture.
+- **A receive drops a crate into place.** The scene reads the same
+  `justDone` state the table row flash already uses — no second signal for
+  "something was just received" — and briefly bounces the shelf
+  (`vgIsoDrop`, 0.5s, `prefers-reduced-motion` respected) when it's
+  non-empty. One more reflection of a receive event, not a new source of
+  truth for whether one happened.
+- Zero new dependencies, zero WebGL context, zero per-frame JS — every
+  frame is GPU compositor work the browser already does for `box-shadow`
+  and `transform` elsewhere on this page.
+
 ### Reading the main table
 
 | column | meaning |
@@ -218,3 +254,24 @@ nothing else touched.
   purely-decorative addition as done until it's been seen live; "matches
   what was asked for" and "actually reads well on screen" are not the same
   check.
+- **A fixed-pixel wrapper around `white-space: nowrap` text overflows
+  instead of wrapping, and overflow is invisible by default.**
+  `VirtualGodownList`'s status column was a bare `<div style={{ width: 90
+  }}>` around `StatusBadge` — fine for short labels, but `Pending Client
+  Acceptance`/`Procurement Started` (the SO lifecycle's own longer states,
+  see `SO_LIFECYCLE` in `utils.jsx`) simply overflowed the 90px box into
+  the next flex column, visually overlapping the progress bar next to it.
+  `.badge`'s `white-space: nowrap` is deliberate everywhere else it's
+  used (table cells, chips) so it was left alone; fixed instead with a
+  dedicated `.vg-list-row-status` wrapper (`flex-shrink: 0`, and
+  `white-space: normal` scoped to `.badge` only inside it) so any status
+  text wraps within its own column instead of bleeding into a sibling,
+  regardless of length — not a width tuned to fit today's longest label.
+- **The godown-floor crates are a proportion, not a literal unit count, and
+  that's a deliberate choice, not a corner cut.** Ten slots always render,
+  scaled by `inHandTotal/reqTotal` — an SO needing 4,000 units does not get
+  4,000 crates. The legend's exact numbers carry the literal count; the
+  crates carry the shape of "how full," the same job the `Fulfilled`
+  percentage bar already does. Don't change this to "one crate per unit"
+  without separately deciding how to cap a godown needing thousands of
+  units, which would otherwise render thousands of DOM nodes.
