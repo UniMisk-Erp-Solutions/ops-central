@@ -29,6 +29,7 @@ _Last updated: 2026-10-06_
 | [item-name-mapping.md](./item-name-mapping.md) | The three-name chain | Customer name → our item → vendor part number. Where each is used, how it is learned, batch matching. |
 | [vendor-po-pricing.md](./vendor-po-pricing.md) | Buying and pricing | Assign vendors by group, price history, client price beside vendor price, margin. |
 | [receiving-grn.md](./receiving-grn.md) | Goods in | Stores confirms → Purchase accepts, the receive dialog, VG tracking columns, GRN visibility, the GRN list grouped by project (same layout as Vendor POs). |
+| [virtual-godown.md](./virtual-godown.md) | Where an order's stock is | The `enriched` per-component reconciliation (six sources, one definition), the 2026-10 visual redesign (hero summary, calmer table, `.vg-page`-scoped CSS touching no other screen), receiving from here. |
 | [dispatch-invoicing.md](./dispatch-invoicing.md) | Goods out and billing | The Stores Out "ready to dispatch" queue, partial dispatch, delivery challan, invoice on dispatch, invoices in the customer's own item names. |
 | [documents.md](./documents.md) | What we print | PO e-Bill, delivery challan, tax invoice — columns, numbering, preview-equals-paper. |
 | [po-tax.md](./po-tax.md) | Tax on a purchase order | Several taxes stacked per line (GST + TDS + TCS), in bulk or per PO; why the sign and the base matter. |

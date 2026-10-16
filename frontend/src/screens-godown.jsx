@@ -6,72 +6,81 @@ function VirtualGodownList() {
   const orders = state.sales_orders.filter(s => !['Closed','Cancelled'].includes(s.status))
     .filter(s => role !== 'Supervisor' || (s.extra && s.extra.implementation && s.extra.implementation.supervisor_id === currentUser));
 
+  const poolSkus = state.pool.length;
+  const pendingTransfers = state.transfer_requests.filter(t => t.status === 'Pending').length;
+  const totalValue = orders.reduce((s,o) => s + soSubtotal(o), 0);
+
   return (
-    <div className="page">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Virtual Godowns</h1>
-          <div className="page-sub">One inventory bucket per SO · isolated from other orders · checks Master Pool first</div>
+    <div className="page vg-page">
+      <div className="vg-hero">
+        <div className="vg-hero-id">
+          <div className="vg-hero-eyebrow"><Icon name="box" size={13}/>Inventory · one bucket per order</div>
+          <div className="vg-hero-title">Virtual Godowns</div>
+          <div className="vg-hero-sub">Isolated per SO · Master Pool checked first, before a fresh PO is ever raised</div>
         </div>
-        <div className="page-actions">
+        <div className="vg-hero-actions">
           <button className="btn" onClick={() => navigate('pool')}><Icon name="layers" size={13}/>Master Pool</button>
           <button className="btn" onClick={() => navigate('transfers')}><Icon name="arrowLeftRight" size={13}/>Transfers</button>
         </div>
       </div>
 
-      <div className="kpi-grid mb-3">
-        <div className="kpi">
-          <div className="kpi-label">Active VGs</div>
-          <div className="kpi-value">{orders.length}</div>
-          <div className="kpi-delta">Per open SO</div>
+      <div className="vg-stats mb-3">
+        <div className="vg-stat">
+          <div className="vg-stat-icon accent"><Icon name="box" size={15}/></div>
+          <div className="vg-stat-value">{orders.length}</div>
+          <div className="vg-stat-label">Active VGs</div>
         </div>
-        <div className="kpi">
-          <div className="kpi-label">Total Locked Value</div>
-          <div className="kpi-value">{inrK(orders.reduce((s,o) => s + soSubtotal(o), 0))}</div>
-          <div className="kpi-delta">Across active VGs</div>
+        <div className="vg-stat">
+          <div className="vg-stat-icon success"><Icon name="cash" size={15}/></div>
+          <div className="vg-stat-value">{inrK(totalValue)}</div>
+          <div className="vg-stat-label">Locked Value</div>
         </div>
-        <div className="kpi">
-          <div className="kpi-label">Pool SKUs</div>
-          <div className="kpi-value">{state.pool.length}</div>
-          <div className="kpi-delta">Available for next SO</div>
+        <div className="vg-stat">
+          <div className="vg-stat-icon info"><Icon name="layers" size={15}/></div>
+          <div className="vg-stat-value">{poolSkus}</div>
+          <div className="vg-stat-label">Pool SKUs</div>
         </div>
-        <div className="kpi">
-          <div className="kpi-label">Pending Transfers</div>
-          <div className="kpi-value">{state.transfer_requests.filter(t => t.status === 'Pending').length}</div>
-          <div className="kpi-delta">Cross-SO requests</div>
+        <div className="vg-stat">
+          <div className="vg-stat-icon warning"><Icon name="arrowLeftRight" size={15}/></div>
+          <div className="vg-stat-value">{pendingTransfers}</div>
+          <div className="vg-stat-label">Pending Transfers</div>
         </div>
       </div>
 
       <div className="card">
-        <div className="card-header"><h3 className="card-title">Active Virtual Godowns</h3></div>
+        <div className="card-header">
+          <h3 className="card-title"><Icon name="grid" size={14}/>Active Virtual Godowns</h3>
+          <span className="card-sub">{orders.length} open order{orders.length === 1 ? '' : 's'} · click any row for the full breakdown</span>
+        </div>
         <div className="card-body flush">
-          <table className="t">
-            <thead><tr>
-              <th>SO No</th><th>Customer</th><th>Status</th><th className="num">Components</th>
-              <th className="num">Pool-fulfilled</th><th className="num">Procured</th><th className="num">Locked Value</th><th></th>
-            </tr></thead>
-            <tbody>
-              {orders.map(so => {
-                const cust = getCustomer(so.customer_id);
-                const totalComp = so.lines.reduce((sum, l) => sum + l.components.reduce((s,c) => s + c.qty, 0), 0);
-                // mock: assume some % from pool
-                const fromPool = so.id === 'so-002' ? 4 : so.id === 'so-001' ? 0 : Math.floor(totalComp * 0.15);
-                const procured = totalComp - fromPool;
-                return (
-                  <tr key={so.id} onClick={() => navigate(`godown/${so.id}`)} style={{ cursor: 'pointer' }}>
-                    <td><a className="mono">{so.so_no}</a></td>
-                    <td className="trunc">{cust.name}</td>
-                    <td><StatusBadge status={so.status}/></td>
-                    <td className="num">{totalComp}</td>
-                    <td className="num"><span className="badge accent">{fromPool}</span></td>
-                    <td className="num">{procured}</td>
-                    <td className="num">{inr(soSubtotal(so))}</td>
-                    <td><Icon name="chevronRight" size={12}/></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          {orders.length === 0 ? (
+            <div className="empty"><div className="empty-title">No active Virtual Godowns</div>They appear here the moment a Sales Order is approved.</div>
+          ) : orders.map(so => {
+            const cust = getCustomer(so.customer_id);
+            const totalComp = so.lines.reduce((sum, l) => sum + l.components.reduce((s,c) => s + c.qty, 0), 0);
+            // Real pool allocation for this SO — was a per-id mock guess before.
+            const fromPool = (so.pool_alloc || []).reduce((s, a) => s + (Number(a.qty) || 0), 0);
+            const procured = Math.max(0, totalComp - fromPool);
+            const pct = totalComp > 0 ? Math.min(100, Math.round((fromPool / totalComp) * 100)) : 0;
+            return (
+              <div key={so.id} className="vg-list-row" style={{ cursor: 'pointer' }} onClick={() => navigate(`godown/${so.id}`)}>
+                <div className="vg-list-row-id">
+                  <div className="so-no">{so.so_no}</div>
+                  <div className="cust trunc">{cust.name}</div>
+                </div>
+                <div style={{ width: 90 }}><StatusBadge status={so.status}/></div>
+                <div className="vg-list-row-bar">
+                  <div className="vg-bar"><span className="seg-pool" style={{ width: `${pct}%` }}/></div>
+                  <div className="pct"><span>{fromPool} from pool</span><span>{totalComp} required</span></div>
+                </div>
+                <div className="vg-list-row-nums">
+                  <div className="n"><span>{procured}</span><span className="l">Procured</span></div>
+                  <div className="n"><span>{inr(soSubtotal(so))}</span><span className="l">Value</span></div>
+                </div>
+                <Icon name="chevronRight" size={14} color="var(--text-3)"/>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -1141,7 +1150,7 @@ function VGImplPanel({ so }) {
 }
 
 function VirtualGodownView({ soId, embedded }) {
-  const { state, navigate, getSO, getCustomer, getProduct, mutate, getUser, currentUser, addToPool, getVendor } = useStore();
+  const { state, navigate, getSO, getCustomer, getProduct, mutate, getUser, currentUser, addToPool, getVendor, soSubtotal } = useStore();
   const toast = useToast();
   const [recvSel, setRecvSel] = React.useState({});   // product_id -> receive-now qty
   const [recvBusy, setRecvBusy] = React.useState(false);
@@ -1270,39 +1279,78 @@ function VirtualGodownView({ soId, embedded }) {
   const totalIn = Object.values(transferredIn).reduce((a, b) => a + b, 0);
   const totalOut = Object.values(transferredOut).reduce((a, b) => a + b, 0);
 
-  const Wrap = embedded ? React.Fragment : ({ children }) => (
-    <div className="page">
-      <div className="page-header">
-        <div>
-          <div className="muted tiny mb-1" style={{ cursor: 'pointer' }} onClick={() => navigate('godown')}>
+  const reqTotal = enriched.reduce((s, c) => s + (c.qty || 0), 0);
+  const inHandTotal = enriched.reduce((s, c) => s + c.inHand, 0);
+  const remainingTotal = enriched.reduce((s, c) => s + c.remaining, 0);
+  const fulfilledPct = reqTotal > 0 ? Math.min(100, Math.round((inHandTotal / reqTotal) * 100)) : 100;
+
+  // Embedded (inside the SO detail page's own tab) skips the page header —
+  // that page already has one, a second would just repeat it — but still
+  // needs the .vg-page class so the redesigned card/table look applies
+  // there too, not only on the standalone /godown/:id route.
+  const Wrap = embedded ? ({ children }) => <div className="vg-page">{children}</div> : ({ children }) => (
+    <div className="page vg-page">
+      <div className="vg-hero">
+        <div className="vg-hero-id">
+          <div className="vg-hero-back" style={{ cursor: 'pointer' }} onClick={() => navigate('godown')}>
             <Icon name="chevronLeft" size={12}/> Virtual Godowns
           </div>
-          <h1 className="page-title">VG — <span className="mono">{so.so_no}</span></h1>
-          <div className="page-sub">{cust.name} · {so.lines.length} bundle{so.lines.length > 1 ? 's' : ''} · isolated from other SOs</div>
+          <div className="vg-hero-eyebrow"><Icon name="box" size={13}/>Virtual Godown</div>
+          <div className="vg-hero-title">{so.so_no}</div>
+          <div className="vg-hero-sub">{cust.name} · {so.lines.length} bundle{so.lines.length > 1 ? 's' : ''} · isolated from other SOs</div>
         </div>
-        <div className="page-actions">
+        <div className="vg-hero-actions">
           <button className="btn" onClick={() => navigate(`sales-orders/${so.id}`)}><Icon name="receipt" size={13}/>View SO</button>
-
         </div>
       </div>
       {children}
     </div>
   );
 
+  const StatsStrip = (
+    <div className="vg-stats mb-3">
+      <div className="vg-stat">
+        <div className="vg-stat-icon accent"><Icon name="box" size={15}/></div>
+        <div className="vg-stat-value">{qty(reqTotal)}</div>
+        <div className="vg-stat-label">Required</div>
+      </div>
+      <div className="vg-stat">
+        <div className="vg-stat-icon success"><Icon name="check" size={15}/></div>
+        <div className="vg-stat-value">{qty(inHandTotal)}</div>
+        <div className="vg-stat-label">In hand</div>
+      </div>
+      <div className="vg-stat">
+        <div className="vg-stat-icon warning"><Icon name="alert" size={15}/></div>
+        <div className="vg-stat-value">{qty(remainingTotal)}</div>
+        <div className="vg-stat-label">Remaining</div>
+      </div>
+      <div className="vg-stat">
+        <div className="vg-stat-icon info"><Icon name="cash" size={15}/></div>
+        <div className="vg-stat-value">{inrK(soSubtotal(so))}</div>
+        <div className="vg-stat-label">Locked value</div>
+      </div>
+      <div className="vg-stat" style={{ flex: 1, minWidth: 160 }}>
+        <div className="vg-stat-label" style={{ display: 'flex', justifyContent: 'space-between' }}><span>Fulfilled</span><span>{fulfilledPct}%</span></div>
+        <div className="vg-bar" style={{ height: 8 }}><span className="seg-received" style={{ width: `${fulfilledPct}%` }}/></div>
+      </div>
+    </div>
+  );
+
   return (
     <Wrap>
       {so.on_hold && (
-        <div className="mb-2" style={{ padding: '8px 12px', background: 'var(--warning-bg)', border: '1px solid oklch(0.85 0.09 75)', borderRadius: 'var(--radius)', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="mb-2" style={{ padding: '8px 12px', background: 'var(--warning-bg)', border: '1px solid oklch(0.85 0.09 75)', borderRadius: 'var(--radius-lg)', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center' }}>
           <Icon name="alert" size={14} color="var(--warning)"/>
           <span><strong>{so.so_no} is on hold</strong> — its stock stays locked here but can be lent to an urgent SO via a cross-SO transfer.</span>
         </div>
       )}
       {!allReceived && enriched.some(c => c.remaining > 0) && (
-        <div className="mb-2" style={{ padding: '8px 12px', background: 'var(--info-bg)', border: '1px solid oklch(0.86 0.05 260)', borderRadius: 'var(--radius)', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        <div className="mb-2" style={{ padding: '8px 12px', background: 'var(--info-bg)', border: '1px solid oklch(0.86 0.05 260)', borderRadius: 'var(--radius-lg)', fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <Icon name="alert" size={14} color="var(--info)"/>
           <span><strong>Still to receive:</strong> {enriched.filter(c => c.remaining > 0).map(c => `${c.remaining}× ${c.product.name}`).join(' · ')}. This SO cannot be closed until every item is received.</span>
         </div>
       )}
+      {StatsStrip}
       <div className="split-2to1">
         <div className="stack">
         <PendingReceiptsPanel soId={so.id}/>
@@ -1312,7 +1360,7 @@ function VirtualGodownView({ soId, embedded }) {
         <VGPoolHistoryCard so={so}/>
         <div className="card">
           <div className="card-header">
-            <h3 className="card-title">VG Contents · {so.so_no}</h3>
+            <h3 className="card-title"><Icon name="grid" size={14}/>VG Contents · {so.so_no}</h3>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
               {allReceived
                 ? <span className="badge success dot">All received</span>
@@ -1325,7 +1373,7 @@ function VirtualGodownView({ soId, embedded }) {
             <table className="t zebra">
               <thead><tr>
                 {canReceive && <th style={{ width: 60 }}><input type="checkbox" checked={allTicked} onChange={toggleAllRecv} title="Select all to receive"/></th>}
-                <th>Component</th><th>Code</th>
+                <th>Component</th>
                 <th className="num">Required</th><th className="num">On PO</th><th className="num" title="Shipped by the vendor, not yet received">In transit</th>
                 <th className="num">From Pool</th><th className="num">Transferred</th>
                 <th className="num">Received</th><th className="num">→ Pool</th><th className="num">In hand</th><th className="num">Remaining</th><th>Status</th>{canEditBOM && <th></th>}
@@ -1333,6 +1381,7 @@ function VirtualGodownView({ soId, embedded }) {
               <tbody>
                 {enriched.map(c => {
                   const net = c.transferredIn - c.transferredOut;
+                  const rowPct = c.qty > 0 ? Math.min(100, Math.round((c.inHand / c.qty) * 100)) : (c.inHand > 0 ? 100 : 0);
                   return (
                     <tr key={c.product_id}>
                       {canReceive && <td>{c.remaining > 0 ? (
@@ -1341,21 +1390,24 @@ function VirtualGodownView({ soId, embedded }) {
                           {recvSel[c.product_id] != null && <input type="number" min="0" max={c.remaining} value={recvSel[c.product_id]} onChange={e => setRecvQty(c, e.target.value)} className="input mono" style={{ width: 44, height: 22, textAlign: 'right', padding: '0 4px' }}/>}
                         </div>
                       ) : <Icon name="check" size={12} color="var(--success)"/>}</td>}
-                      <td>{c.product.name}</td>
-                      <td className="mono small muted">{c.product.code}</td>
+                      <td style={{ minWidth: 160 }}>
+                        <div className="vg-row-name">{c.product.name}</div>
+                        <div className="vg-row-code">{c.product.code}</div>
+                        <div className="vg-bar mt-1"><span className="seg-received" style={{ width: `${rowPct}%` }}/></div>
+                      </td>
                       <td className="num">{qty(c.qty)}</td>
                       <td className="num">{c.onPO > 0
-                        ? <span className="badge" style={{ minWidth: 28, justifyContent: 'center' }} title={c.onOrder > 0 ? `${c.onOrder} not shipped by the vendor yet` : 'All of it has shipped'}>{c.onPO}</span>
-                        : <span className="muted" title="Nothing ordered for this item yet">—</span>}</td>
+                        ? <span className="vg-num-plain" title={c.onOrder > 0 ? `${c.onOrder} not shipped by the vendor yet` : 'All of it has shipped'}>{c.onPO}</span>
+                        : <span className="vg-num-muted" title="Nothing ordered for this item yet">—</span>}</td>
                       <td className="num">{c.inTransit > 0
-                        ? <span className="badge info" style={{ minWidth: 28, justifyContent: 'center' }} title="Shipped by the vendor, not yet received here">{c.inTransit}</span>
-                        : <span className="muted">—</span>}</td>
-                      <td className="num"><span className="badge accent" style={{ minWidth: 28, justifyContent: 'center' }}>{c.fromPool}</span></td>
-                      <td className="num">{net !== 0 ? <span className="badge info" style={{ minWidth: 28, justifyContent: 'center' }} title={`In ${c.transferredIn} · Out ${c.transferredOut}`}>{net > 0 ? '+' : ''}{net}</span> : <span className="muted">—</span>}</td>
-                      <td className="num">{c.grossReceived > 0 ? <span className="badge success" style={{ minWidth: 28, justifyContent: 'center' }}>{c.grossReceived}</span> : <span className="muted">0</span>}</td>
-                      <td className="num">{c.sentToPool > 0 ? <span className="badge info" style={{ minWidth: 28, justifyContent: 'center' }} title="Sent to Master Pool">{c.sentToPool}</span> : <span className="muted">0</span>}</td>
+                        ? <span className="vg-num-plain" style={{ color: 'var(--info)' }} title="Shipped by the vendor, not yet received here">{c.inTransit}</span>
+                        : <span className="vg-num-muted">—</span>}</td>
+                      <td className="num"><span className="vg-num-plain" style={{ color: 'var(--accent)' }}>{c.fromPool}</span></td>
+                      <td className="num">{net !== 0 ? <span className="vg-num-plain" style={{ color: 'var(--info)' }} title={`In ${c.transferredIn} · Out ${c.transferredOut}`}>{net > 0 ? '+' : ''}{net}</span> : <span className="vg-num-muted">—</span>}</td>
+                      <td className="num">{c.grossReceived > 0 ? <span className="vg-num-plain" style={{ color: 'var(--success)' }}>{c.grossReceived}</span> : <span className="vg-num-muted">0</span>}</td>
+                      <td className="num">{c.sentToPool > 0 ? <span className="vg-num-plain" style={{ color: 'var(--info)' }} title="Sent to Master Pool">{c.sentToPool}</span> : <span className="vg-num-muted">0</span>}</td>
                       <td className="num"><strong>{c.inHand}</strong>{c.qty ? <span className="muted">/{c.qty}</span> : null}</td>
-                      <td className="num">{c.remaining > 0 ? <strong style={{ color: 'var(--warning)' }}>{c.remaining}</strong> : <span className="muted">0</span>}</td>
+                      <td className="num">{c.remaining > 0 ? <strong style={{ color: 'var(--warning)' }}>{c.remaining}</strong> : <span className="vg-num-muted">0</span>}</td>
                       <td>
                         {c.qty > 0 && c.remaining <= 0 ? <span className="badge success dot">Fulfilled</span> :
                          c.inHand > 0 ? <span className="badge warning dot">Partial</span> :
