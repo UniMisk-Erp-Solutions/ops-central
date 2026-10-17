@@ -803,10 +803,12 @@ function StoreProvider({ children }) {
     if (window.OPC_SB) {
       const { data, error } = await window.OPC_SB.from('vendors').insert(row).select('*').single();
       if (error) return { ok: false, error: error.message };
-      setState(prev => ({ ...prev, vendors: [...prev.vendors, data] }));
+      // Prepended, same as every other list in the app — a newly added
+      // vendor belongs at the top, not sunk to the bottom of a long list.
+      setState(prev => ({ ...prev, vendors: [data, ...prev.vendors] }));
       return { ok: true, vendor: data };
     }
-    setState(prev => ({ ...prev, vendors: [...prev.vendors, row] }));
+    setState(prev => ({ ...prev, vendors: [row, ...prev.vendors] }));
     return { ok: true, vendor: row };
   }, []);
 
@@ -816,10 +818,12 @@ function StoreProvider({ children }) {
     if (window.OPC_SB) {
       const { data, error } = await window.OPC_SB.from('customers').insert(row).select('*').single();
       if (error) return { ok: false, error: error.message };
-      setState(prev => ({ ...prev, customers: [...prev.customers, data] }));
+      // Prepended, same as every other list in the app — a newly added
+      // customer belongs at the top, not sunk to the bottom of a long list.
+      setState(prev => ({ ...prev, customers: [data, ...prev.customers] }));
       return { ok: true, customer: data };
     }
-    setState(prev => ({ ...prev, customers: [...prev.customers, row] }));
+    setState(prev => ({ ...prev, customers: [row, ...prev.customers] }));
     return { ok: true, customer: row };
   }, []);
 

@@ -466,6 +466,10 @@ function ClassicDashboardBody() {
   const openOrders = allOrders.filter(s => !['Closed','Fully Paid','Cancelled'].includes(s.status));
   const pipelineValue = openOrders.reduce((sum, s) => sum + soSubtotal(s), 0);
   const invoicedThisMonth = allOrders.filter(s => s.invoice_amount).reduce((sum, s) => sum + s.invoice_amount, 0);
+  // Real output GST, summed from each order's own stamped invoice(s) — never
+  // a flat 18% of the GST-INCLUSIVE total (which double-counts the rate error
+  // on top of applying it to the wrong base in the first place).
+  const gstLiabilityMTD = allOrders.filter(s => s.invoice_amount).reduce((sum, s) => sum + soInvoicedGst(s), 0);
   const totalOutstanding = allOrders.filter(s => s.status === 'Payment Pending').reduce((sum, s) => sum + (s.invoice_amount || 0), 0);
   const overdueOrders = allOrders.filter(s => (s.days_overdue || 0) > 0);
   const overdueAmount = overdueOrders.reduce((sum, s) => sum + (s.invoice_amount || 0), 0);
@@ -520,7 +524,7 @@ function ClassicDashboardBody() {
       { label: '3-Way Match Queue', value: state.vendor_invoices.filter(v => v.status === 'Pending 3-Way Match').length, sub: 'Vendor invoices' },
       { label: 'Pending Invoices', value: allOrders.filter(s => s.status === 'Ready to Dispatch').length, sub: 'To be raised' },
       { label: 'e-Way Bills Today', value: 2, sub: 'Generated · valid' },
-      { label: 'GST Liability MTD', value: inrK(invoicedThisMonth * 0.18), sub: 'Output GST' },
+      { label: 'GST Liability MTD', value: inrK(gstLiabilityMTD), sub: 'Output GST' },
     ],
     'Collections': [
       { label: 'Total Outstanding', value: inrK(totalOutstanding), sub: `${state.sales_orders.filter(s => s.status === 'Payment Pending').length} invoices` },

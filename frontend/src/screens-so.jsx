@@ -250,9 +250,13 @@ function SalesOrderNew() {
 
   const subtotal = lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0);
   const taxableValue = subtotal; // simplification
-  const cgst = sameState ? taxableValue * 0.09 : 0;
-  const sgst = sameState ? taxableValue * 0.09 : 0;
-  const igst = sameState ? 0 : taxableValue * 0.18;
+  // The real weighted rate from these lines' own categories, not a flat 18% —
+  // just a live preview (nothing is stamped until an invoice is actually
+  // raised, where buildInvoice/invoiceTaxFromLines compute this for real).
+  const previewGstPct = window.soWeightedGstPct ? window.soWeightedGstPct({ lines }, state) : 18;
+  const cgst = sameState ? taxableValue * (previewGstPct / 2) / 100 : 0;
+  const sgst = sameState ? taxableValue * (previewGstPct / 2) / 100 : 0;
+  const igst = sameState ? 0 : taxableValue * previewGstPct / 100;
   const grandTotal = taxableValue + cgst + sgst + igst;
 
   const customOk = customFields.every(f => !f.required || (extra[f.key] !== undefined && extra[f.key] !== ''));
@@ -691,7 +695,12 @@ function SalesOrderDetail({ soId }) {
   const orderedSubtotal = soSubtotal(so);
   const billAdj = soBillAdjustment(so);
   const subtotal = soBilledSubtotal(so);   // billed = ordered − items removed at GRN
-  const grand = subtotal * 1.18;
+  // The real weighted rate from this order's own lines — this card is a
+  // live "what this order is worth" summary, not the legal tax document
+  // (the actual Invoice is where the real per-line, stamped rate lives —
+  // see buildInvoice/invoiceTaxFromLines in screens-billing.jsx).
+  const previewGstPct = window.soWeightedGstPct ? window.soWeightedGstPct(so, state) : 18;
+  const grand = subtotal + subtotal * previewGstPct / 100;
 
   const linkedPOs = state.vendor_pos.filter(p => poServesSO(p, so.id));
   const sameState = cust.state === state.org.state;
@@ -746,23 +755,25 @@ function SalesOrderDetail({ soId }) {
         return;
       }
     }
+    // Raising the tax invoice is its own real action — the exact builder every
+    // other invoicing surface uses (real per-line GST, a proper so.invoices[]
+    // entry, the shared document-numbering sequence, the open-client-review
+    // hold via soReviewStillOpen) — not a second, simpler invoice-shaped side
+    // effect bolted onto a generic status change with its own random invoice
+    // number and a flat, unrounded 18%. raiseSOInvoice decides the resulting
+    // status itself and raises its own Collections notification, so this
+    // branch does neither of those a second time.
+    if (nextAction.generatesInvoice) {
+      if (window.raiseSOInvoice) window.raiseSOInvoice(so.id, { mode: 'final' }, { mutate, toast, currentUser, getUser, getProduct });
+      return;
+    }
     const next = nextAction.next;
     const notif = nextAction.notify;
-    mutate(s => {
-      let invoiceFields = {};
-      if (nextAction.generatesInvoice && !so.invoice_no) {
-        invoiceFields = {
-          invoice_no: `INV/FY26/${String(73 + s.sales_orders.filter(x => x.invoice_no).length + Math.floor(Math.random() * 30)).padStart(4, '0')}`,
-          invoice_date: TODAY,
-          invoice_amount: subtotal * 1.18,
-        };
-      }
-      return {
-        ...s,
-        sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, status: next, ...invoiceFields } : x),
-        ...(notif ? { notifications: [{ id: 'n-act-' + Date.now(), kind: 'so', text: notif.text, date: TODAY, read: false, role: notif.role }, ...s.notifications] } : {}),
-      };
-    }, {
+    mutate(s => ({
+      ...s,
+      sales_orders: s.sales_orders.map(x => x.id === so.id ? { ...x, status: next } : x),
+      ...(notif ? { notifications: [{ id: 'n-act-' + Date.now(), kind: 'so', text: notif.text, date: TODAY, read: false, role: notif.role }, ...s.notifications] } : {}),
+    }), {
       action: 'status', entity: 'SalesOrder', entity_id: so.id, from: so.status, to: next,
     });
     toast(`${so.so_no} → ${next}${notif ? ` · ${notif.role} notified` : ''}`, 'success');
@@ -1058,10 +1069,10 @@ function SalesOrderDetail({ soId }) {
                   {billAdj > 0 && <><dt style={{ color: 'var(--danger)' }}>Less: not supplied</dt><dd className="num mono right" style={{ color: 'var(--danger)' }}>−{inr(billAdj)}</dd></>}
                   {billAdj > 0 && <><dt>Billed subtotal</dt><dd className="num mono right"><strong>{inr(subtotal)}</strong></dd></>}
                   {sameState ? (<>
-                    <dt>CGST 9%</dt><dd className="num mono right">{inr(subtotal*0.09)}</dd>
-                    <dt>SGST 9%</dt><dd className="num mono right">{inr(subtotal*0.09)}</dd>
+                    <dt>CGST {(previewGstPct/2).toFixed(1).replace(/\.0$/,'')}%</dt><dd className="num mono right">{inr(subtotal*previewGstPct/2/100)}</dd>
+                    <dt>SGST {(previewGstPct/2).toFixed(1).replace(/\.0$/,'')}%</dt><dd className="num mono right">{inr(subtotal*previewGstPct/2/100)}</dd>
                   </>) : (
-                    <><dt>IGST 18%</dt><dd className="num mono right">{inr(subtotal*0.18)}</dd></>
+                    <><dt>IGST {previewGstPct}%</dt><dd className="num mono right">{inr(subtotal*previewGstPct/100)}</dd></>
                   )}
                 </div>
                 <div className="divider"/>
@@ -1657,9 +1668,9 @@ function EditSOModal({ so, role, onClose }) {
       {lines.length > 0 && (
         <div className="card mb-2"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px' }}>
           <span className="tiny muted" style={{ fontWeight: 600 }}>Price</span>
-          <input className="input num" type="number" placeholder="margin %" value={bulkMargin}
+          <input className="input num" type="number" placeholder="markup %" value={bulkMargin}
             onChange={e => setBulkMargin(e.target.value)} style={{ width: 92, height: 28 }}
-            title="Selling price = what we pay the vendor + this %"/>
+            title="Selling price = what we pay the vendor + this % — a MARKUP on cost, not a margin on the sell price. 25 here prices at cost×1.25, a 20% margin, not 25%."/>
           <button className="btn btn-sm" disabled={bulkMargin === ''} onClick={() => applyMargin(bulkMargin, false)}
             title="Prices every item from what we actually last paid for it">
             Cost + % · all
