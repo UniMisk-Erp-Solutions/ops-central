@@ -703,6 +703,21 @@ function poLineTax(po, productId) {
   return list.length ? list[0] : { key: 'none', rate: 0 };
 }
 
+// The PO's real grand total, summed from each line's own real tax config —
+// never a flat rate. The one calculation poEbillHtml's own printable
+// document already does line by line; a caller that needs just the number
+// (not the document) uses this instead of re-deriving it with a flat
+// constant, which is exactly how VendorPODetail's header and the e-Bill
+// "Amount" field used to drift from what the Document tab actually prints.
+function poGrandTotal(po) {
+  let total = 0;
+  (po.items || []).forEach(it => {
+    const base = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+    total += taxesOn(base, poLineTaxes(po, it.product_id)).total;
+  });
+  return Math.round(total * 100) / 100;
+}
+
 // A total per tax kind, for the summary at the foot of a document. An invoice
 // has to show how much GST and how much TDS, not one blended figure.
 function taxSummary(rows) {

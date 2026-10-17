@@ -237,8 +237,12 @@ check('every role offered in Settings is a role the app defines',
 console.log('\n[6] the Sourcing "New Inquiry" gate reads the capability, not a literal list');
 check('the base Purchase role does NOT carry createSourcing -- any grant of it lives in one organization\'s own config, never in the shared code',
   !!(s.PERMISSIONS.Purchase.can || {}).createSourcing, false);
-check('Sales keeps it, unaffected', s.canDo('Sales', 'createSourcing'), true);
-check('Pre-sales keeps it, unaffected', s.canDo('Pre-sales', 'createSourcing'), true);
+check('Sales creates the inquiry', s.canDo('Sales', 'createSourcing'), true);
+// Pre-sales WORKS ON an inquiry Sales already created (doSourcing/selectVendor)
+// -- it does not originate one. SourcingNew's submit() sends every new
+// inquiry straight to role 'Pre-sales'; Pre-sales also carrying
+// createSourcing meant Pre-sales could create one and notify itself.
+check('Pre-sales does NOT create one -- it would notify itself', s.canDo('Pre-sales', 'createSourcing'), false);
 const srcJsx = fs.readFileSync(path.join(dir, 'src', 'screens-sourcing.jsx'), 'utf8');
 check('"New Inquiry" is gated on the capability now, not a hard-coded role list',
   /canCreate = canDo\(role, 'createSourcing'\)/.test(srcJsx), true);

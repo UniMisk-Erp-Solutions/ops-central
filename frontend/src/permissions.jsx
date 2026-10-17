@@ -28,9 +28,13 @@ const PERMISSIONS = {
   'Pre-sales': {
     nav: ['dashboard','inbox','sourcing','sales-orders','customers','vendors','products','godown'],
     primary: { route: 'sourcing', label: 'Sourcing / Inquiries' },
-    // Pre-sales now does the inquiry vendor sourcing + margin (the step Purchase
-    // used to do on inquiries). Purchase keeps post-SO procurement unchanged.
-    can: { createSourcing: true, doSourcing: true, selectVendor: true, viewVendors: true, viewCost: true, viewProducts: true, viewCustomers: true },
+    // Pre-sales does the inquiry's vendor sourcing + margin (the step Purchase
+    // used to do on inquiries) -- it does NOT originate the inquiry. Sales
+    // creates it (SourcingNew's own submit() sends it straight to role
+    // 'Pre-sales', status 'Sent to Pre-sales'); Pre-sales carrying
+    // createSourcing too meant Pre-sales could create one and send it to
+    // itself. Purchase keeps post-SO procurement unchanged.
+    can: { doSourcing: true, selectVendor: true, viewVendors: true, viewCost: true, viewProducts: true, viewCustomers: true },
   },
   'Project Manager': {
     nav: ['dashboard','inbox','sourcing','sales-orders','customers','godown','pool','transfers','rfq','vendor-pos','grn','invoices'],
