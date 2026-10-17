@@ -1073,10 +1073,14 @@ function ReportsPane() {
   const cust = id => (getCustomer(id) || {}).name || id;
   const vend = id => (getVendor(id) || {}).name || id;
   const prod = id => (getProduct(id) || {}).name || id;
-  const taxable = a => Math.round((a || 0) / 1.18);
+  // The real taxable/GST split from each order's own stamped invoice(s) — not
+  // a flat /1.18 back-calc, which is only ever right when every line on every
+  // order happens to carry the same GST rate. See soInvoicedTaxable/soInvoicedGst
+  // in screens-billing.jsx: both read the stored invoice.subtotal/invoice.gst,
+  // falling back to the divisor only for a true pre-invoice-object legacy SO.
 
   const builders = {
-    'Sales register (GSTR-1 ready)': () => state.sales_orders.filter(s => s.invoice_no).map(s => ({ invoice_no: s.invoice_no, date: s.invoice_date, customer: cust(s.customer_id), taxable: taxable(s.invoice_amount), gst: (s.invoice_amount || 0) - taxable(s.invoice_amount), total: s.invoice_amount })),
+    'Sales register (GSTR-1 ready)': () => state.sales_orders.filter(s => s.invoice_no).map(s => ({ invoice_no: s.invoice_no, date: s.invoice_date, customer: cust(s.customer_id), taxable: Math.round(soInvoicedTaxable(s)), gst: Math.round(soInvoicedGst(s)), total: s.invoice_amount })),
     'Purchase register (GSTR-2B reco)': () => state.vendor_pos.map(p => ({ po_no: p.po_no, vendor: vend(p.vendor_id), date: p.date, amount: p.amount, status: p.status })),
     'Stock ageing (Master Pool)': () => state.pool.map(p => ({ product: prod(p.product_id), qty: p.qty, source_so: p.source_so, received: p.received_date })),
     'Vendor performance': () => state.vendors.map(v => ({ code: v.code, name: v.name, city: v.city, rating: v.rating, terms: v.terms })),
@@ -1086,7 +1090,7 @@ function ReportsPane() {
     'Approval log': () => state.audit.filter(a => /approv/i.test(a.action || '')).map(a => ({ ts: a.ts, action: a.action, entity: a.entity, ref: a.entity_id })),
     'Cross-SO transfer log': () => state.transfer_requests.map(t => ({ id: t.id, from_so: t.from_so, to_so: t.to_so, status: t.status, reason: t.reason })),
     'Audit log': () => state.audit.map(a => ({ ts: a.ts, action: a.action, entity: a.entity, entity_id: a.entity_id, user: a.user_id })),
-    'GSTR-3B summary': () => state.sales_orders.filter(s => s.invoice_no).map(s => ({ invoice: s.invoice_no, taxable: taxable(s.invoice_amount), output_gst: (s.invoice_amount || 0) - taxable(s.invoice_amount) })),
+    'GSTR-3B summary': () => state.sales_orders.filter(s => s.invoice_no).map(s => ({ invoice: s.invoice_no, taxable: Math.round(soInvoicedTaxable(s)), output_gst: Math.round(soInvoicedGst(s)) })),
     'TDS register': () => state.vendor_invoices.map(vi => ({ invoice: vi.vendor_invoice_no, vendor: vend(vi.vendor_id), amount: vi.amount, tds: Math.round((vi.amount || 0) * 0.02) })),
   };
 

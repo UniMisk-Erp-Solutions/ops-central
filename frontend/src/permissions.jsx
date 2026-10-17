@@ -596,8 +596,15 @@ function buildTasks(state, mutate, navigate, toast) {
   // 6. SOs ready to dispatch → Billing to raise invoice
   state.sales_orders.filter(s => s.status === 'Ready to Dispatch').forEach(so => {
     const cust = state.customers.find(c => c.id === so.customer_id);
-    const billedSub = so.lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0) - (so.bill_adjustments || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
-    const value = Math.max(0, billedSub) * 1.18;
+    // The real billed subtotal (window.soBilledSubtotal also nets out
+    // non-billable value, which this task card's own amount preview did
+    // not) and the real weighted GST rate from this order's own lines —
+    // the same numbers the actual invoice will be built with.
+    const billedSub = window.soNonBillableValue
+      ? Math.max(0, so.lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0) - window.soNonBillableValue(so, state.products) - (so.bill_adjustments || []).reduce((s, a) => s + (Number(a.amount) || 0), 0))
+      : Math.max(0, so.lines.reduce((sum, l) => sum + l.bundle_qty * l.unit_price, 0) - (so.bill_adjustments || []).reduce((s, a) => s + (Number(a.amount) || 0), 0));
+    const previewPct = window.soWeightedGstPct ? window.soWeightedGstPct(so, state) : 18;
+    const value = billedSub + billedSub * previewPct / 100;
     tasks.push({
       id: `task-inv-${so.id}`,
       role: 'Billing',
@@ -610,21 +617,17 @@ function buildTasks(state, mutate, navigate, toast) {
       gate: 'Billing action',
       icon: 'receipt',
       navigateTo: `sales-orders/${so.id}`,
+      // Delegates to the exact same builder every other invoicing surface
+      // uses (real per-line GST, a proper so.invoices[] entry, the shared
+      // document-numbering sequence) — not a third hand-rolled invoice with
+      // its own random number and flat, unrounded rate. getProduct/getUser
+      // are reconstructed locally since buildTasks() is never given the
+      // store's own versions.
       approve: () => {
-        const invNo = `INV/FY26/${String(73 + Math.floor(Math.random() * 20)).padStart(4, '0')}`;
-        mutate(s => ({
-          ...s,
-          sales_orders: s.sales_orders.map(x => x.id === so.id ? {
-            ...x, status: 'Invoiced',
-            invoice_no: invNo, invoice_date: window.TODAY,
-            invoice_amount: value,
-          } : x),
-          notifications: [
-            { id: 'n-inv-' + Date.now(), kind: 'invoice', text: `${invNo} raised · awaiting payment`, date: window.TODAY, read: false, role: 'Collections' },
-            ...s.notifications,
-          ],
-        }));
-        toast(`${invNo} generated · sent to customer`, 'success');
+        if (!window.raiseSOInvoice) return;
+        const getProduct = id => (state.products || []).find(p => p.id === id);
+        const getUser = id => (state.users || []).find(u => u.id === id);
+        window.raiseSOInvoice(so.id, { mode: 'final' }, { mutate, toast, currentUser: null, getUser, getProduct });
         navigate(`invoices/${so.id}`);
       },
       approveLabel: 'Raise invoice',

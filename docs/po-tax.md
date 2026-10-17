@@ -115,8 +115,12 @@ visible.
 
 ## Not covered
 
-- **The client invoice still uses a flat 18%.** Only the PO e-Bill has per-line
-  tax so far; say the word and the same model goes there.
 - Every tax is computed on the taxable value. If your accountant needs TCS on
   the GST-inclusive amount, that is one line in `taxesOn()` — tell me and it
   becomes a per-kind setting.
+- The client invoice's own version of this (2026-10, see
+  [invoice-gst.md](./invoice-gst.md)) covers GST only — CGST+SGST/IGST at
+  each line's real rate — not the full TDS/TCS stacking model above. That's
+  deliberate, not a gap left for later: TDS/TCS are a vendor-PAYMENT
+  withholding concept, not something a seller withholds from its own
+  customer.

@@ -1,5 +1,25 @@
 // OP Central — Billing screens: Invoice list/detail, e-Way Bill, Collections, Customer Ledger
 
+// Real taxable/GST for an SO's invoice(s) — summed from the stored, STAMPED
+// subtotal/gst on each one (which may carry several different real per-line
+// rates once invoiceTaxFromLines is involved — see buildInvoice and
+// neighbours), never backed out of the inclusive total by a flat divisor.
+// The /1.18 back-calc below only ever applies to a genuinely legacy SO that
+// predates the invoice-object system (invoice_no set, invoices empty) and
+// so has no stored breakdown to sum in the first place.
+function soInvoicedTaxable(so) {
+  const invs = so.invoices || [];
+  if (invs.length) return invs.reduce((a, i) => a + (i.subtotal || 0), 0);
+  return (so.invoice_amount || 0) / 1.18;
+}
+function soInvoicedGst(so) {
+  const invs = so.invoices || [];
+  if (invs.length) return invs.reduce((a, i) => a + (i.gst || 0), 0);
+  return (so.invoice_amount || 0) - soInvoicedTaxable(so);
+}
+window.soInvoicedTaxable = soInvoicedTaxable;
+window.soInvoicedGst = soInvoicedGst;
+
 function InvoiceList() {
   const { state, navigate, getCustomer } = useStore();
   const invoices = state.sales_orders.filter(s => s.invoice_no);
@@ -19,7 +39,7 @@ function InvoiceList() {
 
       <div className="kpi-grid mb-3">
         <div className="kpi"><div className="kpi-label">Invoiced MTD</div><div className="kpi-value">{inrK(invoices.reduce((s,i) => s + i.invoice_amount, 0))}</div><div className="kpi-delta"><Delta value={8}/></div></div>
-        <div className="kpi"><div className="kpi-label">Output GST</div><div className="kpi-value">{inrK(invoices.reduce((s,i) => s + i.invoice_amount, 0) * 0.18 / 1.18)}</div><div className="kpi-delta">May 2026</div></div>
+        <div className="kpi"><div className="kpi-label">Output GST</div><div className="kpi-value">{inrK(invoices.reduce((s, so) => s + soInvoicedGst(so), 0))}</div><div className="kpi-delta">May 2026</div></div>
         <div className="kpi"><div className="kpi-label">e-Way Bills</div><div className="kpi-value">{invoices.length}</div><div className="kpi-delta">All active · NIC linked</div></div>
         <div className="kpi"><div className="kpi-label">e-Invoice IRN</div><div className="kpi-value">{invoices.length}</div><div className="kpi-delta">Generated · QR linked</div></div>
       </div>
@@ -42,8 +62,8 @@ function InvoiceList() {
             <tbody>
               {invoices.map(so => {
                 const c = getCustomer(so.customer_id);
-                const taxable = so.invoice_amount / 1.18;
-                const gst = so.invoice_amount - taxable;
+                const taxable = soInvoicedTaxable(so);
+                const gst = soInvoicedGst(so);
                 return (
                   <tr key={so.id} onClick={() => navigate(`invoices/${so.id}`)} style={{ cursor: 'pointer' }}>
                     <td><a className="mono">{so.invoice_no}</a></td>
@@ -85,10 +105,18 @@ function InvoiceDetail({ soId, invId }) {
   const orderedSubtotal = soSubtotal(so);
   const billAdj = inv ? 0 : soBillAdjustment(so);
   const subtotal = inv ? (inv.subtotal || 0) : soBilledSubtotal(so);   // billed = ordered − items removed at GRN
-  const cgst = sameState ? subtotal * 0.09 : 0;
-  const sgst = sameState ? subtotal * 0.09 : 0;
-  const igst = sameState ? 0 : subtotal * 0.18;
-  const grand = subtotal + cgst + sgst + igst;
+  // A STAMPED invoice (inv) is read, never recomputed — the same subtotal
+  // and tax this document was actually built and saved with (see
+  // buildInvoice and neighbours in this file), so what prints here can never
+  // drift from what was stored, even after this fix changes the real rate
+  // math. Only the true legacy case (no invoice object at all, so.invoice_no
+  // alone) has nothing stored to read, so it computes live from the order's
+  // own lines — still the real weighted rate, not a flat 18% guess.
+  const legacyPct = inv ? 0 : soWeightedGstPct(so, state);
+  const cgst = inv ? (inv.cgst || 0) : (sameState ? subtotal * (legacyPct / 2) / 100 : 0);
+  const sgst = inv ? (inv.sgst || 0) : (sameState ? subtotal * (legacyPct / 2) / 100 : 0);
+  const igst = inv ? (inv.igst || 0) : (sameState ? 0 : subtotal * legacyPct / 100);
+  const grand = inv ? inv.total : subtotal + cgst + sgst + igst;
 
   // Indian numbers to words (simplified)
   const toWords = (n) => {
@@ -557,6 +585,70 @@ function soLineInvoicedFraction(so) {
 }
 const _nonConsolidatedTotal = (invs) => (invs || []).filter(i => !i.consolidated).reduce((a, i) => a + (i.total || 0), 0);
 
+// ===== Client invoice GST — the real per-line rate, not one flat 18% =====
+// The vendor PO's own e-Bill already taxes per line, at each line's real rate
+// (see docs/po-tax.md); the client invoice never did, despite every category
+// and product in the catalogue carrying its own real `gst` field (5/12/18/28,
+// the actual Indian slabs), populated from a customer's own imported sheet
+// when their "tax rate %" column says so (screens-import.jsx). A flat 18% on
+// a mixed-rate order was wrong by however much the other lines' real rates
+// differed from 18 — invisible as long as every seed product happened to
+// carry 18%, live the moment one doesn't.
+//
+// Stamped onto each line at build time (`gst_pct`), never re-read from the
+// catalogue later — an issued invoice's tax must not change because a
+// product's GST rate was edited afterward. No TDS/TCS here: those are a
+// vendor-PAYMENT withholding concept (see docs/po-tax.md), not a customer-
+// invoice one, so the client-invoice model only needs GST itself, split into
+// CGST+SGST within the seller's own state or IGST across states.
+function invoiceLineGstPct(state, refId, categoryId) {
+  if (categoryId) { const cat = (state.categories || []).find(c => c.id === categoryId); if (cat && cat.gst != null) return Number(cat.gst) || 0; }
+  if (refId) { const p = (state.products || []).find(x => x.id === refId); if (p && p.gst != null) return Number(p.gst) || 0; }
+  return 18;   // no category/product to read (e.g. a service line) — the one rate every seed catalogue entry and the importer's own default both carry
+}
+window.invoiceLineGstPct = invoiceLineGstPct;
+
+// Whether this order's customer sits in the selling org's own state — decides
+// CGST+SGST (within-state) vs IGST (cross-state), same rule InvoiceDetail
+// already used, now shared rather than re-derived at view time too.
+function invoiceSameState(so, state) {
+  const c = (state.customers || []).find(x => x.id === so.customer_id);
+  return !!(c && state.org && c.state === state.org.state);
+}
+window.invoiceSameState = invoiceSameState;
+
+// Sums real tax from an invoice's OWN lines, each already stamped with its
+// own gst_pct — never one rate blended across the whole subtotal. Tax is
+// rounded once, on the summed total, same single-rounding discipline
+// docs/po-tax.md already established for the PO side ("every tax is worked
+// out on the taxable value... never on a running total").
+function invoiceTaxFromLines(lines, sameState) {
+  let gst = 0;
+  (lines || []).forEach(l => { gst += (l.amount || 0) * (Number(l.gst_pct != null ? l.gst_pct : 18) || 0) / 100; });
+  gst = Math.round(gst);
+  const half = Math.round(gst / 2);
+  return sameState ? { cgst: half, sgst: gst - half, igst: 0, gst } : { cgst: 0, sgst: 0, igst: gst, gst };
+}
+window.invoiceTaxFromLines = invoiceTaxFromLines;
+
+// For the one invoice shape that bills a lump sum with no per-line detail
+// ('final' mode's single "Balance of order" line, and a legacy pre-invoice-
+// object SO with no stored breakdown at all) — the order's own lines' real
+// rates, weighted by each line's own value, so a mixed-rate order still
+// lands close to its true blended rate instead of a flat 18% that ignores
+// every rate on the order.
+function soWeightedGstPct(so, state) {
+  let weighted = 0, weightSum = 0;
+  (so.lines || []).forEach(l => {
+    const val = (l.bundle_qty || 0) * (l.unit_price || 0);
+    if (val <= 0) return;
+    weighted += val * invoiceLineGstPct(state, null, l.category_id);
+    weightSum += val;
+  });
+  return weightSum > 0 ? weighted / weightSum : 18;
+}
+window.soWeightedGstPct = soWeightedGstPct;
+
 // ===== Implementation billing (hourly rate × hours summed from the supervisor's
 // daily logs). Billed as a single 'Implementation services' line on the client
 // invoice — the BOQ items themselves never appear on it. =====
@@ -575,7 +667,7 @@ function _implDeltaLine(so) {
   const rate = Number(im.hourly_rate) || 0;
   const amount = Math.round(deltaHrs * rate);
   if (amount <= 0) return null;
-  return { kind: 'impl', ref_id: 'impl', label: `Implementation services — ${deltaHrs} hr(s) @ ${inr(rate)}/hr`, qty: deltaHrs, unit_price: rate, amount };
+  return { kind: 'impl', ref_id: 'impl', label: `Implementation services — ${deltaHrs} hr(s) @ ${inr(rate)}/hr`, qty: deltaHrs, unit_price: rate, amount, gst_pct: 18 };
 }
 
 // Item-count fractional invoice: bills the newly-fulfilled fraction of each
@@ -597,7 +689,7 @@ function buildFractionInvoice(so, state, currentUser, getUser) {
     if (amount <= 0) return;
     const cn = custRefName(l.customer_ref) || (String(l.client_name || '').trim() ? { label: l.client_name.trim(), code: '' } : null);
     lines.push({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty, unit_price: eff, amount,
-                 cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '' });
+                 cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '', gst_pct: invoiceLineGstPct(state, null, l.category_id) });
     subtotal += amount;
     (l.components || []).forEach(c => { comp[c.product_id] = (comp[c.product_id] || 0) + (c.qty || 0) * qty; });
   });
@@ -609,9 +701,10 @@ function buildFractionInvoice(so, state, currentUser, getUser) {
   const implLine = _implDeltaLine(so);
   if (implLine) { lines.push(implLine); subtotal += implLine.amount; }
   if (subtotal <= 0.5) return null;
-  const total = Math.round(subtotal * 1.18);
+  const tax = invoiceTaxFromLines(lines, invoiceSameState(so, state));
+  const total = subtotal + tax.gst;
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
-  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: _invNoFor(so, state), date: TODAY, type: 'Partial', mode: 'itemfraction', lines, comp_consumed: comp, subtotal, gst: total - subtotal, total, created_by: currentUser || null, role };
+  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: _invNoFor(so, state), date: TODAY, type: 'Partial', mode: 'itemfraction', lines, comp_consumed: comp, subtotal, cgst: tax.cgst, sgst: tax.sgst, igst: tax.igst, gst: tax.gst, total, created_by: currentUser || null, role };
   const invoices = [...(so.invoices || []), invoice];
   const nextSO = { ...so, invoices, invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices) };
   return { so: nextSO, invoice, fully: false };
@@ -642,14 +735,15 @@ function buildConsolidatedInvoice(so, state, currentUser, getUser) {
     // that would silently omit the implementation from the main invoice.
     if (im.status !== 'Done' && soImplHours(so) <= 0) return null;
   }
-  const invLines = lines.map(l => ({ l, eff: _effUnit(so, state, l) })).filter(x => x.eff > 0).map(({ l, eff }) => ({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty: l.bundle_qty || 1, unit_price: eff, amount: Math.round((l.bundle_qty || 1) * eff) }));
+  const invLines = lines.map(l => ({ l, eff: _effUnit(so, state, l) })).filter(x => x.eff > 0).map(({ l, eff }) => ({ kind: 'bundle', ref_id: l.id, category_id: l.category_id, qty: l.bundle_qty || 1, unit_price: eff, amount: Math.round((l.bundle_qty || 1) * eff), gst_pct: invoiceLineGstPct(state, null, l.category_id) }));
   // The final main invoice shows supply + the whole implementation (total hours) in one doc.
-  if (im && soImplCharge(so) > 0) invLines.push({ kind: 'impl', ref_id: 'impl', label: `Implementation services — ${soImplHours(so)} hr(s) @ ${inr(Number(im.hourly_rate) || 0)}/hr`, qty: soImplHours(so), unit_price: Number(im.hourly_rate) || 0, amount: soImplCharge(so) });
+  if (im && soImplCharge(so) > 0) invLines.push({ kind: 'impl', ref_id: 'impl', label: `Implementation services — ${soImplHours(so)} hr(s) @ ${inr(Number(im.hourly_rate) || 0)}/hr`, qty: soImplHours(so), unit_price: Number(im.hourly_rate) || 0, amount: soImplCharge(so), gst_pct: 18 });
   const subtotal = invLines.reduce((a, x) => a + x.amount, 0);
   if (subtotal <= 0.5) return null;
-  const total = Math.round(subtotal * 1.18);
+  const tax = invoiceTaxFromLines(invLines, invoiceSameState(so, state));
+  const total = subtotal + tax.gst;
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
-  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: _invNoFor(so, state), date: TODAY, type: 'Final', mode: 'consolidated', consolidated: true, lines: invLines, comp_consumed: {}, subtotal, gst: total - subtotal, total, created_by: currentUser || null, role };
+  const invoice = { id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5), no: _invNoFor(so, state), date: TODAY, type: 'Final', mode: 'consolidated', consolidated: true, lines: invLines, comp_consumed: {}, subtotal, cgst: tax.cgst, sgst: tax.sgst, igst: tax.igst, gst: tax.gst, total, created_by: currentUser || null, role };
   const invoices = [...(so.invoices || []), invoice];
   const nextSO = { ...so, invoices, status: 'Invoiced', invoice_no: invoice.no, invoice_date: TODAY, invoice_amount: _nonConsolidatedTotal(invoices) };
   return { so: nextSO, invoice, fully: true };
@@ -677,14 +771,17 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
         const cn = invoiceCustName(so, { ref_id: r.product_id }, getProduct);
         lines.push({ kind: 'component', ref_id: r.product_id, label: r.product ? r.product.name : r.product_id,
                      cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '',
-                     qty, unit_price: r.sell, amount: qty * r.sell });
+                     qty, unit_price: r.sell, amount: qty * r.sell, gst_pct: invoiceLineGstPct(state, r.product_id, null) });
         comp[r.product_id] = (comp[r.product_id] || 0) + qty; subtotal += qty * r.sell;
       }
     });
   } else if (mode === 'final') {
     soComponentState(so, state, getProduct).forEach(r => { if (r.invoiceable > 0) comp[r.product_id] = (comp[r.product_id] || 0) + r.invoiceable; });
     subtotal = remainingBilled;
-    lines.push({ kind: 'balance', ref_id: 'balance', label: 'Balance of order', qty: 1, unit_price: Math.round(subtotal), amount: Math.round(subtotal) });
+    // No single category/product here — this mode bills the whole remaining
+    // balance as one lump sum — so the rate is the order's own lines weighted
+    // by value, not a guess and not a flat 18% that ignores every real rate.
+    lines.push({ kind: 'balance', ref_id: 'balance', label: 'Balance of order', qty: 1, unit_price: Math.round(subtotal), amount: Math.round(subtotal), gst_pct: soWeightedGstPct(so, state) });
   } else { // bundle
     soInvoiceState(so, state, getProduct).forEach(x => {
       const want = sel ? (Number(sel[x.line_id]) || 0) : x.invoiceableNow;
@@ -693,7 +790,7 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
         const bl = (so.lines || []).find(y => y.id === x.line_id);
         const cn = bl ? (custRefName(bl.customer_ref) || (String(bl.client_name || '').trim() ? { label: bl.client_name.trim(), code: '' } : null)) : null;
         lines.push({ kind: 'bundle', ref_id: x.line_id, category_id: x.category_id, qty, unit_price: x.unit_price, amount: qty * x.unit_price,
-                     cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '' });
+                     cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '', gst_pct: invoiceLineGstPct(state, null, x.category_id) });
         (x.components || []).forEach(c => { comp[c.product_id] = (comp[c.product_id] || 0) + (c.qty || 0) * qty; });
         subtotal += qty * x.unit_price;
       }
@@ -701,14 +798,15 @@ function buildInvoice(so, state, opts, currentUser, getUser, getProduct) {
   }
   if (subtotal <= 0.5) return null;
   subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
-  const total = Math.round(subtotal * 1.18);
+  const tax = invoiceTaxFromLines(lines, invoiceSameState(so, state));
+  const total = subtotal + tax.gst;
   const fully = (remainingBilled - subtotal) <= 0.5;
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
   const invoice = {
     id: 'inv-' + Date.now() + Math.random().toString(36).slice(2, 5),
     no: _invNoFor(so, state), date: TODAY,
     type: fully ? 'Final' : 'Partial', mode, lines, comp_consumed: comp,
-    subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
+    subtotal, cgst: tax.cgst, sgst: tax.sgst, igst: tax.igst, gst: tax.gst, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
   // See soReviewStillOpen() in utils.jsx — don't force the stored status to
@@ -848,7 +946,7 @@ function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
       cust_label: custLabel || '',
       cust_code: it.cust_code || (fromOrder && fromOrder.code) || '',
       our_name: p ? p.name : '', our_code: p ? p.code : '',
-      qty, unit_price: rate, amount: qty * rate,
+      qty, unit_price: rate, amount: qty * rate, gst_pct: invoiceLineGstPct(state, it.product_id, null),
     });
     comp[it.product_id] = (comp[it.product_id] || 0) + qty;
     subtotal += qty * rate;
@@ -856,7 +954,8 @@ function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
   if (subtotal <= 0.5) return null;   // nothing priced yet — caller explains why
 
   subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
-  const total = Math.round(subtotal * 1.18);
+  const tax = invoiceTaxFromLines(lines, invoiceSameState(so, state));
+  const total = subtotal + tax.gst;
   const fully = (remainingBilled - subtotal) <= 0.5;
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
   const invoice = {
@@ -865,7 +964,7 @@ function buildDispatchInvoice(so, state, dc, currentUser, getUser, getProduct) {
     type: fully ? 'Final' : 'Partial', mode: 'dispatch',
     dc_id: dc.id, dc_no: dc.dc_no || '',
     lines, comp_consumed: comp,
-    subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
+    subtotal, cgst: tax.cgst, sgst: tax.sgst, igst: tax.igst, gst: tax.gst, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
   // Don't force the STORED status to 'Invoiced' while the client review is
@@ -918,7 +1017,7 @@ function buildBoqInvoice(so, state, boq, currentUser, getUser, getProduct) {
       label: (cn && cn.label) || (p ? p.name : it.product_id),
       cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '',
       our_name: p ? p.name : '', our_code: p ? p.code : '',
-      qty: q, unit_price: rate, amount: q * rate,
+      qty: q, unit_price: rate, amount: q * rate, gst_pct: invoiceLineGstPct(state, it.product_id, null),
     });
     comp[it.product_id] = (comp[it.product_id] || 0) + q;
     subtotal += q * rate;
@@ -926,7 +1025,8 @@ function buildBoqInvoice(so, state, boq, currentUser, getUser, getProduct) {
   if (subtotal <= 0.5) return null;      // nothing priced — the caller explains
 
   subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
-  const total = Math.round(subtotal * 1.18);
+  const tax = invoiceTaxFromLines(lines, invoiceSameState(so, state));
+  const total = subtotal + tax.gst;
   const fully = (remainingBilled - subtotal) <= 0.5;
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
   const invoice = {
@@ -935,7 +1035,7 @@ function buildBoqInvoice(so, state, boq, currentUser, getUser, getProduct) {
     type: fully ? 'Final' : 'Partial', mode: 'boq',
     boq_id: boq.id, boq_no: boq.no,
     lines, comp_consumed: comp,
-    subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
+    subtotal, cgst: tax.cgst, sgst: tax.sgst, igst: tax.igst, gst: tax.gst, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
   const nextSO = {
@@ -994,7 +1094,7 @@ function buildBoqFinalInvoice(so, state, currentUser, getUser, getProduct) {
       label: (cn && cn.label) || (p ? p.name : r.product_id),
       cust_label: cn ? cn.label : '', cust_code: cn ? cn.code : '',
       our_name: p ? p.name : '', our_code: p ? p.code : '',
-      qty: take, unit_price: rate, amount: take * rate,
+      qty: take, unit_price: rate, amount: take * rate, gst_pct: invoiceLineGstPct(state, r.product_id, null),
     });
     comp[r.product_id] = (comp[r.product_id] || 0) + take;
     subtotal += take * rate;
@@ -1002,7 +1102,8 @@ function buildBoqFinalInvoice(so, state, currentUser, getUser, getProduct) {
   if (subtotal <= 0.5) return null;         // nothing dispatched outside the BOQs
 
   subtotal = Math.min(Math.round(subtotal), Math.round(remainingBilled));
-  const total = Math.round(subtotal * 1.18);
+  const tax = invoiceTaxFromLines(lines, invoiceSameState(so, state));
+  const total = subtotal + tax.gst;
   const fully = (remainingBilled - subtotal) <= 0.5;
   const role = (getUser && currentUser) ? (getUser(currentUser)?.role || '') : '';
   const invoice = {
@@ -1010,7 +1111,7 @@ function buildBoqFinalInvoice(so, state, currentUser, getUser, getProduct) {
     no: _invNoFor(so, state), date: TODAY,
     type: fully ? 'Final' : 'Partial', mode: 'boq-final',
     lines, comp_consumed: comp,
-    subtotal, gst: total - subtotal, total, created_by: currentUser || null, role,
+    subtotal, cgst: tax.cgst, sgst: tax.sgst, igst: tax.igst, gst: tax.gst, total, created_by: currentUser || null, role,
   };
   const invoices = [...(so.invoices || []), invoice];
   // See soReviewStillOpen() in utils.jsx.

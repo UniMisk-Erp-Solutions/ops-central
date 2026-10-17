@@ -1596,7 +1596,9 @@ function AddToPoolModal({ onClose }) {
       const res = await saveConfig({ custom_products: [...(state.config.custom_products || []), cp] });
       if (res && res.ok === false) { setBusy(false); toast('Could not save the custom component (config write denied)'); return; }
       // …and add it locally now so it resolves immediately (products aren't diff-synced).
-      mutate(s => ({ ...s, products: s.products.some(p => p.id === cp.id) ? s.products : [...s.products, cp] }), { action: 'add-custom-product', entity: 'Product', entity_id: cp.id });
+      // Prepended, same as every other list — a newly added product belongs
+      // at the top of the catalogue, not sunk to the bottom.
+      mutate(s => ({ ...s, products: s.products.some(p => p.id === cp.id) ? s.products : [cp, ...s.products] }), { action: 'add-custom-product', entity: 'Product', entity_id: cp.id });
       await addToPool([{ product_id: cp.id, qty: n, source_so: source || null, received_date: TODAY }]);
       setBusy(false); onClose();
       toast(`Custom component ${cp.name} created & ${n} added to the pool`, 'success');
@@ -1952,12 +1954,14 @@ function NewTransferModal({ onClose, destSoId }) {
     const pn = getProduct(productId)?.name;
     mutate(s => ({
       ...s,
-      transfer_requests: [...s.transfer_requests, {
+      // Prepended, same as every other list in the app — the newest request
+      // belongs at the top, not lost at the bottom of a growing list.
+      transfer_requests: [{
         id: trId,
         from_so: fromSO, to_so: toSO,
         items: [{ product_id: productId, qty }],
         status: 'Pending', requested_by: currentUser, requested_date: TODAY, reason,
-      }],
+      }, ...s.transfer_requests],
       notifications: [
         // Source SO's PM (specific user if assigned, else any PM) + MD — either approves.
         { id: 'n-tr-' + Date.now(), kind: 'transfer', text: `Approve transfer: ${qty}× ${pn} · ${label}`, date: TODAY, read: false, ...(srcPm ? { user_id: srcPm } : { role: 'Project Manager' }) },
@@ -2055,6 +2059,13 @@ window.soFullyReceived = function (state, so) {
   (state.vendor_pos || []).forEach(p => { if (poServesSO(p, so.id)) posById[p.id] = p; });
   const recv = {}; (state.grns || []).forEach(g => { const po = posById[g.po_id]; if (po) (g.items || []).forEach(it => { recv[it.product_id] = (recv[it.product_id] || 0) + grnLineSoQty(it, po, so.id); }); });
   (so.pool_alloc || []).forEach(a => { recv[a.product_id] = (recv[a.product_id] || 0) + (Number(a.qty) || 0); });
+  // Units later diverted BACK to the Master Pool (VGPoolSendPanel) are no
+  // longer actually held by this SO — soReceivedQty already subtracts them
+  // for billing/display; this gate must agree, or an order that sent stock
+  // away after receiving it in full could still be treated as fully
+  // received and allowed to close.
+  const out = window.soPoolOut ? window.soPoolOut(so) : {};
+  Object.keys(out).forEach(pid => { recv[pid] = Math.max(0, (recv[pid] || 0) - out[pid]); });
   return Object.keys(req).every(pid => (recv[pid] || 0) >= req[pid]);
 };
 
