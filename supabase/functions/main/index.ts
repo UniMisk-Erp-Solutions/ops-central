@@ -1,8 +1,12 @@
 // Supabase Edge (Deno) — OP Central API.
 // Adds the RFQ mailer + vendor-quote intake. All secrets stay on the server:
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  — injected by the stack
-//   BREVO_API_KEY / SENDER_EMAIL / SENDER_NAME / QUOTE_BASE_URL — from env OR
+//   RESEND_API_KEY / SENDER_EMAIL / SENDER_NAME / QUOTE_BASE_URL — from env OR
 //   the server-side file /home/deno/functions/main/_secrets.json (never served).
+//   (Was Brevo until 2026-10 — api.brevo.com/v3/smtp/email — switched to
+//   Resend, api.resend.com/emails, when the Brevo key was lost in a server
+//   move. SENDER_EMAIL's domain must be a verified domain in the Resend
+//   account, or sends are rejected.)
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // CORS comes from ONE shared module (../_shared/cors.ts) so the tenant-origin
@@ -52,15 +56,19 @@ async function callerIsMasterAdmin(req: Request): Promise<boolean> {
   } catch (_) { return false; }
 }
 
-async function brevoConfig() {
-  let key = Deno.env.get("BREVO_API_KEY") || "";
-  let email = Deno.env.get("SENDER_EMAIL") || "info@unimisk.com";
+async function emailConfig() {
+  let key = Deno.env.get("RESEND_API_KEY") || "";
+  // unimisk.com is not a verified sending domain in the Resend account —
+  // byteosaurus.com is (checked 2026-10 via GET /domains). SENDER_NAME stays
+  // "Unimisk" below so vendors still see the familiar company name even
+  // though the underlying domain differs.
+  let email = Deno.env.get("SENDER_EMAIL") || "info@byteosaurus.com";
   let name = Deno.env.get("SENDER_NAME") || "Unimisk";
   let base = Deno.env.get("QUOTE_BASE_URL") || "https://ops-central.unimisk.com";
   if (!key) {
     try {
       const s = JSON.parse(await Deno.readTextFile("/home/deno/functions/main/_secrets.json"));
-      key = s.BREVO_API_KEY || key; email = s.SENDER_EMAIL || email; name = s.SENDER_NAME || name; base = s.QUOTE_BASE_URL || base;
+      key = s.RESEND_API_KEY || key; email = s.SENDER_EMAIL || email; name = s.SENDER_NAME || name; base = s.QUOTE_BASE_URL || base;
     } catch (_) { /* no secrets file */ }
   }
   return { key, email, name, base };
@@ -89,8 +97,8 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const { src_id, src_no, customer_name, org_name, vendors, items, reason } = body || {};
     if (!src_id || !Array.isArray(vendors) || !Array.isArray(items) || !items.length) return json({ error: "src_id, vendors and items are required" }, 400);
-    const cfg = await brevoConfig();
-    if (!cfg.key) return json({ error: "Email is not configured yet (BREVO_API_KEY missing on the server)" }, 500);
+    const cfg = await emailConfig();
+    if (!cfg.key) return json({ error: "Email is not configured yet (RESEND_API_KEY missing on the server)" }, 500);
     const rfqId = "rfq-" + src_id;
     const rand = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
     // Buyer-locked fields per item (price / delivery_days / payment_terms / notes):
@@ -170,8 +178,12 @@ Deno.serve(async (req: Request) => {
       const subject = (reFloat ? "Please revise your quotation" : "Request for Quotation") + (src_no ? " — " + src_no : "");
       const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:auto;color:#222"><h2 style="margin:0 0 4px">${esc(org_name || cfg.name)}</h2><p style="color:#666;margin:0 0 14px">${reFloat ? "Revised " : ""}Request for Quotation${src_no ? " — " + esc(src_no) : ""}${customer_name ? " · for " + esc(customer_name) : ""}</p>${banner}<p>Dear ${esc(v.name)},</p><p>${intro}</p><table style="border-collapse:collapse;width:100%;margin:10px 0"><thead><tr><th style="text-align:left;padding:6px 10px;background:#f5f5f5">Item</th><th style="text-align:right;padding:6px 10px;background:#f5f5f5">Qty</th></tr></thead><tbody>${mkRows(v.items)}</tbody></table><p style="text-align:center;margin:22px 0"><a href="${link}" style="background:#2b3a67;color:#fff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:600">${reFloat ? "Update your quote →" : "Enter your quote →"}</a></p><p style="color:#999;font-size:12px;word-break:break-all">Or paste this link: ${link}</p><p style="color:#999;font-size:12px">This link is unique to you — please don’t forward it.</p></div>`;
       try {
-        const r = await fetch("https://api.brevo.com/v3/smtp/email", { method: "POST", headers: { "api-key": cfg.key, "Content-Type": "application/json", accept: "application/json" }, body: JSON.stringify({ sender: { email: cfg.email, name: cfg.name }, to: [{ email: v.email, name: v.name }], subject, htmlContent: html }) });
-        sent.push({ vendor: v.name, ok: r.ok, status: r.status, refloat: reFloat });
+        // Resend: a single "Name <email>" from string, `to` as an array of
+        // plain address strings (not Brevo's {email,name} object shape).
+        const r = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: "Bearer " + cfg.key, "Content-Type": "application/json" }, body: JSON.stringify({ from: `${cfg.name} <${cfg.email}>`, to: [v.email], subject, html }) });
+        let errBody = "";
+        if (!r.ok) errBody = await r.text().catch(() => "");
+        sent.push({ vendor: v.name, ok: r.ok, status: r.status, refloat: reFloat, ...(errBody ? { error: errBody.slice(0, 300) } : {}) });
       } catch (e) { sent.push({ vendor: v.name, ok: false, error: String(e) }); }
     }
     return json({ ok: true, rfq_id: rfqId, refloat: floatedVendors.some((v: any) => (Number(v.refloat_count) || 0) > 0), sent });

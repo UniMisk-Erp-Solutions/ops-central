@@ -707,6 +707,34 @@ console.log('\n[17] previewReceivePOMapping -- the exact preview a pending recei
     box.state.vendor_pos.some(p => p.so_id === 'so-x' && p.source === 'vg-receive' && p.items.some(it => it.qty === 2)), true);
 }
 
+console.log('\n[18] SOVendorPOsTab\'s own "profit margin" summary reads the SAME soProfit() the SO Overview\'s profit panel uses, not a second formula that ignores whatever has not been procured yet');
+{
+  const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
+  const soTabBody = src.slice(src.indexOf('function SOVendorPOsTab('), src.indexOf('\nfunction ', src.indexOf('function SOVendorPOsTab(') + 1));
+  check('the grand-totals margin is computed from soProfit(), not projectSell - vendorSpend alone',
+    /soProfit\(state, so, getProduct\)/.test(soTabBody), true);
+  check('the old formula that silently treated an un-procured component as zero cost is gone',
+    /const projectMargin = projectSell - vendorSpend;/.test(soTabBody), false);
+  check('the "Vendor cost" card shows the real total cost (committed + estimated), not just what has been ordered so far',
+    /Vendor cost/.test(soTabBody) && /inrK\(projectCost\)/.test(soTabBody), true);
+}
+
+console.log('\n[19] the Vendor PO e-Bill\'s own header/footer reads each line\'s REAL tax config, not a flat 18% that the Document tab itself already disagreed with');
+{
+  const src = fs.readFileSync(path.join(dir, 'src', 'screens-procurement.jsx'), 'utf8');
+  const poDetailBody = src.slice(src.indexOf('function VendorPODetail('), src.indexOf('\nfunction ', src.indexOf('function VendorPODetail(') + 1));
+  check('subtotal/gst/grand are built from poLineTaxes + taxSummary, the same per-line engine poEbillHtml\'s printable document already uses',
+    /taxRows = po\.items\.map/.test(poDetailBody) && /taxSummary\(taxRows\)/.test(poDetailBody), true);
+  check('the old flat-18% formula is gone from this component', /const gst = subtotal \* 0\.18;/.test(poDetailBody), false);
+  check('the footer prints each real tax kind\'s own label, not a hard-coded "IGST 18%" that would be wrong the moment a line carries a different kind/rate',
+    /taxBreakdown\.map\(t =>/.test(poDetailBody), true);
+  check('the hard-coded "IGST 18%" footer label is gone', /IGST 18%<\/td>/.test(poDetailBody), false);
+
+  const saveTaxBody = src.slice(src.indexOf('const saveTax = ()'), src.indexOf('const doPrint'));
+  check('saving an edited tax config also refreshes an already-generated e-Bill\'s own stored .amount, so it cannot go stale the moment the real tax changes',
+    /ebill: \{ \.\.\.x\.ebill, amount: totals\.total \}/.test(saveTaxBody), true);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - a shared PO degrades to exactly the historic single-SO behaviour when unused, and the GRN suggestion ranks correctly without ever deciding anything itself');
 process.exit(bad ? 1 : 0);
 

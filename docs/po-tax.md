@@ -124,3 +124,25 @@ visible.
   deliberate, not a gap left for later: TDS/TCS are a vendor-PAYMENT
   withholding concept, not something a seller withholds from its own
   customer.
+
+## Traps
+
+- **The tax engine existing is not the same as every caller using it.**
+  `VendorPODetail`'s own header card and its "Generate PO e-Bill" button
+  (`genEbill`) computed their own `subtotal * 0.18`, right next to the
+  Document tab (`poEbillHtml`) that was already correctly summing
+  `poLineTaxes`/`taxesOn` per line — meaning the header could show one grand
+  total while the printable document it linked to showed another. Fixed by
+  having both read the one calculation (`poGrandTotal`/`taxSummary`, see
+  `utils.jsx`), the same one `poEbillHtml` always used. Grep for
+  `poLineTaxes(` / `taxesOn(` / `taxSummary(` before assuming a PO's tax is
+  computed in only one place.
+- **Saving an edited tax config doesn't refresh everything that read the
+  old one.** `saveTax()` only ever wrote `tax_config` — an already-generated
+  e-Bill's own stored `.ebill.amount` (read by `VendorPODetail`'s header,
+  independent of the live Document preview that recomputes on every render)
+  stayed at whatever it was the moment the e-Bill was first generated.
+  Editing taxes afterward made the header silently disagree with the
+  Document tab until `saveTax()` also refreshed `.ebill.amount`. The general
+  shape: a value computed once and stored needs every writer that changes
+  its inputs to also rewrite it, or it just goes stale in place.

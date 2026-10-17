@@ -347,15 +347,24 @@ function SOVendorPOsTab({ so }) {
   const { onPOByProd, receivedByProd, onPOByProdPO, receivedByProdPO } = soItemPOBreakdown(state, so, pos);
   const required = soReqComponents(so);
 
-  // Grand totals — project profit margin = our sell value − vendor spend.
   // A PO shared across SOs counts only this SO's own share here, never the
   // whole PO — identical to po.amount whenever the PO isn't actually shared.
   const poCostForSO = (po) => poLinkedSoIds(po).length > 1 ? poSoAmount(po, so.id) : (po.amount || 0);
   const poOurForSO = (po) => poLinkedSoIds(po).length > 1 ? poOurValueForSO(po, so.id, getProduct) : poOurValue(po, getProduct);
+  // Actually committed so far — real money on real POs. Still the right
+  // number for the per-PO table's own footer below (what's been placed),
+  // but NOT the whole story for "what will this order earn": a component
+  // never yet put on a PO used to read as zero cost here, so the grand
+  // totals below used the SAME soProfit() the SO Overview's own profit
+  // panel uses — committed + an estimate for what's still to buy — so the
+  // two screens can never show a different margin for the same order.
   const vendorSpend = pos.reduce((s, p) => s + poCostForSO(p), 0);
-  const projectSell = soSubtotal(so);
-  const projectMargin = projectSell - vendorSpend;
-  const marginPct = projectSell > 0 ? (projectMargin / projectSell) * 100 : 0;
+  const profit = window.soProfit ? window.soProfit(state, so, getProduct) : null;
+  const projectSell = profit ? profit.revenue : soSubtotal(so);
+  const projectCost = profit ? profit.cost : vendorSpend;
+  const projectEstimated = profit ? profit.estimated : 0;
+  const projectMargin = profit ? profit.profit : projectSell - vendorSpend;
+  const marginPct = profit && profit.margin != null ? profit.margin : (projectSell > 0 ? (projectMargin / projectSell) * 100 : 0);
   const payableBooked = pos.reduce((s, p) => s + viFor(p.id).filter(v => v.status === 'Booked').reduce((a, v) => a + (v.amount || 0), 0), 0);
 
   // Supply vs Implementation classification for the split view.
@@ -418,7 +427,7 @@ function SOVendorPOsTab({ so }) {
       <div className="mb-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Vendors</div><div style={{ fontSize: 18, fontWeight: 700 }}>{pos.length}</div></div></div>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Our value</div><div style={{ fontSize: 16, fontWeight: 700 }} className="mono">{inrK(projectSell)}</div></div></div>
-        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Vendor spend</div><div style={{ fontSize: 16, fontWeight: 700 }} className="mono">{inrK(vendorSpend)}</div></div></div>
+        <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Vendor cost</div><div style={{ fontSize: 16, fontWeight: 700 }} className="mono">{inrK(projectCost)}</div>{projectEstimated > 0 && <div className="tiny muted">{inrK(vendorSpend)} ordered + {inrK(projectEstimated)} still to buy</div>}</div></div>
         <div className="card" style={{ borderColor: projectMargin >= 0 ? 'oklch(0.85 0.06 155)' : 'oklch(0.86 0.08 25)' }}><div className="card-body" style={{ textAlign: 'center', background: projectMargin >= 0 ? 'var(--success-bg)' : 'var(--danger-bg)' }}><div className="tiny muted">Profit margin</div><div style={{ fontSize: 16, fontWeight: 700, color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }} className="mono">{inrK(projectMargin)}</div><div className="tiny" style={{ fontWeight: 600, color: projectMargin >= 0 ? 'var(--success)' : 'var(--danger)' }}>{marginPct >= 0 ? '+' : ''}{marginPct.toFixed(1)}%</div></div></div>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Payable booked</div><div style={{ fontSize: 16, fontWeight: 700 }} className="mono">{inrK(payableBooked)}</div></div></div>
       </div>
@@ -904,8 +913,14 @@ function VendorPODetail({ poId }) {
   const so = getSO(po.so_id);
   const cust = so ? getCustomer(so.customer_id) : null;
 
+  // Real tax, from each line's own config — never a flat 18%. The same
+  // per-line engine the e-Bill's own Document tab already uses
+  // (poEbillHtml), so this card's header/footer total can never drift from
+  // what the printable document actually shows. See docs/po-tax.md.
   const subtotal = po.items.reduce((s,i) => s + i.qty * i.rate, 0);
-  const gst = subtotal * 0.18;
+  const taxRows = po.items.map(it => ({ amount: (Number(it.qty) || 0) * (Number(it.rate) || 0), taxes: poLineTaxes(po, it.product_id) }));
+  const taxBreakdown = taxSummary(taxRows);
+  const gst = taxBreakdown.reduce((a, t) => a + t.amount, 0);
   const grand = subtotal + gst;
   const ebilled = po.ebill && po.ebill.generated;
   const [showVI, setShowVI] = React.useState(false);
@@ -1062,7 +1077,7 @@ function VendorPODetail({ poId }) {
                 </tbody>
                 <tfoot>
                   <tr><td colSpan="4" className="right small">Subtotal</td><td className="num">{inr(subtotal)}</td></tr>
-                  <tr><td colSpan="4" className="right small">IGST 18%</td><td className="num">{inr(gst)}</td></tr>
+                  {taxBreakdown.map(t => <tr key={t.key + '@' + t.rate}><td colSpan="4" className="right small">{t.label}</td><td className="num">{inr(t.amount)}</td></tr>)}
                   <tr><td colSpan="4" className="right"><strong>Grand Total</strong></td><td className="num"><strong>{inr(grand)}</strong></td></tr>
                 </tfoot>
               </table>
@@ -1991,7 +2006,16 @@ function POEbillModal({ po, onClose }) {
   const saveTax = () => {
     mutate(st => ({
       ...st,
-      vendor_pos: st.vendor_pos.map(x => x.id === po.id ? { ...x, tax_config: taxCfg } : x),
+      vendor_pos: st.vendor_pos.map(x => x.id === po.id ? {
+        ...x, tax_config: taxCfg,
+        // Keep the already-generated e-Bill's own stored amount in step with
+        // the tax just saved — this used to only update tax_config, leaving
+        // .ebill.amount (read elsewhere, e.g. the PO header's own total)
+        // stuck at whatever it was when the e-Bill was first generated, even
+        // though the Document tab itself already recomputes live and would
+        // disagree with it.
+        ...(x.ebill && x.ebill.generated ? { ebill: { ...x.ebill, amount: totals.total } } : {}),
+      } : x),
     }), { action: 'po-tax', entity: 'VendorPO', entity_id: po.id,
           detail: `Tax updated on ${po.po_no} · ${inr(totals.total)}` });
     setDirty(false);

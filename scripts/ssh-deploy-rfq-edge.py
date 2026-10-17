@@ -2,22 +2,26 @@
 """Deploy the RFQ edge function to the SO-PO Supabase edge runtime — SO-PO ONLY.
 
 Writes supabase/functions/main/index.ts into the Coolify functions volume and
-restarts ONLY the SO-PO edge container. If BREVO_API_KEY is set in the runner's
-env, also writes /main/_secrets.json (Brevo config) — so the key never goes
-through source or chat. Touches no other project/stack.
+restarts ONLY the SO-PO edge container. If RESEND_API_KEY is set in the
+runner's env, also writes /main/_secrets.json (email config) — so the key
+never goes through source or chat. Touches no other project/stack.
 
-Deploy code only:   SSH_PASSWORD='...' python scripts/ssh-deploy-rfq-edge.py
-With Brevo secret:  SSH_PASSWORD='...' BREVO_API_KEY='xkeysib-...' \
-                    SENDER_EMAIL='info@unimisk.com' SENDER_NAME='Unimisk' \
-                    python scripts/ssh-deploy-rfq-edge.py
+Deploy code only:    SSH_PASSWORD='...' python scripts/ssh-deploy-rfq-edge.py
+With Resend secret:  SSH_PASSWORD='...' RESEND_API_KEY='re_...' \
+                     SENDER_EMAIL='info@unimisk.com' SENDER_NAME='Unimisk' \
+                     python scripts/ssh-deploy-rfq-edge.py
 """
 import base64, json, os, sys
 import paramiko
 
-HOST = os.environ.get("SSH_HOST", "192.168.0.18")
-USER = os.environ.get("SSH_USER", "webadmin")
+# 2026-10: SO-PO moved hosts twice; these match the CURRENT topology
+# (see memory sopo-infra-topology) — 192.168.16.112 (mithilmistry) ->
+# 192.168.0.18 (webadmin) -> 192.168.23.15 (olympus), and the so-po
+# Coolify service id changed with each move.
+HOST = os.environ.get("SSH_HOST", "192.168.23.15")
+USER = os.environ.get("SSH_USER", "olympus")
 PW = os.environ.get("SSH_PASSWORD", "")
-SID = "spfohj2m4ij61p4riaup006i"
+SID = "4ds0vmygpalt2b80hwg3ji7s"
 if not PW:
     print("Set SSH_PASSWORD", file=sys.stderr); sys.exit(1)
 
@@ -25,9 +29,9 @@ idx_b64 = base64.b64encode(open("supabase/functions/main/index.ts", "rb").read()
 # Shared modules live one level up (…/functions/_shared) so every function can import them.
 cors_b64 = base64.b64encode(open("supabase/functions/_shared/cors.ts", "rb").read()).decode()
 
-# Optional Brevo secrets from the runner's env (never hardcoded).
+# Optional email secrets from the runner's env (never hardcoded).
 secrets = {}
-for k in ("BREVO_API_KEY", "SENDER_EMAIL", "SENDER_NAME", "QUOTE_BASE_URL",
+for k in ("RESEND_API_KEY", "SENDER_EMAIL", "SENDER_NAME", "QUOTE_BASE_URL",
           "VERCEL_TOKEN", "VERCEL_PROJECT_ID", "CF_API_TOKEN", "CF_ZONE_ID"):
     if os.environ.get(k):
         secrets[k] = os.environ[k]
@@ -37,7 +41,7 @@ sp = PW.replace("'", "'\"'\"'")
 write_secrets = ""
 if secrets_b64:
     write_secrets = (
-        "echo '=== write _secrets.json (Brevo) ==='\n"
+        "echo '=== write _secrets.json (email) ==='\n"
         f"echo '{secrets_b64}' | base64 -d > /tmp/_secrets.json\n"
         'SUDO cp /tmp/_secrets.json "$FNDIR/_secrets.json" && SUDO chmod 600 "$FNDIR/_secrets.json" && echo "wrote _secrets.json ($(SUDO wc -c < "$FNDIR/_secrets.json") bytes)"\n'
         "rm -f /tmp/_secrets.json\n"

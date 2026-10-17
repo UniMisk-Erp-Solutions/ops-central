@@ -142,6 +142,20 @@ lines per spot, but keeps the actual access boundary exactly where it was.
 
 ## Traps
 
+- **Two roles sharing a `can` capability can mean one of them can send a
+  workflow step to itself.** Both Sales and Pre-sales carried
+  `createSourcing`. `SourcingNew`'s own `submit()` always sends a new
+  inquiry to role `'Pre-sales'` (status `'Sent to Pre-sales'`) — correct
+  when Sales creates it, circular when Pre-sales does, since Pre-sales'
+  whole job on this screen (`doSourcing`/`selectVendor`) is to receive and
+  work an inquiry someone else raised, not originate one. Found from a
+  direct user report ("sales create sourcing inquiry and then sends to
+  presales... right now its create by presales and sends to pre sales
+  again"). Fixed by removing `createSourcing` from Pre-sales — Sales
+  already had it. The general lesson: when a `mutate()` sends a
+  notification to a fixed role, grep for every OTHER role that can also
+  trigger that same code path and ask whether sending-to-self makes sense
+  for any of them.
 - **A role's own `can` capabilities are necessary evidence, not sufficient
   evidence, for whether it needs a nav item.** Billing/`vendor-pos` and
   Pre-sales/`sales-orders` both looked like safe removals by `can` alone
