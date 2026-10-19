@@ -252,7 +252,7 @@ function StoreProvider({ children }) {
   stateRef.current = state;
   const [route, setRoute] = React.useState(() => {
     const h = window.location.hash.slice(1);
-    return h || 'dashboard';
+    return h || 'flow';
   });
   const [roleFilter, setRoleFilter] = React.useState('All');
   // realUserId = who is actually logged in (Supabase auth session → drives admin
@@ -618,7 +618,7 @@ function StoreProvider({ children }) {
 
   // Hash routing
   React.useEffect(() => {
-    const h = () => setRoute(window.location.hash.slice(1) || 'dashboard');
+    const h = () => setRoute(window.location.hash.slice(1) || 'flow');
     window.addEventListener('hashchange', h);
     return () => window.removeEventListener('hashchange', h);
   }, []);

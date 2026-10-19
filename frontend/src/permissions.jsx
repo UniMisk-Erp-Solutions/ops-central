@@ -338,6 +338,12 @@ function canAccess(role, route) {
   const allowed = Array.isArray(p.nav) ? p.nav : [];
   // The platform console is gated on being a PLATFORM admin, not on an app role.
   if (root === 'platform') return !!(typeof window !== 'undefined' && window.__opcIsMaster);
+  // The flow hub is a navigation aid, not a module with its own data or
+  // capability — every role can open it, the same way every role already
+  // has 'dashboard'. It only ever links to routes the viewer's own role can
+  // already reach (FlowStage filters by the real nav list), so this grants
+  // no access that did not already exist.
+  if (root === 'flow') return true;
   // A capability switched off for this organization hides its routes entirely.
   if (featureBlocks(root)) return false;
   // A route that only exists under a workflow this organization has not turned on.
