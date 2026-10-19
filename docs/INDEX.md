@@ -4,7 +4,7 @@ Every document in `docs/`, what it covers, and who it is for. **Keep this file
 current**: when a feature changes, update its document *and* the row here. When
 something new is built, add the document *and* a row here in the same change.
 
-_Last updated: 2026-10-16_
+_Last updated: 2026-10-19_
 
 ---
 
@@ -16,6 +16,7 @@ _Last updated: 2026-10-16_
 | [multi-tenancy.md](./multi-tenancy.md) | One deployment, many companies | RLS on membership, org-scoped tables, feature flags vs workflow profiles, per-org state that lives on `window`. |
 | [workflow-profiles.md](./workflow-profiles.md) | Per-company behaviour | How `standard` and `procurement_only` differ, every switch and what it does, how to add a third company type. |
 | [role-permissions.md](./role-permissions.md) | Who sees which module | `PERMISSIONS`/`ALL_MODULES`/`perm()`/`canAccess()`; Org Admin and MD get every module, every other role only what's evidenced; why a page becoming universal (Virtual Godown) exposed dead cross-navigation links, and why the fix gates the UI element rather than broadening access. |
+| [flow-hub.md](./flow-hub.md) | The post-login landing page | Six lifecycle stages as clickable nodes (Sales Order → Vendors → Procurement → Inventory → Dispatch → Billing), each opening a hub of the real pages for that stage, read live from the sidebar's own `opcNavGroups` so it can never show a module the role can't actually reach. Pure navigation — no new data, no new capability. |
 
 ## The Microlink flow, end to end
 

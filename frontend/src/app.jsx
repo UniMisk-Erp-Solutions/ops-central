@@ -61,7 +61,9 @@ function App() {
   // Parse route
   const parts = route.split('/');
   let Content;
-  if (route === 'dashboard') Content = <Dashboard/>;
+  if (route === 'flow') Content = <FlowHome/>;
+  else if (parts[0] === 'flow' && parts[1]) Content = <FlowStage stageId={parts[1]}/>;
+  else if (route === 'dashboard') Content = <Dashboard/>;
   else if (route === 'inbox') Content = <ApprovalInbox/>;
   else if (route === 'platform') Content = <PlatformConsole/>;
   else if (route === 'scm') Content = <SCMTracking/>;

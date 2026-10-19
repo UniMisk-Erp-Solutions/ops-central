@@ -199,7 +199,8 @@ for (const mode of ['empty', 'seeded', 'mixed']) {
 const LIST_ROUTES = ['dashboard', 'inbox', 'scm', 'mapping', 'sales-orders', 'sales-orders/new',
   'godown', 'pool', 'transfers', 'vendor-pos', 'grn', 'grn/new', 'three-way',
   'invoices', 'customers', 'vendors', 'products', 'settings', 'audit', 'collections',
-  'sourcing', 'rfq', 'client-requests', 'client-requests/new', 'platform', 'unknown-route'];
+  'sourcing', 'rfq', 'client-requests', 'client-requests/new', 'platform', 'unknown-route',
+  'flow', 'flow/sales-order', 'flow/vendors', 'flow/procurement', 'flow/inventory', 'flow/dispatch', 'flow/billing'];
 
 // DETAIL routes matter more than lists here: a list renders an empty state when
 // data is missing, but a detail screen dereferences one specific record and

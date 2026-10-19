@@ -35,8 +35,10 @@ function LoginScreen() {
       : await login(email.trim(), password);
     setBusy(false);
     if (!res.ok) { setError(res.error || 'Failed.'); return; }
-    const dest = (perm(res.user.role).primary || { route: 'dashboard' }).route;
-    navigate(dest);
+    // Every role lands on the flow hub first now, not role-specific `primary`
+    // — primary is still what a denied mid-session route falls back to (see
+    // the App-level route guard in app.jsx), unchanged.
+    navigate('flow');
   };
 
   const isSignup = mode === 'signup';
