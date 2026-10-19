@@ -320,6 +320,15 @@ check('sales orders is s', sandbox.KBD_NAV_KEY['sales-orders'], 's');
 check('vendor POs is p', sandbox.KBD_NAV_KEY['vendor-pos'], 'p');
 check('GRN is n', sandbox.KBD_NAV_KEY['grn'], 'n');
 
+console.log('\n[5h2] Alt+letter for a screen resolves without a sidebar to click');
+// There is no sidebar in the app any more. Alt+letter used to find and click
+// its link; now a screen letter resolves straight from the g-jump table.
+check('Alt+s resolves to the sales orders route', sandbox.kbdAccessRoute('s'), 'sales-orders');
+check('Alt+p resolves to vendor POs', sandbox.kbdAccessRoute('p'), 'vendor-pos');
+check('a letter in upper case still resolves', sandbox.kbdAccessRoute('S'), 'sales-orders');
+check('a letter no screen holds resolves to nothing', sandbox.kbdAccessRoute('z'), null);
+check('nothing at all resolves to nothing', sandbox.kbdAccessRoute(), null);
+
 console.log('\n[5d3] one key for the button this screen is for');
 // Every screen has one obvious blue button — New Sales Order, New GRN, Create
 // BOQ. Tabbing to it works, but the whole point of a keyboard is not having to.
@@ -1221,12 +1230,12 @@ check('and it is taken off again when the dialog closes',
 check('the handler is read through a ref, so the stack order holds',
   /onCloseRef/.test(utilsJsx), true);
 const shellJsx = fs.readFileSync(path.join(dir, 'src', 'shell.jsx'), 'utf8');
-check('the sidebar is ONE tab stop, held by the screen you are on',
-  /tabIndex=\{holdsStop \? 0 : -1\}/.test(shellJsx), true);
-check('and it still has a way in when no link matches the route',
-  /!anyActive && gi === 0 && ii === 0/.test(shellJsx), true);
-check('and opened with Enter', /onKeyDown/.test(shellJsx), true);
-check('the sidebar and the palette read ONE nav list',
+// The Sidebar component itself is gone (the Flow hub is the mouse nav now —
+// see docs/flow-hub.md); the roving-tabstop checks that used to live here
+// tested a component that no longer exists. opcNavGroups, the one list both
+// the Flow hub and the command palette read, is what must still be there.
+check('Sidebar is actually gone, not just unrendered', /function Sidebar\(/.test(shellJsx), false);
+check('the Flow hub and the palette read ONE nav list',
   /window\.opcNavGroups = opcNavGroups/.test(shellJsx), true);
 // The notifications drawer is the one overlay that is not a Modal, so it has to
 // say for itself what every dialog does.
@@ -1252,9 +1261,12 @@ check('holding Alt shows the letters, or nobody can learn them',
 check('and the badge is the letter itself', /content: attr\(data-kbd-key\)/.test(css), true);
 check('a shadowed screen looks different from a live one',
   /\[data-kbd-shadowed\]::after/.test(css), true);
-check('the sidebar carries each screen id, which the letters key off',
-  /data-nav=\{it\.id\}/.test(shellJsx), true);
 const kbSrc = fs.readFileSync(path.join(dir, 'src', 'keyboard.jsx'), 'utf8');
+// A screen's letter used to key off a data-nav attribute the sidebar wrote.
+// There is no sidebar to write it now — the access-key case falls back to
+// the g-jump table directly (kbdAccessRoute) rather than a DOM lookup.
+check('a screen letter with no page button falls back to the g-jump table, not a DOM lookup',
+  /kbdAccessRoute\(act\.letter\)/.test(kbSrc), true);
 check('nothing in the keyboard layer touches history any more',
   /history\.back|history\.forward|history\.go/.test(kbSrc), false);
 check('the tab keys are on the shortcut sheet, or nobody will find them',

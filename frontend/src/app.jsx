@@ -112,7 +112,6 @@ function App() {
   return (
     <div className="app">
       <Topbar onOpenTweaks={openTweaks}/>
-      <Sidebar/>
       <main className="main" data-screen-label={route}>
         <SyncErrorBanner/>
         {Content}

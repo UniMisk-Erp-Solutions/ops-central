@@ -1,11 +1,11 @@
 // OP Central — Permissions matrix + tasks engine
 // Defines what each role can see and do, and converts state into role-specific tasks.
 
-// Every nav id the Sidebar knows about (see opcNavGroups in shell.jsx),
-// minus 'platform' (gated separately, to platform master accounts, never
-// to an app role). Org Admin and Managing Director both get literally
-// every module — the one definition of "everything", so the two lists
-// can never quietly drift apart.
+// Every nav id opcNavGroups (shell.jsx) knows about — the Flow hub and the
+// keyboard palette both read it — minus 'platform' (gated separately, to
+// platform master accounts, never to an app role). Org Admin and Managing
+// Director both get literally every module — the one definition of
+// "everything", so the two lists can never quietly drift apart.
 const ALL_MODULES = ['dashboard','inbox','client-requests','sourcing','sales-orders','customers','godown','scm','pool','transfers','rfq','vendor-pos','grn','three-way','vendors','mapping','invoices','collections','products','settings','audit','onboarding'];
 
 const PERMISSIONS = {
@@ -332,7 +332,7 @@ function canAccess(role, route) {
   // Strip subpaths
   const root = String(route || '').split('/')[0];
   // Belt and braces: perm() now guarantees an array, but canAccess runs inside
-  // the Sidebar and the App route guard — the two places where a throw takes the
+  // opcNavGroups and the App route guard — places where a throw takes the
   // whole page down — so it must not depend on that guarantee being kept.
   const p = perm(role) || {};
   const allowed = Array.isArray(p.nav) ? p.nav : [];
