@@ -130,7 +130,7 @@ following are single definitions and everything must go through them:
 | `utils.jsx` | formatting, icons, `Modal`, and the shared helpers above |
 | `store.jsx` | state, sync, auth, tenant context |
 | `permissions.jsx` | roles, feature flags, workflow helpers |
-| `shell.jsx` | topbar, sidebar |
+| `shell.jsx` | topbar, `opcNavGroups` (the one nav list — the Flow hub and the keyboard palette both read it; no sidebar any more) |
 | `screens-so.jsx` | sales orders, BOM editor, pricing, profit panel |
 | `screens-import.jsx` | customer sheet importer |
 | `screens-alloc.jsx` | vendor assignment and pricing |

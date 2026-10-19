@@ -18,10 +18,16 @@ page, one click away via the top-right button, same as it always was.
 
 It is a navigation layer, nothing else. No new data, no new calculation, no
 new capability. Every card on a stage hub just calls `navigate(moduleId)`
-with the exact route the sidebar already offers — opening one is
-indistinguishable from clicking the matching sidebar link. The sidebar
-itself, every existing route, and every role's actual access are completely
-unchanged; this only changes what greets you first.
+with a route that was already there — every existing route and every role's
+actual access are completely unchanged; this only changes how you get to
+them.
+
+It shipped first as *an additional* way in, alongside the old sidebar. A
+follow-up change then removed that sidebar outright, at which point this
+became the primary — for a mouse, the only — way to reach most screens.
+`Ctrl+K`, `g` then a key and `Alt`+letter still reach every screen too; see
+[keyboard-control.md](./keyboard-control.md)'s Traps for what that removal
+did and did not change.
 
 ## How it works
 
@@ -48,14 +54,14 @@ not a bug in the mapping.
 
 **What each stage hub actually displays — label, icon, badge — is never a
 second copy of that data.** `flowModuleIndex(state, role)` calls
-`opcNavGroups(state, role)` (`shell.jsx`), the sidebar's own single
-definition of every module's label and icon, flattens it to one `{id:
-item}` lookup, and `FlowStage` just looks up each of its stage's module ids
-in it. A module the viewing role cannot reach, or that this organization
-has switched off by feature flag, is simply absent from the lookup — it
-disappears from the stage hub exactly because it already disappears from
-the sidebar, via the identical filter, not a second one that could
-disagree.
+`opcNavGroups(state, role)` (`shell.jsx`) — the one definition of every
+module's label and icon, also what the command palette searches — flattens
+it to one `{id: item}` lookup, and `FlowStage` just looks up each of its
+stage's module ids in it. A module the viewing role cannot reach, or that
+this organization has switched off by feature flag, is simply absent from
+the lookup — it disappears from the stage hub exactly because it already
+disappears everywhere else that reads the same function, not a second
+filter that could disagree.
 
 ### Where you land, and why that changes in three different places
 
@@ -86,10 +92,9 @@ land after login," and not something this change needed to touch.
 same shape as the existing `'platform'` special case, not a new general
 pattern. Every role can open the hub itself, same as `dashboard`/`godown`
 already are universal. This grants nothing new: a stage hub only ever links
-onward to routes the viewer's own role could already reach by using the
-sidebar, so making the hub itself universally reachable doesn't expand
-anyone's real access — it only changes whether they see a curated starting
-point or the raw sidebar first.
+onward to routes the viewer's own role could already reach, so making the
+hub itself universally reachable doesn't expand anyone's real access — it
+only changes what greets them first.
 
 ### A role with nothing in a stage
 
@@ -111,7 +116,7 @@ Because a second filter is a second place to get the rules wrong, and
 exactly the mistake this project's own `role-permissions.md` already
 documents at length (a page becoming reachable by more roles exposed
 cross-navigation links nobody had audited for the new audience). Calling
-the sidebar's own function means every future nav change — a module added,
+the one nav function means every future nav change — a module added,
 a role's access trimmed, a feature flag introduced — reaches the flow hub
 automatically, with nothing to remember to update here.
 
@@ -133,8 +138,18 @@ just inverted.
   hash) would have disagreed about where "home" is.
 - **A module filtered in two different places (nav array + the
   `SCM_ROLES`/`SCM_ROUTES_SET` bypass) must be filtered the same way on a
-  stage hub as it is in the sidebar, or the two disagree.** `mapping`
-  reaches Purchase through the bypass, not through Purchase's own `nav`
-  array — `flow-check.js` section [3] was first written assuming the nav
-  array alone, undercounted by one, and was wrong until it called the real
-  `opcNavGroups` and matched what it actually returned.
+  stage hub as it is by `opcNavGroups` itself, or the two disagree.**
+  `mapping` reaches Purchase through the bypass, not through Purchase's own
+  `nav` array — `flow-check.js` section [3] was first written assuming the
+  nav array alone, undercounted by one, and was wrong until it called the
+  real `opcNavGroups` and matched what it actually returned.
+- **This was built assuming a sidebar would still be there as a fallback.**
+  "Making the hub itself universally reachable doesn't expand anyone's real
+  access — it only changes what greets them first" was true only as long as
+  the sidebar was still the actual way to reach every other screen. A later
+  change removed it, at which point this hub (plus `Ctrl+K`, `g`, and
+  `Alt`+letter) became the ONLY way most roles reach most screens — a
+  gap in this hub now means a module nobody can get to, not a module one
+  click further away. Re-reading `flow-check.js` after that change rather
+  than assuming "pure navigation, nothing changed" still held was exactly
+  right: the hub's *content* didn't change, but what hinged on it did.

@@ -4,18 +4,21 @@
 // -> Inventory -> Dispatch -> Billing), each stage a big clickable node.
 // Clicking one opens a small hub listing only the real, already-existing
 // pages that belong to that stage -- nothing here is a new screen with its
-// own logic; every card just navigates to the exact route the sidebar
-// already offers. Purely an additional way IN to the same app -- the
-// sidebar, every route, and every role's actual access are all unchanged.
+// own logic; every card just navigates to the exact route that was always
+// there. Every route and every role's actual access are unchanged -- only
+// how you get to them changed.
+//
+// This is now the primary mouse nav: the Sidebar was removed (see
+// docs/keyboard-control.md's Traps for what that did and did not take with
+// it -- Ctrl+K, g-then-letter and Alt+letter still reach every screen).
 //
 // The stage -> module mapping is deliberately a short, static list (module
 // ids only) kept in ONE place, FLOW_STAGES below; the label/icon/badge for
 // each module is never duplicated here -- it's read straight out of
-// opcNavGroups(state, role) (shell.jsx), the sidebar's own single
-// definition of what each module is called and looks like. A module a given
-// role/org cannot see there (nav-gated or feature-gated) simply does not
-// appear on its stage's hub either, the same way it already doesn't appear
-// in the sidebar.
+// opcNavGroups(state, role) (shell.jsx), the one nav list the command
+// palette also searches. A module a given role/org cannot see there
+// (nav-gated or feature-gated) simply does not appear on its stage's hub
+// either.
 
 const FLOW_STAGES = [
   { id: 'sales-order', label: 'Sales Order', icon: 'receipt', modules: ['client-requests', 'sourcing', 'sales-orders', 'customers'] },

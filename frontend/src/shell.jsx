@@ -71,67 +71,6 @@ function opcNavGroups(state, role) {
 }
 window.opcNavGroups = opcNavGroups;
 
-function Sidebar() {
-  const { route, navigate, state, currentUser, realUserId, getUser } = useStore();
-  const u = getUser(currentUser);
-  const realIsAdmin = (getUser(realUserId) || {}).role === 'Org Admin';
-  const filteredGroups = opcNavGroups(state, u.role);
-
-  // The sidebar is ONE tab stop. Twenty-two links meant twenty-two presses
-  // before Tab reached the page at all, which is the same as unreachable.
-  // The link for the screen you are on holds the stop; the arrows move between
-  // them once you are there. (The standard roving tabindex, and the same shape
-  // as a list of rows or a strip of tabs.)
-  const anyActive = filteredGroups.some(g => g.items.some(
-    it => route === it.id || route.startsWith(it.id + '/')));
-
-  return (
-    <aside className="sidebar">
-      <div style={{ padding: '4px 14px 10px', fontSize: 11, color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between' }}>
-        <span>Logged in as <strong style={{ color: 'var(--text-2)' }}>{u.role}</strong></span>
-      </div>
-      {filteredGroups.map((g, gi) => (
-        <div key={g.label} className="nav-group">
-          <div className="nav-group-label">{g.label}</div>
-          {g.items.map((it, ii) => {
-            const active = route === it.id || route.startsWith(it.id + '/');
-            // On a route that matches no link, the first one holds the stop —
-            // otherwise the sidebar would have no way in at all.
-            const holdsStop = active || (!anyActive && gi === 0 && ii === 0);
-            return (
-              <div key={it.id} className={`nav-item ${active ? 'active' : ''}`}
-                   data-nav={it.id}
-                   role="link" tabIndex={holdsStop ? 0 : -1}
-                   aria-current={active ? 'page' : undefined}
-                   onClick={() => navigate(it.id)}
-                   onKeyDown={e => {
-                     // A div is not a button: nothing makes it operable but this.
-                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(it.id); }
-                   }}>
-                <Icon name={it.icon} size={14}/>
-                <span>{it.label}</span>
-                {it.badge ? <span className="badge">{it.badge}</span> : null}
-              </div>
-            );
-          })}
-        </div>
-      ))}
-      {realIsAdmin && state.users.length > 1 && (
-        <div style={{ padding: '14px', marginTop: 10, borderTop: '1px solid var(--border)' }}>
-          <div className="tiny muted" style={{ marginBottom: 4 }}>Act as (admin)</div>
-          <select className="select" style={{ height: 26, fontSize: 11.5 }}
-                  value={currentUser}
-                  onChange={e => { if (window.__opc_switchTo) window.__opc_switchTo(e.target.value); }}>
-            {state.users.map(usr => (
-              <option key={usr.id} value={usr.id}>{usr.name} — {usr.role}</option>
-            ))}
-          </select>
-        </div>
-      )}
-    </aside>
-  );
-}
-
 function Topbar({ onOpenTweaks }) {
   const { state, currentUser, realUserId, impersonate, stopImpersonating, getUser, navigate, route, logout } = useStore();
   const [notifOpen, setNotifOpen] = React.useState(false);
@@ -181,7 +120,8 @@ function Topbar({ onOpenTweaks }) {
 
   return (
     <>
-      <div className="brand">
+      <div className="brand" style={{ cursor: 'pointer' }} onClick={() => navigate('flow')}
+           title="Back to the flow">
         <div className="brand-mark">B</div>
         <div>
           <div className="brand-name">OP Central</div>
@@ -193,7 +133,9 @@ function Topbar({ onOpenTweaks }) {
             {crumb.map((c, i) => (
               <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 {i > 0 && <span className="sep">›</span>}
-                <span className={i === crumb.length - 1 ? 'current' : ''}>{c.label}</span>
+                {i === 0
+                  ? <span style={{ cursor: 'pointer' }} onClick={() => navigate('flow')}>{c.label}</span>
+                  : <span className={i === crumb.length - 1 ? 'current' : ''}>{c.label}</span>}
               </span>
             ))}
           </div>
@@ -356,5 +298,4 @@ function NotificationsDrawer({ onClose, role }) {
   );
 }
 
-window.Sidebar = Sidebar;
 window.Topbar = Topbar;

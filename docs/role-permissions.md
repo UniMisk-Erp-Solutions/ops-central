@@ -2,7 +2,7 @@
 
 **Who:** anyone adding a role, a screen, or a nav item
 **Code:** `permissions.jsx` (`PERMISSIONS`, `ALL_MODULES`, `perm()`, `canAccess()`),
-`shell.jsx` (`opcNavGroups()`, the Sidebar, `notificationRoute()`)
+`shell.jsx` (`opcNavGroups()`, `notificationRoute()`), `screens-flow.jsx` (the Flow hub)
 **Tests:** `scripts/uitest/role-nav-check.js`, `scripts/uitest/roles-check.js`
 
 ---
@@ -10,12 +10,13 @@
 ## What it is
 
 `PERMISSIONS` is one object, keyed by role, that answers two separate
-questions for each role: **`nav`** — which sidebar modules it sees — and
-**`can`** — which specific actions it may take once it's on a screen. `nav`
-is also the access-control list: `canAccess(role, route)` is driven by the
-same array the Sidebar filters on (see `shell.jsx`'s `opcNavGroups()`), so
-there is exactly one definition of "what can this role reach," not a
-sidebar list and a separate guard list that could drift apart.
+questions for each role: **`nav`** — which modules it sees, on the Flow hub
+and in the keyboard palette — and **`can`** — which specific actions it may
+take once it's on a screen. `nav` is also the access-control list:
+`canAccess(role, route)` is driven by the same array `opcNavGroups()`
+(`shell.jsx`) filters on, so there is exactly one definition of "what can
+this role reach," not a nav list and a separate guard list that could drift
+apart.
 
 Per-organization customisation reads the same shape. `perm(role)` merges a
 DB-backed override (`window.__opcPerms`, loaded from Supabase, edited from
@@ -39,7 +40,7 @@ The rule applied, uniformly:
 
 - **Org Admin and Managing Director get literally every module.** Both
   carry `ALL_MODULES` — one array, so the two lists can never quietly drift
-  apart, and adding a new screen to the sidebar means adding it to this one
+  apart, and adding a new screen to the nav means adding it to this one
   list, not two.
 - **Every other role keeps `dashboard` and `godown`, always.** Non-negotiable,
   by explicit request — these are the two screens new to the company and

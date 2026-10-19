@@ -7,8 +7,8 @@
 //   Tab         reaches every control, including the lists
 //   up / down   move through the list on the page. On a screen with no list
 //               they are left alone and the page scrolls, as it always did
-//   left/right  cross between the sidebar and the page; along a row of tabs;
-//               and right opens the selected row. NEVER browser history
+//   left/right  along a row of tabs; right opens the selected row.
+//               NEVER browser history
 //   Enter       press what is focused; in a list, open the row
 //   Space       tick the box on the row
 //   Ctrl+K, /   the command palette — every screen and record, by name
@@ -535,6 +535,15 @@ const KBD_NAV_KEY_SET = (() => {
   return m;
 })();
 
+// Alt+letter for a screen used to find and click that screen's own link in
+// the sidebar. There is no sidebar to click any more, so a letter nothing on
+// the page claims resolves straight from the same table "g" then a key uses
+// — one answer either way, never a DOM lookup that depends on a menu that
+// may not be on screen.
+function kbdAccessRoute(letter) {
+  return KBD_GOTO[String(letter || '').toLowerCase()] || null;
+}
+
 // The buttons and tabs on the page that are worth a letter.
 function kbdAccessTargets(doc) {
   const d = doc || (typeof document !== 'undefined' ? document : null);
@@ -891,6 +900,7 @@ window.kbdAccessTargets = kbdAccessTargets;
 window.kbdPickLetter = kbdPickLetter;
 window.kbdAssignAccessKeys = kbdAssignAccessKeys;
 window.kbdAccessTarget = kbdAccessTarget;
+window.kbdAccessRoute = kbdAccessRoute;
 window.kbdAltLetter = kbdAltLetter;
 window.kbdGroupOf = kbdGroupOf;
 window.kbdGroupMove = kbdGroupMove;
@@ -1097,12 +1107,18 @@ function KeyboardLayer() {
           // A screen is navigated to; anything else is pressed. Nothing at all
           // for a letter nobody claims, so the browser keeps its own Alt keys.
           const target = kbdAccessTarget(act.letter);
-          if (!target) return;
-          e.preventDefault();
-          const navId = target.getAttribute('data-nav');
-          if (navId) { go(navId); return; }
-          if (target.focus) { try { target.focus(); } catch (err) {} }
-          if (typeof target.click === 'function') target.click();
+          if (target) {
+            e.preventDefault();
+            const navId = target.getAttribute('data-nav');
+            if (navId) { go(navId); return; }
+            if (target.focus) { try { target.focus(); } catch (err) {} }
+            if (typeof target.click === 'function') target.click();
+            return;
+          }
+          // Nothing on the page claims it — if it is one of the screen letters,
+          // go straight there. (See kbdAccessRoute: no sidebar link to click.)
+          const route = kbdAccessRoute(act.letter);
+          if (route) { e.preventDefault(); go(route); }
           return;
         }
 
@@ -1276,11 +1292,6 @@ const KBD_SHEET = [
     ['Space', 'tick the box on it'],
     ['Tab', 'onto a particular list — the whole list is one stop'],
   ]},
-  { group: 'Across the screen', keys: [
-    ['←', 'to the sidebar'],
-    ['→', 'back out to the page'],
-    ['↓ / ↑ there', 'down the sidebar (Enter opens)'],
-  ]},
   { group: 'The tabs on a record', keys: [
     ['] / [', 'next tab / previous tab, from anywhere'],
     ['1 … 9', 'straight to that tab'],
@@ -1305,7 +1316,7 @@ const KBD_SHEET = [
   { group: 'Anything on the page', keys: [
     ['Tab / Shift + Tab', 'every button, tab, card, chip and field, in order'],
     ['Enter or Space', 'press whatever is focused'],
-    ['one Tab each', 'the sidebar, the tabs and a list are one stop each'],
+    ['one Tab each', 'a strip of tabs and a list are one stop each'],
   ]},
   { group: 'Filling in a dialog', keys: [
     ['Enter', 'next field — and on the last one, save'],

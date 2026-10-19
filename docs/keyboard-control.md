@@ -13,8 +13,10 @@ accurate on a keyboard than on a mouse, and they resent being made to reach for
 one. Every screen can now be driven without touching it.
 
 **`↑` and `↓` move through the list on the page** — no ceremony, just press
-them. **`←` and `→` cross between the sidebar and the page.** Nothing here ever
-touches browser history.
+them. There is no sidebar any more (the Flow hub is the mouse nav — see
+[flow-hub.md](./flow-hub.md)); getting to another screen without a mouse is
+`Alt`+letter, `g` then a key, or `Ctrl+K`. Nothing here ever touches browser
+history.
 
 | Key | What it does |
 |---|---|
@@ -41,14 +43,6 @@ merely holds a tick box or a quantity to type:
 | `→` or `Enter` | open the row — or, if it opens nothing, step **into** its first field |
 | `Space` | tick the box on it |
 | `Tab` | onto a particular list — the whole list is one stop |
-
-Across the screen:
-
-| Key | What it does |
-|---|---|
-| `←` | to the sidebar, from anywhere on the page (on a tab strip, along the tabs first) |
-| `→` | out of the sidebar to the page; on the page, opens the selected row |
-| `↑` `↓` in the sidebar | down the sidebar (`Enter` opens) |
 
 The tabs on a record — Overview, Line Items + BOM, Procurement, Vendor POs, GRN,
 Invoicing, Virtual Godown, Documents, Audit Log:
@@ -110,11 +104,6 @@ What it does now:
 - **`↑` `↓` drive the list on the page.** No ceremony. Moving the selection
   scrolls it into view, so nothing is lost by it — and on a screen with **no**
   list the handler swallows nothing and the page scrolls exactly as before.
-- **`←` `→` cross between the sidebar and the page.** `←` goes to the sidebar,
-  landing on the screen you are actually on; `→` comes back out, landing on the
-  list. Before this, focus that arrowed into the sidebar could only escape by
-  tabbing through every remaining link — on a wide screen, most of the app out of
-  reach.
 - **`Home`, `End`, `PgUp`, `PgDn` stay with the page** until a row is actually
   selected. Until then they mean top and bottom, and people already use them
   that way.
@@ -190,31 +179,29 @@ who would get no hand cursor.
 
 ### Tab reaches the page in a few presses, not thirty
 
-Everything was reachable long before it was *usable*. Tab walked all **22**
-sidebar links before it got to the page at all, and then all nine tabs on a
-record. Reachable but nobody would, which is the same as unreachable.
+Everything was reachable long before it was *usable*. When there was still a
+sidebar, Tab walked all **22** of its links before it got to the page at all,
+and then all nine tabs on a record. Reachable but nobody would, which is the
+same as unreachable. The sidebar is gone now (see Traps), but the lesson
+stayed: a group of many small things needs to be one tab stop, not many.
 
-Groups that belong together are now **one tab stop each** — the sidebar, a strip
-of tabs, the role switcher, a list of rows. The one that is *active* holds the
-stop, and the arrows move between them once you are there. (A roving tabindex,
-the standard shape for a composite widget, and the same shape a list of rows
+Groups that belong together are **one tab stop each** — a strip of tabs, the
+role switcher, a list of rows. The one that is *active* holds the stop, and
+the arrows move between them once you are there. (A roving tabindex, the
+standard shape for a composite widget, and the same shape a list of rows
 already had.)
 
-So the order across a screen is roughly: topbar buttons → sidebar → the tabs →
-the buttons on the record → its list. Half a dozen presses to anything, instead
-of thirty.
-
-`←` out of the sidebar lands on the **first** control on the page in reading
-order, not on the list — the buttons above it are where the actions are.
+So the order across a screen is roughly: topbar buttons → the tabs → the
+buttons on the record → its list. A handful of presses to anything.
 
 ### A dialog owns the screen
 
 While one is open — a `Modal`, or the notifications drawer — it is the only
-thing that can be operated. `←` does not cross to the sidebar behind it, `]`
-does not switch a tab it is covering, `g` cannot navigate out from under it, and
-`/` does not hunt for a search box on the page beneath. Leaving an editing dialog
-open over a page that has moved on is how somebody saves an edit onto the wrong
-record.
+thing that can be operated. `]` does not switch a tab it is covering, `g`
+cannot navigate out from under it, `Alt`+letter only answers the dialog's own
+buttons, and `/` does not hunt for a search box on the page beneath. Leaving
+an editing dialog open over a page that has moved on is how somebody saves an
+edit onto the wrong record.
 
 Inside it, everything still works: the arrows drive its own rows, `Enter` opens
 one, `Ctrl+Enter` saves, `Esc` closes.
@@ -279,9 +266,9 @@ of their own: `]` and `[` step along them and `1`–`9` go straight to one, from
 anywhere on the page.
 
 The side arrows already moved along them once a tab had focus. That was not
-enough — focus arrives there several `Tab` presses in, and coming out of the
-sidebar with `→` lands on the list, past them. A key nobody can reach is not a
-feature.
+enough — focus arrives there several `Tab` presses in (back when there was
+still a sidebar, coming out of it with `→` landed on the list, past them). A
+key nobody can reach is not a feature.
 
 Two details that matter:
 
@@ -302,18 +289,12 @@ accent outside it. That reads on white, on grey, on blue, and on a card. Until
 this was fixed the buttons were perfectly focusable and simply looked like they
 were not, which is the same thing to the person using them.
 
-### Tabs and the sidebar
+### Tabs
 
-Once focus is on a tab, `←` and `→` move along the tabs. In the sidebar, `↑` and
-`↓` move down it.
-
-The two behave differently on purpose:
-
-- **a tab switches as focus lands on it.** It only swaps a panel that is already
-  on the page — cheap, reversible, and needing a second key for it would be
-  tedious.
-- **the sidebar moves without opening.** Navigating leaves the page, and an
-  arrow key must never do that on its own. `Enter` opens.
+Once focus is on a tab, `←` and `→` move along the strip, switching as focus
+lands on each one — it only swaps a panel that is already on the page, so
+that's cheap and reversible, and needing a second key for it would be
+tedious.
 
 With anything focused, `←` and `→` no longer go back or open a row. Going back in
 history because somebody pressed left on a button is the kind of surprise that
@@ -345,11 +326,12 @@ underneath can never be moved by a keystroke aimed at the dialog.
 records — sales orders, vendor POs, GRNs, customers, vendors, products — by
 number, by name, and by customer or vendor name.
 
-Screens come from `opcNavGroups`, **the same list the sidebar renders**. Two
-lists would drift, and a palette offering a screen the sidebar hides would be a
-way around the role's permissions rather than a convenience. Records are only
-offered when their screen is in that list, for the same reason. The check walks
-every role and asserts nothing is offered that the sidebar does not show.
+Screens come from `opcNavGroups`, **the same list the Flow hub renders**
+([flow-hub.md](./flow-hub.md)). Two lists would drift, and a palette offering
+a screen the Flow hub hides would be a way around the role's permissions
+rather than a convenience. Records are only offered when their screen is in
+that list, for the same reason. The check walks every role and asserts
+nothing is offered that the role cannot actually open.
 
 `g` then a key is the same idea without the dialog. The table only names screens
 that exist, and the handler still asks `canAccess` and `featureBlocks` before
@@ -410,18 +392,18 @@ without matching half the list.
 | `KBD_NAV_KEY`, `kbdPickLetter`, `kbdAssignAccessKeys`, `kbdAccessTarget` — the Alt letters | `frontend/src/keyboard.jsx` |
 | `kbdIsClickable`, `kbdEnhance`, `kbdActivate` — the clickable divs | `frontend/src/keyboard.jsx` |
 | `kbdLists`, `kbdIsInList` — a list as one tab stop | `frontend/src/keyboard.jsx` |
-| `kbdPaneOf`, `kbdFocusSidebar`, `kbdFocusMain` — crossing the screen | `frontend/src/keyboard.jsx` |
+| `kbdPaneOf`, `kbdFocusSidebar`, `kbdFocusMain`, `kbdGroupOf`'s sidebar branch — dead now there is no sidebar DOM, kept inert rather than ripped out (see Traps) | `frontend/src/keyboard.jsx` |
+| `kbdAccessRoute` — a screen letter with no sidebar to click, resolved from `KBD_GOTO` directly | `frontend/src/keyboard.jsx` |
 | `kbdTabStrip`, `kbdTabButtons`, `kbdTabTo` — the tabs on a record | `frontend/src/keyboard.jsx` |
 | `kbdRoving` — a group of buttons as one tab stop | `frontend/src/keyboard.jsx` |
-| Roving stop for the sidebar | `Sidebar` in `frontend/src/shell.jsx` |
 | `Enter` walking the fields | `Modal` in `frontend/src/utils.jsx` |
-| `kbdGroupOf`, `kbdGroupMove`, `kbdVisible` — tabs and the sidebar | `frontend/src/keyboard.jsx` |
+| `kbdGroupOf`, `kbdGroupMove`, `kbdVisible` — tabs | `frontend/src/keyboard.jsx` |
 | `KeyboardLayer` — the one listener | `frontend/src/keyboard.jsx` |
 | `CommandPalette`, `ShortcutHelp` | `frontend/src/keyboard.jsx` |
 | `kbdCommands`, `kbdFilter` — what the palette offers | `frontend/src/keyboard.jsx` |
 | Overlay stack | `frontend/src/keyboard.jsx` (`opcOverlayPush/Pop/Top`) |
 | Focus trap, autofocus, focus restore, `Esc` | `Modal` in `frontend/src/utils.jsx` |
-| The one nav list | `opcNavGroups` in `frontend/src/shell.jsx` |
+| The one nav list — read by the Flow hub and the palette alike | `opcNavGroups` in `frontend/src/shell.jsx` |
 | Styles — selected row, focus ring, palette, key caps | `frontend/src/styles.css` |
 | Checks — the engine | `scripts/uitest/keyboard-check.js` |
 | Checks — every real screen | `scripts/uitest/reach-check.js` |
@@ -518,6 +500,27 @@ without matching half the list.
 - **Writing a new clickable?** Give it `cursor: pointer`. The mouse user needs
   the hand cursor and the keyboard user needs the tab stop, and both come from
   that one declaration. The check enforces it.
-- **Adding a screen?** Add it to `opcNavGroups` and both the sidebar and the
+- **Adding a screen?** Add it to `opcNavGroups` and both the Flow hub and the
   palette pick it up. Adding it to `KBD_GOTO` is optional and never grants
   access on its own.
+- **The Sidebar was removed (2026-10).** The user asked for the menu gone now
+  that the Flow hub ([flow-hub.md](./flow-hub.md)) is the post-login landing
+  page — Topbar already had its own, fully independent admin "act as"
+  switcher, so the sidebar's copy of that was simply dead weight by then.
+  What survived, unchanged: `Ctrl+K`, `g` then a key, and the row/tab keys —
+  none of them ever touched the sidebar's DOM. What had to be FIXED rather
+  than just left: `Alt`+letter for a *screen* used to find and click that
+  screen's own `[data-nav]` link inside `.sidebar`; with no sidebar, that
+  silently did nothing, so the access-key case now falls back to
+  `kbdAccessRoute` — the same `KBD_GOTO` table `g` already uses — the moment
+  no page button claims the letter. What was simply ACCEPTED as gone with the
+  sidebar itself: `←`/`→` crossing into it, and holding `Alt` to see every
+  *screen's* letter badged (a page's own button letters still show, since
+  that badging is scoped to `.main`/`.modal`/`.drawer`, not the sidebar). The
+  `?` sheet and the command palette both still name every screen, so losing
+  the sidebar never left a screen that was reachable one way and not another.
+  `kbdFocusSidebar`, `kbdFocusMain`, `kbdPaneOf`'s and `kbdGroupOf`'s sidebar
+  branches, and `kbdAssignAccessKeys`'s `.sidebar [data-nav]` query were left
+  in place rather than cut out of a file this size and this tested — every one
+  of them already null-guards on `.sidebar` not existing, so they are inert,
+  not broken, and ripping them out bought nothing but risk.
