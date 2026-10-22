@@ -169,7 +169,7 @@ function SourcingList() {
 
       <div className="card">
         <div className="card-body flush">
-          <table className="t">
+          <table className="t" data-keep="Inquiry No,Customer">
             <thead><tr>
               <th>Inquiry No</th><th>Customer</th><th>Date</th>
               <th className="num">Sell value</th><th className="num">Margin</th><th>Status</th><th></th>
@@ -883,7 +883,7 @@ function SourcingDetail({ srcId }) {
           <div className="tiny muted">{hasQuotes ? `Comparing ${(src.quote_vendors || []).length} quoted vendor(s) · best price suggested ★` : 'Estimated across all vendors — use “Add vendor & quote” to enter real quotes'} · tick the <span style={{ color: 'var(--info)' }}>☑</span> on vendors to include them in Float RFQ</div>
         </div>
         <div className="card-body flush">
-          <table className="t">
+          <table className="t" data-keep="Item,Req qty,Line cost" data-wide="Vendor options (cheapest first)">
             <thead><tr>
               <th>Item</th><th className="num">Req qty</th><th>Vendor options (cheapest first)</th><th className="num">Chosen</th><th className="num">Line cost</th>
             </tr></thead>

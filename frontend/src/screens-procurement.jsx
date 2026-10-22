@@ -57,7 +57,7 @@ function RFQList() {
         </div>
       </div>
 
-      <div className="mb-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+      <div className="mb-2 kpi3" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Projects compared</div><div style={{ fontSize: 20, fontWeight: 700 }}>{comps.length}</div></div></div>
         <div className="card"><div className="card-body" style={{ textAlign: 'center' }}><div className="tiny muted">Total vendor spend</div><div style={{ fontSize: 20, fontWeight: 700 }} className="mono">{inr(totSpend)}</div></div></div>
         <div className="card" style={{ borderColor: totSaving > 0 ? 'oklch(0.85 0.09 75)' : undefined }}><div className="card-body" style={{ textAlign: 'center', background: totSaving > 0 ? 'var(--warning-bg)' : undefined }}><div className="tiny muted">Potential extra savings</div><div style={{ fontSize: 20, fontWeight: 700, color: totSaving > 0 ? 'var(--warning)' : 'var(--success)' }} className="mono">{inr(totSaving)}</div></div></div>
@@ -68,10 +68,10 @@ function RFQList() {
           <div className="empty-title">Nothing to compare yet</div>
           Once inquiries are converted to SOs and vendors are chosen, every project's vendor comparison appears here automatically.
         </div></div>
-      ) : comps.map(c => {
+      ) : <div className="rfq-grid">{comps.map(c => {
         const cust = getCustomer(c.so.customer_id);
         return (
-          <div className="card mb-2" key={c.so.id}>
+          <div className="card" key={c.so.id}>
             <div className="card-header">
               <div>
                 <h3 className="card-title"><span className="mono" onClick={() => navigate(`sales-orders/${c.so.id}`)} style={{ cursor: 'pointer' }}>{c.so.so_no}</span> — {cust ? cust.name : ''}</h3>
@@ -80,7 +80,7 @@ function RFQList() {
               <span className="badge dot">{c.pos.length} PO(s)</span>
             </div>
             <div className="card-body flush">
-              <table className="t">
+              <table className="t" data-keep="Item,Qty,Chosen vendor">
                 <thead><tr><th>Item</th><th className="num">Qty</th><th>Chosen vendor</th><th className="num">Rate</th><th>Cheapest</th><th className="num">Best rate</th><th className="num">Δ / line</th></tr></thead>
                 <tbody>
                   {c.rows.map(r => {
@@ -104,7 +104,7 @@ function RFQList() {
             </div>
           </div>
         );
-      })}
+      })}</div>}
     </div>
   );
 }
@@ -866,19 +866,17 @@ function VendorPOList() {
         {state.vendor_pos.length === 0 ? (
           <div className="card-body"><div className="empty"><div className="empty-title">No Vendor POs yet</div>Approve a sourced Sales Order, then generate POs for the selected vendors — they appear here, grouped by project.</div></div>
         ) : groupBySO ? (
-          Object.entries(groups).map(([soId, pos]) => {
+          Object.entries(groups).map(([soId, pos], gi) => {
             const so = getSO(soId); const cust = so ? getCustomer(so.customer_id) : null;
             const total = pos.reduce((s, p) => s + (p.amount || 0), 0);
             return (
-              <div key={soId} style={{ borderTop: '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', background: 'var(--bg-subtle, var(--surface))' }}>
-                  <div className="small"><strong className="mono" onClick={() => so && navigate(`sales-orders/${soId}`)} style={{ cursor: so ? 'pointer' : 'default' }}>{so ? so.so_no : 'Unlinked'}</strong>{cust && <span className="muted"> · {cust.name}</span>} <span className="muted">· {pos.length} vendor PO(s)</span></div>
-                  <div className="small mono">{inr(total)}</div>
-                </div>
+              <OpcGroup key={soId} startOpen={gi === 0}
+                title={<div className="small"><strong className="mono" onClick={e => { if (so) { e.stopPropagation(); navigate(`sales-orders/${soId}`); } }} style={{ cursor: so ? 'pointer' : 'default' }}>{so ? so.so_no : 'Unlinked'}</strong>{cust && <span className="muted"> · {cust.name}</span>} <span className="muted">· {pos.length} vendor PO(s)</span></div>}
+                right={<div className="small mono">{inr(total)}</div>}>
                 <div className="table-wrap"><table className="t"><thead><tr>
                   <th>PO No</th><th>Vendor</th><th>Date</th><th className="num">Amount</th><th>Status</th><th>e-Bill</th><th></th>
                 </tr></thead><tbody>{pos.map(Row)}</tbody></table></div>
-              </div>
+              </OpcGroup>
             );
           })
         ) : (
@@ -1381,24 +1379,22 @@ function GRNList() {
             const key = (po && po.so_id) || '—';
             (groups[key] = groups[key] || []).push(g);
           });
-          return Object.entries(groups).map(([soId, grns]) => {
+          return Object.entries(groups).map(([soId, grns], gi) => {
             const so = soId !== '—' ? getSO(soId) : null;
             const cust = so ? getCustomer(so.customer_id) : null;
             const totalLines = grns.reduce((s, g) => s + g.items.length, 0);
             return (
-              <div key={soId} style={{ borderTop: '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', background: 'var(--bg-subtle, var(--surface))' }}>
-                  <div className="small">
-                    <strong className="mono" onClick={() => so && navigate(`sales-orders/${soId}`)} style={{ cursor: so ? 'pointer' : 'default' }}>{so ? so.so_no : 'Unlinked'}</strong>
-                    {cust && <span className="muted"> · {cust.name}</span>} <span className="muted">· {grns.length} GRN(s)</span>
-                  </div>
-                  <div className="small mono">{totalLines} line(s)</div>
-                </div>
+              <OpcGroup key={soId} startOpen={gi === 0}
+                title={<div className="small">
+                  <strong className="mono" onClick={e => { if (so) { e.stopPropagation(); navigate(`sales-orders/${soId}`); } }} style={{ cursor: so ? 'pointer' : 'default' }}>{so ? so.so_no : 'Unlinked'}</strong>
+                  {cust && <span className="muted"> · {cust.name}</span>} <span className="muted">· {grns.length} GRN(s)</span>
+                </div>}
+                right={<div className="small mono">{totalLines} line(s)</div>}>
                 <div className="table-wrap"><table className="t"><thead><tr>
                   <th>GRN No</th><th>Vendor PO</th><th>Vendor</th><th>Received Date</th><th>LR No</th>
                   <th className="num">Lines</th><th>Status</th><th></th>
                 </tr></thead><tbody>{grns.map(Row)}</tbody></table></div>
-              </div>
+              </OpcGroup>
             );
           });
         })()}

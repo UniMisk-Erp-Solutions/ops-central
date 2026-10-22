@@ -78,7 +78,7 @@ function SalesOrdersList() {
           <span className="muted small">{filtered.length} shown</span>
         </div>
         <div className="table-wrap">
-          <table className="t">
+          <table className="t" data-keep="SO No,Customer · PO Ref,Pri.">
             <thead>
               <tr>
                 <th>SO No</th>
@@ -671,7 +671,9 @@ function SalesOrderDetail({ soId }) {
   const { state, navigate, mutate, getSO, getCustomer, getUser, getCategory, getProduct, soSubtotal, soBillAdjustment, soBilledSubtotal, currentUser } = useStore();
   const toast = useToast();
   const so = getSO(soId);
-  const [tab, setTab] = React.useState('overview');
+  // Another screen can ask for a tab once (window.__opcOpenTab), e.g. the invoices
+  // list's "Raise invoice" lands on this order's Invoicing tab. Read and cleared at mount.
+  const [tab, setTab] = React.useState(() => { const t = window.__opcOpenTab; window.__opcOpenTab = null; return t || 'overview'; });
   const [showHold, setShowHold] = React.useState(false);
   const [showSource, setShowSource] = React.useState(false);
   const [showEdit, setShowEdit] = React.useState(false);
@@ -979,7 +981,7 @@ function SalesOrderDetail({ soId }) {
             <div className="card">
               <div className="card-header"><h3 className="card-title">Order Details</h3></div>
               <div className="card-body">
-                <div className="dl">
+                <div className="dl dl-cols">
                   <dt>Customer</dt><dd>{cust.name}</dd>
                   <dt>GSTIN</dt><dd className="mono">{cust.gstin}</dd>
                   <dt>Contact</dt><dd>{cust.contact} · {cust.phone}</dd>

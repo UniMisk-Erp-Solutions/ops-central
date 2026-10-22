@@ -20,9 +20,47 @@ function soInvoicedGst(so) {
 window.soInvoicedTaxable = soInvoicedTaxable;
 window.soInvoicedGst = soInvoicedGst;
 
+// Statuses in which an order has goods that can be billed (or is part-billed already).
+const INV_RAISABLE = ['Material Received', 'Ready to Dispatch', 'Partially Delivered', 'Fully Delivered', 'Client Accepted', 'Invoiced', 'Payment Pending'];
+
 function InvoiceList() {
-  const { state, navigate, getCustomer } = useStore();
+  const { state, navigate, getCustomer, currentUser, getUser } = useStore();
   const invoices = state.sales_orders.filter(s => s.invoice_no);
+  const role = currentUser ? (getUser(currentUser) || {}).role : '';
+  const canRaise = ['Purchase', 'Billing', 'Collections', 'Org Admin'].includes(role);
+  const [showRaise, setShowRaise] = React.useState(false);
+  const [raiseQ, setRaiseQ] = React.useState('');
+  const raisable = state.sales_orders.filter(so => INV_RAISABLE.indexOf(soEffectiveStatus(state, so)) !== -1)
+    .filter(so => { const c = getCustomer(so.customer_id); return !raiseQ.trim() || (so.so_no + ' ' + (c ? c.name : '')).toLowerCase().includes(raiseQ.trim().toLowerCase()); });
+
+  // GSTR-1 export: one CSV row per invoice listed here, in the columns the GST portal's
+  // B2B sheet asks for. The GST split follows the same rule the invoice itself uses
+  // (same state -> CGST + SGST, otherwise IGST), and a rate is derived from the invoice's
+  // own taxable value and tax, so mixed-rate invoices still export one honest effective rate.
+  const exportGstr1 = () => {
+    const rows = invoices.map(so => {
+      const c = getCustomer(so.customer_id) || {};
+      const taxable = soInvoicedTaxable(so), gst = soInvoicedGst(so);
+      const intra = c.state && c.state === state.org.state;
+      return {
+        'GSTIN/UIN of Recipient': c.gstin || '',
+        'Receiver Name': c.name || '',
+        'Invoice Number': so.invoice_no,
+        'Invoice date': so.invoice_date || '',
+        'Invoice Value': Math.round((so.invoice_amount || 0) * 100) / 100,
+        'Place Of Supply': c.state || '',
+        'Invoice Type': 'Regular',
+        'Rate (effective %)': taxable > 0 ? Math.round((gst / taxable) * 10000) / 100 : 0,
+        'Taxable Value': Math.round(taxable * 100) / 100,
+        'IGST': intra ? 0 : Math.round(gst * 100) / 100,
+        'CGST': intra ? Math.round(gst * 50) / 100 : 0,
+        'SGST': intra ? Math.round(gst * 50) / 100 : 0,
+        'Sales Order': so.so_no,
+      };
+    });
+    if (!rows.length) { alert('There are no invoices to export yet.'); return; }
+    opcDownload('GSTR1-B2B-FY' + (state.org.fiscal_year || '') + '.csv', opcToCSV(rows), 'text/csv;charset=utf-8');
+  };
 
   return (
     <div className="page">
@@ -32,8 +70,9 @@ function InvoiceList() {
           <div className="page-sub">{invoices.length} tax invoices · FY {state.org.fiscal_year}</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="download" size={13}/>GSTR-1 export</button>
-          <button className="btn btn-primary"><Icon name="plus" size={13}/>Raise invoice</button>
+          <button className="btn" onClick={exportGstr1} title="Download these invoices as a GSTR-1 (B2B) CSV"><Icon name="download" size={13}/>GSTR-1 export</button>
+          <button className="btn btn-primary" onClick={() => setShowRaise(true)} disabled={!canRaise}
+                  title={canRaise ? 'Pick an order to invoice' : 'Your role cannot raise invoices'}><Icon name="plus" size={13}/>Raise invoice</button>
         </div>
       </div>
 
@@ -52,7 +91,49 @@ function InvoiceList() {
           <div className="grow"/>
           <span className="muted small">{invoices.length} invoices</span>
         </div>
-        <div className="table-wrap">
+        {/* Phone: ten columns cannot be read in a table, so each invoice is a short
+            three-line row — number and total, customer, then date / e-way bill / status.
+            The table below is for everything wider (see .hide-phone / .show-phone). */}
+        {showRaise && (
+          <Modal title="Raise invoice" onClose={() => setShowRaise(false)}>
+            <div className="small muted mb-2">Pick the order to bill. You will land on its Invoicing tab, where you choose what goes on the invoice.</div>
+            <input className="input" placeholder="Search order or customer…" value={raiseQ} onChange={e => setRaiseQ(e.target.value)} style={{ width: '100%', marginBottom: 10 }}/>
+            <div className="sort-list">
+              {raisable.map(so => {
+                const c = getCustomer(so.customer_id);
+                return (
+                  <button type="button" key={so.id} className="sort-row" onClick={() => { window.__opcOpenTab = 'invoicing'; setShowRaise(false); navigate('sales-orders/' + so.id); }}>
+                    <span><strong className="mono">{so.so_no}</strong><span className="muted"> · {c ? c.name : ''}</span><br/><span className="tiny muted">{soEffectiveStatus(state, so)}</span></span>
+                    <Icon name="chevronRight" size={14}/>
+                  </button>
+                );
+              })}
+              {raisable.length === 0 && <div className="empty"><div className="empty-title">Nothing to invoice yet</div>An order can be invoiced once material is received or dispatched.</div>}
+            </div>
+          </Modal>
+        )}
+        <div className="inv-list show-phone">
+          {invoices.map(so => {
+            const c = getCustomer(so.customer_id);
+            return (
+              <div key={so.id} className="inv-row" role="button" tabIndex={0} onClick={() => navigate(`invoices/${so.id}`)}
+                   onKeyDown={e => { if (e.key === 'Enter') navigate(`invoices/${so.id}`); }}>
+                <div className="inv-top">
+                  <span className="mono inv-no">{so.invoice_no}</span>
+                  <strong className="inv-total">{inr(so.invoice_amount)}</strong>
+                </div>
+                <div className="inv-cust">{c.name}</div>
+                <div className="inv-meta">{so.so_no} · {fmtDate(so.invoice_date)} · Taxable {inr(soInvoicedTaxable(so))} · GST {inr(soInvoicedGst(so))}</div>
+                <div className="inv-badges">
+                  <span className="badge accent dot">EWB-{(231202310000 + parseInt(so.id.replace('so-',''))).toString().slice(0,12)}</span>
+                  {so.status === 'Payment Pending' ? <span className="badge warning dot">Payment due</span> : <span className="badge success dot">Paid</span>}
+                </div>
+              </div>
+            );
+          })}
+          {invoices.length === 0 && <div className="empty">No invoices yet.</div>}
+        </div>
+        <div className="table-wrap hide-phone">
           <table className="t">
             <thead><tr>
               <th>Invoice No</th><th>Customer</th><th>SO Ref</th><th>Date</th>
@@ -132,6 +213,31 @@ function InvoiceDetail({ soId, invId }) {
     return 'Rupees ' + parts.join(' ') + ' Only';
   };
 
+  // Email: opens the user's own mail app with the subject and a short note filled
+  // in (a browser cannot attach a file to a mailto: link, so the note says to attach
+  // the PDF from Print / Download). Nothing is sent by this app.
+  const emailInvoice = () => {
+    const subject = 'Tax Invoice ' + docNo + ' — ' + (state.org.name || '');
+    const body = 'Dear ' + (c.contact || c.name) + ',\n\nPlease find attached tax invoice ' + docNo + ' dated ' + fmtDate(docDate) +
+      ' against order ' + so.so_no + ', for ' + inr(grand) + '.\nPayment terms: ' + so.payment_terms + '.\n\nRegards,\n' + (state.org.name || '');
+    window.location.href = 'mailto:' + encodeURIComponent(c.email || '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  };
+  // Print / Download: prints just the invoice paper; "Save as PDF" in the print dialog downloads it.
+  const printInvoice = () => {
+    const ok = window.opcPrintElement(document.querySelector('.doc-paper'), docNo);
+    if (!ok) alert('Your browser blocked the print window. Allow pop-ups for this site and try again.');
+  };
+  // View e-Way Bill: brings the e-Way Bill card into view (opening it if a small screen
+  // has it folded away) and flashes it.
+  const showEwb = () => {
+    const card = document.getElementById('ewb-card');
+    if (!card) return;
+    card.removeAttribute('data-collapsed');
+    card.scrollIntoView({ block: 'center' });
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 1600);
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -146,9 +252,9 @@ function InvoiceDetail({ soId, invId }) {
           <div className="page-sub">SO Ref <span className="mono">{so.so_no}</span> · {c.name}</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="mail" size={13}/>Email to customer</button>
-          <button className="btn"><Icon name="print" size={13}/>Print / Download</button>
-          <button className="btn btn-primary"><Icon name="flag" size={13}/>View e-Way Bill</button>
+          <button className="btn" onClick={emailInvoice}><Icon name="mail" size={13}/>Email to customer</button>
+          <button className="btn" onClick={printInvoice}><Icon name="print" size={13}/>Print / Download</button>
+          <button className="btn btn-primary" onClick={showEwb}><Icon name="flag" size={13}/>View e-Way Bill</button>
         </div>
       </div>
 
@@ -291,7 +397,7 @@ function InvoiceDetail({ soId, invId }) {
         </div>
 
         <div className="stack">
-          <div className="card">
+          <div className="card" id="ewb-card">
             <div className="card-header"><h3 className="card-title">e-Way Bill</h3></div>
             <div className="card-body">
               <div className="dl">
@@ -302,7 +408,7 @@ function InvoiceDetail({ soId, invId }) {
                 <dt>Distance</dt><dd>247 km</dd>
                 <dt>Type</dt><dd>Outward · Supply</dd>
               </div>
-              <button className="btn mt-2" style={{ width: '100%' }}>View on NIC portal ↗</button>
+              <button className="btn mt-2" style={{ width: '100%' }} onClick={() => window.open('https://ewaybillgst.gov.in/', '_blank', 'noopener')}>View on NIC portal ↗</button>
             </div>
           </div>
           <div className="card">
@@ -1408,7 +1514,7 @@ function SOInvoicingTab({ so }) {
               </table>
             )}
           </div>
-          <div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: '1px solid var(--border)' }}>
+          <div className="card-body inv-foot" style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: '1px solid var(--border)' }}>
             <div className="grow tiny muted">{mode === 'bundle' ? `${invoiceableBundles} bundle(s) ready` : `${invoiceableComps} component unit(s) ready`} · partial bills your selection; final bills the whole balance.</div>
             <button className="btn" disabled={mode === 'bundle' ? invoiceableBundles === 0 : invoiceableComps === 0} onClick={() => { raiseSOInvoice(so.id, { mode, selections: mode === 'bundle' ? bundleSel : compSel }, ctx); setBundleSel({}); setCompSel({}); }}><Icon name="receipt" size={13}/>Create partial invoice</button>
             <button className="btn btn-primary" onClick={() => raiseSOInvoice(so.id, { mode: 'final' }, ctx)}><Icon name="receipt" size={13}/>Final / full invoice</button>

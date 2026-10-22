@@ -24,7 +24,7 @@ function CustomersList() {
           <div className="grow"/>
         </div>
         <div className="table-wrap">
-          <table className="t zebra">
+          <table className="t zebra" data-keep="Code,Contact,Tier">
             <thead><tr>
               <th>Code</th><th>Name</th><th>GSTIN</th><th>State</th><th>Contact</th>
               <th>Terms</th><th className="num">Credit Limit</th><th>Tier</th>

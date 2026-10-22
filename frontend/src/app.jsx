@@ -44,6 +44,8 @@ function App() {
   }, []);
 
   // Wait for the initial Supabase session check before deciding.
+  // Arrived from a password-reset e-mail: set a new password before anything else.
+  if (window.__opcRecovery && typeof RecoveryScreen !== 'undefined') return <RecoveryScreen/>;
   if (!authReady) return <Splash/>;
   // No session → login screen.
   if (!currentUser) return <LoginScreen/>;
@@ -114,6 +116,9 @@ function App() {
       <Topbar onOpenTweaks={openTweaks}/>
       <main className="main" data-screen-label={route}>
         <SyncErrorBanner/>
+        {/* One back control, above every page's title (not in the top bar). A page that
+            already has its own "‹ Parent" link just above its title hides this one in CSS. */}
+        {route !== 'flow' && <div className="page-back"><OpcBackButton/></div>}
         {Content}
       </main>
       {/* Drives the whole app from the keyboard. Renders nothing until asked. */}

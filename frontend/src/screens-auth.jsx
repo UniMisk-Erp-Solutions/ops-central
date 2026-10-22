@@ -114,3 +114,74 @@ function LoginScreen() {
 }
 
 window.LoginScreen = LoginScreen;
+
+
+// Where a password-reset e-mail lands: sign in with the link's one-time tokens, ask for a new
+// password, save it, then reload into the normal app. Shown by App() while window.__opcRecovery is set.
+function RecoveryScreen() {
+  const [state, setState] = React.useState('checking');   // checking | form | done | bad
+  const [msg, setMsg] = React.useState('');
+  const [pw, setPw] = React.useState('');
+  const [pw2, setPw2] = React.useState('');
+  const [show, setShow] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    (async () => {
+      const t = window.__opcRecovery;
+      if (!window.OPC_SB || !t || !t.access_token) { setMsg('This reset link is not valid here.'); setState('bad'); return; }
+      const { error } = await window.OPC_SB.auth.setSession({ access_token: t.access_token, refresh_token: t.refresh_token || '' });
+      if (error) { setMsg('This reset link has expired or was already used. Request a new one from your profile or ask your Org Admin.'); setState('bad'); return; }
+      setState('form');
+    })();
+  }, []);
+  const save = async (e) => {
+    if (e) e.preventDefault();
+    if (pw.length < 8) { setMsg('Use at least 8 characters.'); return; }
+    if (pw !== pw2) { setMsg('The two passwords do not match.'); return; }
+    setBusy(true); setMsg('');
+    const { error } = await window.OPC_SB.auth.updateUser({ password: pw });
+    setBusy(false);
+    if (error) { setMsg(error.message); return; }
+    setState('done');
+  };
+  const finish = () => { window.__opcRecovery = null; window.location.replace(window.location.pathname); };
+  return (
+    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg, #f6f7f9)', padding: 20 }}>
+      <form onSubmit={save} className="card" style={{ width: 360, maxWidth: '92vw' }}>
+        <div className="card-body">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+            <div className="brand-mark" style={{ width: 34, height: 34, fontSize: 17 }}>B</div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>OP Central</div>
+              <div className="tiny muted">Set a new password</div>
+            </div>
+          </div>
+          {state === 'checking' && <div className="muted small" style={{ padding: '12px 0' }}>Checking your link…</div>}
+          {state === 'bad' && (<>
+            <div className="small" style={{ color: 'var(--danger)', marginBottom: 12 }}>{msg}</div>
+            <button type="button" className="btn btn-primary" onClick={finish}>Back to sign in</button>
+          </>)}
+          {state === 'form' && (<div className="stack" style={{ gap: 10 }}>
+            <label className="field"><span className="field-label">New password</span>
+              <span className="pw-field">
+                <input className="input" type={show ? 'text' : 'password'} autoComplete="new-password" autoFocus value={pw} onChange={e => setPw(e.target.value)}/>
+                <button type="button" className="pw-eye" aria-label={show ? 'Hide password' : 'Show password'} onClick={() => setShow(v => !v)}><Icon name={show ? 'eyeOff' : 'eye'} size={16}/></button>
+              </span>
+            </label>
+            <label className="field"><span className="field-label">Confirm new password</span>
+              <input className="input" type={show ? 'text' : 'password'} autoComplete="new-password" value={pw2} onChange={e => setPw2(e.target.value)}/>
+            </label>
+            <div className={`pw-hint${pw.length >= 8 ? ' ok' : ''}`}>{pw.length >= 8 ? '✓ ' : ''}At least 8 characters</div>
+            {msg && <div className="small" style={{ color: 'var(--danger)' }}>{msg}</div>}
+            <button type="submit" className="btn btn-primary" disabled={busy || pw.length < 8 || pw !== pw2}>{busy ? 'Saving…' : 'Save new password'}</button>
+          </div>)}
+          {state === 'done' && (<>
+            <div className="small" style={{ marginBottom: 12 }}>Your password has been changed.</div>
+            <button type="button" className="btn btn-primary" onClick={finish}>Continue</button>
+          </>)}
+        </div>
+      </form>
+    </div>
+  );
+}
+window.RecoveryScreen = RecoveryScreen;

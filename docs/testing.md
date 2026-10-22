@@ -89,4 +89,4 @@ claim), never as superuser — superuser bypasses RLS, so a test that bypasses t
 thing it is testing always passes. `ssh-audit-permission-drift.py` is the one
 exception: it reads `config` directly (no row-level policy applies to a
 permissions *comparison*, only to who may *act* on the data), so it runs over
-SSH like the other `ssh-*` scripts, not as an authenticated tenant.
+SSH like the other `ssh-*` scripts, not as an authenticated tenant. [8] Back goes up the hierarchy (a detail to its list, a list to its Flow stage, never to the previous page), so a page and its parent cannot send you back and forth. |

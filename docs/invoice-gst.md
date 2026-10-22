@@ -165,3 +165,43 @@ this lesson.
   received" when it no longer held its full requirement. Fixed to subtract
   `soPoolOut` the same way — `gst-check.js` section [8] proves the two now
   agree.
+
+## The buttons on the invoice page
+
+"Email to customer", "Print / Download" and "View e-Way Bill" used to be \`<button>\`s with
+no \`onClick\` — they looked live and did nothing. Now:
+
+- **Print / Download** prints just the invoice paper, in its own window, via
+  \`opcPrintElement\` (\`utils.jsx\`): it copies the rendered \`.doc-paper\` and the page's
+  stylesheets, so the printout is what the preview shows (preview-equals-paper). "Save as PDF"
+  in the print dialog is the download. If the browser blocks the pop-up the user is told.
+- **Email to customer** opens the user's mail app (\`mailto:\`) with the customer's address
+  (if the customer has one), a subject and a short note filled in. A browser cannot attach a
+  file to a \`mailto:\` link, so the person attaches the PDF from Print / Download. Nothing is
+  sent by this app — there is no mail-sending service behind it.
+- **View e-Way Bill** scrolls to the e-Way Bill card (opening it if a small screen folded it)
+  and flashes it; the card's "View on NIC portal ↗" opens the public NIC e-way-bill site in a
+  new tab. The e-way bill data shown is still the demo values, not a live NIC lookup.
+- Trap: \`InvoiceDetail\` has early returns before its hooks end, so it cannot call
+  \`useToast()\` — a hook after a conditional return breaks the rules of hooks. That is why
+  these handlers use \`alert\`/navigation instead of a toast.
+
+## The two buttons on the invoice list
+
+"GSTR-1 export" and "Raise invoice" on **Invoices & e-Way Bills** were also dead \`<button>\`s.
+
+- **GSTR-1 export** downloads \`GSTR1-B2B-FY<year>.csv\`: one row per invoice in the list, with
+  the portal's B2B columns (recipient GSTIN, invoice number/date/value, place of supply,
+  taxable value, IGST / CGST / SGST). The split follows the invoice's own rule — customer
+  state equals the org's state → CGST + SGST halves, otherwise IGST — and the rate column is
+  the *effective* rate (GST ÷ taxable), so an invoice with mixed line rates exports one honest
+  figure rather than a made-up slab. It reads the stamped amounts; it never recomputes tax.
+  This is a convenience export for the B2B sheet, not a filing: check it against the portal's
+  own template before uploading, and it does not produce the B2C / HSN / credit-note sheets.
+- **Raise invoice** opens a picker of orders that have something to bill (material received or
+  dispatched, or part-billed already — \`INV_RAISABLE\` in \`screens-billing.jsx\`), searchable
+  by order or customer; choosing one opens that order's **Invoicing** tab, where the quantities
+  go on the invoice. The list does not invent an invoice itself — raising one needs those
+  choices. Only roles that can invoice (Purchase, Billing, Collections, Org Admin) get an
+  enabled button. The tab is chosen by a one-shot \`window.__opcOpenTab\` that
+  \`SalesOrderDetail\` reads and clears when it mounts.

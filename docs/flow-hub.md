@@ -39,18 +39,18 @@ short list of module ids:
 ```js
 { id: 'sales-order',  label: 'Sales Order',  icon: 'receipt', modules: ['client-requests','sourcing','sales-orders','customers'] }
 { id: 'vendors',      label: 'Vendors',       icon: 'factory', modules: ['rfq','vendor-pos','vendors','mapping'] }
-{ id: 'procurement',  label: 'Procurement',   icon: 'cart',    modules: ['vendor-pos','three-way','pool'] }
-{ id: 'inventory',    label: 'Inventory',     icon: 'box',     modules: ['grn','godown','pool'] }
-{ id: 'dispatch',     label: 'Dispatch',      icon: 'truck',   modules: ['godown','scm','transfers'] }
+{ id: 'procurement',  label: 'Procurement',   icon: 'cart',    modules: ['godown','three-way'] }
+{ id: 'inventory',    label: 'Inventory',     icon: 'box',     modules: ['pool','grn','transfers'] }
+{ id: 'dispatch',     label: 'Dispatch',      icon: 'truck',   modules: ['scm'] }
 { id: 'billing',      label: 'Billing',       icon: 'cash',    modules: ['invoices','collections'] }
 ```
 
-A module can legitimately sit in more than one stage — `vendor-pos` is both
-where a PO gets issued (Vendors) and what you watch until it arrives
-(Procurement); `godown` is both where goods land (Inventory) and where they
-leave from (Dispatch); `pool` is checked before buying (Procurement) and is
-where surplus comes back to (Inventory). That overlap is the real workflow,
-not a bug in the mapping.
+Each stage lists only what belongs to it (changed 2026-10: Procurement is Virtual
+Godowns + 3-Way Match; Inventory is Master Surplus Pool + GRN + Cross-SO
+Transfers; Dispatch is SCM Tracking only). `vendor-pos` now lives only under
+Vendors and `godown` only under Procurement. A module may still sit in more than
+one stage if the mapping says so — nothing in the code prevents it — but none
+does today.
 
 **What each stage hub actually displays — label, icon, badge — is never a
 second copy of that data.** `flowModuleIndex(state, role)` calls

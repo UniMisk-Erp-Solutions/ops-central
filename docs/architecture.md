@@ -27,6 +27,15 @@ field is undefined — the page just goes white. That is why
 [testing.md](./testing.md) exists and why `render-check` actually executes every
 file and renders every screen.
 
+**Load time.** The browser transpiles ~1.3 MB of JSX on every page load — about 2 s
+of Babel on a fast desktop, several times that on a phone. That cost, not the
+network, is why the app is slow to open. React is loaded as the **production**
+build (≈140 KB instead of ≈1 MB); the cost is that a React error in the browser
+console is a minified code, not a sentence — switch the two `<script>` URLs in
+`index.html` back to `*.development.js` (and their `integrity` hashes) when
+debugging. Removing the Babel cost itself means either caching compiled output or
+adding a build step — a decision, not a tweak.
+
 Runtime config comes from `window.OPC_ENV` in `src/config.js`, **not** from
 environment variables. Vercel env vars do nothing here; change `config.js` and
 redeploy.

@@ -265,7 +265,8 @@ function VendorAllocator({ soId, onClose }) {
       ) : (
         <>
           {/* C — filter, tick, apply to the selection */}
-          <div className="card mb-2"><div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px' }}>
+          <div className="card mb-2"><OpcGroup title={<strong className="small">Filter &amp; bulk edit · {selKeys.length} selected</strong>} startOpen={false}>
+          <div className="card-body alloc-bulk" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px' }}>
             <input className="input" placeholder="Filter items…" value={q} onChange={e => setQ(e.target.value)} style={{ width: 190, height: 28 }}/>
             <button className="btn btn-sm" onClick={toggleAllVisible}>
               {visible.length && visible.every(r => sel[r.key]) ? 'Clear' : 'Select'} {visible.length} shown
@@ -314,11 +315,11 @@ function VendorAllocator({ soId, onClose }) {
               title={selKeys.length ? 'Applies to the ticked rows' : 'Applies to every row'}>
               Cost + % {selKeys.length ? `· ${selKeys.length}` : '· all'}
             </button>
-          </div></div>
+          </div></OpcGroup></div>
 
           <div className="card">
             <div className="card-body flush" style={{ maxHeight: 430, overflow: 'auto' }}>
-              <table className="t">
+              <table className="t" data-keep="Item,Qty,PO amount">
                 <thead><tr>
                   <th style={{ width: 28 }}></th>
                   <th>Item</th>
@@ -460,7 +461,7 @@ function AllocSOPicker({ onClose, onPick }) {
       <div className="tiny muted mb-2">Pick the order to buy for. Vendors and prices are set for every line at once.</div>
       {orders.length === 0 ? <div className="empty">No open orders.</div> : (
         <table className="t">
-          <thead><tr><th>Order</th><th>Customer</th><th className="num">Still to buy</th><th></th></tr></thead>
+          <thead><tr><th>Order</th><th>Customer</th><th className="num hide-phone">Still to buy</th><th></th></tr></thead>
           <tbody>
             {orders.map(so => {
               const left = allocBuildRows(state, so);
@@ -468,8 +469,11 @@ function AllocSOPicker({ onClose, onPick }) {
               return (
                 <tr key={so.id}>
                   <td className="mono small">{so.so_no}<div className="tiny muted">{so.status}</div></td>
-                  <td className="small">{(getCustomer(so.customer_id) || {}).name || '—'}</td>
-                  <td className="num small">{units ? `${left.length} item(s) · ${units} unit(s)` : <span className="muted">all on PO</span>}</td>
+                  <td className="small">{(getCustomer(so.customer_id) || {}).name || '—'}
+                    {/* on a phone the "still to buy" column is folded under the customer instead of squeezed beside it */}
+                    <div className="tiny show-phone" style={{ marginTop: 2, color: units ? 'var(--accent)' : 'var(--text-3)', fontWeight: units ? 600 : 400 }}>{units ? `${left.length} item(s) · ${units} unit(s) to buy` : 'all on PO'}</div>
+                  </td>
+                  <td className="num small hide-phone">{units ? `${left.length} item(s) · ${units} unit(s)` : <span className="muted">all on PO</span>}</td>
                   <td style={{ textAlign: 'right' }}>
                     <button className="btn btn-sm btn-primary" disabled={!units} onClick={() => onPick(so.id)}>Open</button>
                   </td>

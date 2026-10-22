@@ -126,7 +126,7 @@ function Dashboard() {
           <h1 className="page-title">Good morning, {user.name.split(' ')[0]}</h1>
           <div className="page-sub">{role} workspace · {fmtDate(TODAY)} · {state.org.short}</div>
         </div>
-        <div className="page-actions">
+        <div className="page-actions dash-actions">
           <div className="tabs" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 2 }}>
             {views.map(v => <button key={v.id} className={`tab ${view === v.id ? 'active' : ''}`} onClick={() => setView(v.id)}><Icon name={v.icon} size={12}/> {v.label}</button>)}
           </div>
@@ -148,11 +148,55 @@ function Dashboard() {
 const cardSizes = {};   // { [so.id]: { w, h } } — only for cards stretched taller than default
 let boardScroll = 0;
 
+// Progress as a small container truck: the cab is at the RIGHT and the flatbed carries ONE ribbed
+// shipping container that fills up from its back (left) towards the cab as the order progresses —
+// empty at 0%, full (and green) at 100%. The fill is NOT static: it is the order's own progress
+// (soMetrics().progress, from the order's status), so it moves as the order moves. One inline SVG
+// (viewBox 300 x 43, starting at y=-5 so the cab can stand taller than the container), no image files;
+// it scales with the card. The percentage is real HTML laid over it, centred in the coloured part.
+function DashTruckProgress({ pct }) {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  const color = p >= 100 ? 'var(--success)' : 'var(--accent)';
+  const X0 = 4, W = 246, fillW = (W * p) / 100;
+  const ribs = [];
+  for (let x = X0 + 7; x < X0 + W - 3; x += 8) ribs.push(x);
+  // The number is real HTML laid over the SVG (SVG text would scale down with the card to ~7px). It is
+  // centred in the coloured part in white; below ~14% that part is too narrow for it, so it sits just
+  // past the fill in the normal text colour instead.
+  const narrow = fillW < 40;
+  const pctLeft = narrow ? ((X0 + fillW + 4) / 300) * 100 : ((X0 + fillW / 2) / 300) * 100;
+  return (
+    <div className="truck-wrap">
+    <svg className="truck-svg" viewBox="0 -5 300 43" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={p} aria-label={`${p}% complete`}>
+      <title>{p}% complete</title>
+      {/* the container: empty shell, then the filled part, then its corrugation ribs */}
+      <rect x={X0} y={4} width={W} height={21} rx={2} style={{ fill: 'var(--bg-subtle)', stroke: 'var(--border-strong)' }} strokeWidth="1"/>
+      {fillW > 0 && <rect x={X0} y={4} width={fillW} height={21} rx={2} style={{ fill: color }}/>}
+      {ribs.map(x => (
+        <line key={x} x1={x} y1={6.5} x2={x} y2={22.5} strokeWidth="1.2"
+              stroke={x - X0 <= fillW ? '#fff' : 'var(--border-strong)'} strokeOpacity={x - X0 <= fillW ? 0.4 : 0.9}/>
+      ))}
+      {/* flatbed chassis */}
+      <rect x="2" y="25" width="262" height="3.5" rx="1" style={{ fill: 'var(--text-3)' }}/>
+      {/* cab: hood and body, then the window */}
+      <path d="M256 -4 H275 L291 13 H298 V28.5 H256 Z" style={{ fill: color }}/>
+      <path d="M260 -0.5 H273 L284 13 H260 Z" fill="#fff" fillOpacity="0.85"/>
+      {/* wheels */}
+      {[22, 38, 214, 230, 270, 286].map(cx => (
+        <g key={cx}><circle cx={cx} cy="31.6" r="5.6" style={{ fill: 'var(--text)' }}/><circle cx={cx} cy="31.6" r="2.1" fill="#fff"/></g>
+      ))}
+    </svg>
+    <span className={`truck-pct-in${narrow ? ' narrow' : ''}`} style={{ left: `${pctLeft}%` }}>{p}%</span>
+    </div>
+  );
+}
+
 // One SO card. Restores its saved size on mount, remembers it on resize, and makes
 // every section clickable to the relevant detail page.
 function SOCard({ so, m, cust, navigate, getUser, getVendor, getCategory, getProduct }) {
   const mColor = m.margin >= 0 ? 'var(--success)' : 'var(--danger)';
   const ref = React.useRef(null);
+  const [open, setOpen] = React.useState(false);   // phone only: tap to show the details
   React.useEffect(() => {
     const el = ref.current; if (!el) return;
     const saved = cardSizes[so.id];
@@ -170,7 +214,7 @@ function SOCard({ so, m, cust, navigate, getUser, getVendor, getCategory, getPro
   const matPct = m.reqUnits > 0 ? Math.round((m.recvUnits / m.reqUnits) * 100) : 0;
   const clk = { cursor: 'pointer' };
   return (
-    <div ref={ref} className="so-card" onDoubleClick={() => navigate(`sales-orders/${so.id}`)}>
+    <div ref={ref} className={`so-card${open ? ' so-open' : ''}`} onDoubleClick={() => navigate(`sales-orders/${so.id}`)}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', ...clk }} onClick={go(`sales-orders/${so.id}`)}>{cust ? cust.name : '—'}</div>
@@ -180,11 +224,8 @@ function SOCard({ so, m, cust, navigate, getUser, getVendor, getCategory, getPro
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, margin: '8px 0 5px' }}>
         <StatusBadge status={so.status}/>
-        <span className="tiny mono muted">{m.progress}%</span>
       </div>
-      <div style={{ height: 5, background: 'var(--bg-subtle)', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${m.progress}%`, height: '100%', background: m.progress >= 100 ? 'var(--success)' : 'var(--accent)', transition: 'width .3s' }}/>
-      </div>
+      <DashTruckProgress pct={m.progress}/>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 9 }}>
         <div style={{ background: 'var(--bg-subtle)', borderRadius: 5, padding: '5px 8px', ...clk }} onClick={go(`sales-orders/${so.id}`)} title="Open Sales Order">
           <div className="tiny muted">Value</div>
@@ -195,7 +236,7 @@ function SOCard({ so, m, cust, navigate, getUser, getVendor, getCategory, getPro
           <div className="mono" style={{ fontWeight: 600, fontSize: 12.5, color: mColor }}>{m.marginPct >= 0 ? '+' : ''}{m.marginPct.toFixed(1)}%</div>
         </div>
       </div>
-      <div className="so-extra" style={{ gridTemplateColumns: 'auto 1fr', rowGap: 4, columnGap: 8, fontSize: 11.5, marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
+      <div className="so-extra" style={{ gridTemplateColumns: 'auto minmax(0, 1fr)', rowGap: 5, columnGap: 12, fontSize: 11.5, marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)' }}>
         <span className="muted">PM</span><span className="right trunc">{getUser(so.pm)?.name || 'Unassigned'}</span>
         <span className="muted">Order type</span><span className="right trunc">{so.order_type || 'Supply'}{impl ? ' + Implementation' : ''}</span>
         {supervisor && <><span className="muted">Supervisor</span><span className="right trunc">{supervisor.name}</span></>}
@@ -274,6 +315,9 @@ function SOCard({ so, m, cust, navigate, getUser, getVendor, getCategory, getPro
         })}
         {(so.lines || []).length === 0 && <div className="tiny muted">No line items.</div>}
       </div>
+      <button type="button" className="so-toggle" onClick={e => { e.stopPropagation(); setOpen(o => !o); }}>
+        {open ? 'Hide details' : 'Show details'} <Icon name={open ? 'chevronUp' : 'chevronDown'} size={12}/>
+      </button>
     </div>
   );
 }
@@ -288,6 +332,8 @@ function SOBoardDashboard() {
   const [sort, setSort] = React.useState('date');
   const [dir, setDir] = React.useState('desc');
   const [page, setPage] = React.useState(0);
+  const [sheet, setSheet] = React.useState(null);   // phone only: 'filter' | 'sort' bottom sheet
+  const [openGroup, setOpenGroup] = React.useState('');   // which filter group is expanded in the sheet
   const PER = 48;
 
   // Restore the board scroll on return (Back button) and remember it while scrolling.
@@ -300,7 +346,10 @@ function SOBoardDashboard() {
     return () => { cancelAnimationFrame(raf); main.removeEventListener('scroll', onScroll); };
   }, []);
 
-  const statuses = [...new Set(state.sales_orders.map(s => s.status))];
+  // Every status an order can be in, in lifecycle order — not only the ones present
+  // right now (that list had only 6 entries when only 6 had happened to occur).
+  const present = state.sales_orders.map(s => s.status);
+  const statuses = [...new Set([...SO_LIFECYCLE, 'On Hold', 'Cancelled', ...present])].filter(Boolean);
   const pms = [...new Set(state.sales_orders.map(s => s.pm).filter(Boolean))];
 
   let rows = state.sales_orders.map(so => ({ so, m: soMetrics(state, so, soSubtotal), cust: getCustomer(so.customer_id) }));
@@ -317,32 +366,105 @@ function SOBoardDashboard() {
   const pg = Math.min(page, pages - 1);
   const slice = rows.slice(pg * PER, pg * PER + PER);
 
+  const pmName = (id) => (getUser(id) && getUser(id).name) || id;
+  const activeFilters = [
+    status && { k: 'status', label: status, clear: () => { setStatus(''); setPage(0); } },
+    priority && { k: 'priority', label: priority, clear: () => { setPriority(''); setPage(0); } },
+    pmF && { k: 'pm', label: 'PM: ' + pmName(pmF), clear: () => { setPmF(''); setPage(0); } },
+  ].filter(Boolean);
+  const clearAll = () => { setStatus(''); setPriority(''); setPmF(''); setPage(0); };
+  const SORTS = [['date', 'Created date'], ['expected', 'Delivery date'], ['value', 'Value'], ['margin', 'Margin %'], ['so', 'SO number']];
+
   return (
     <div className="stack">
       <div className="card"><div className="card-body" style={{ padding: 10 }}>
-        <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', width: '100%' }}>
-          <div style={{ flex: '2 1 130px', minWidth: 0, position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <div className="dash-filters" style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', width: '100%' }}>
+          <div className="dash-filter-search" style={{ flex: '2 1 130px', minWidth: 0, position: 'relative', display: 'flex', alignItems: 'center' }}>
             <span style={{ position: 'absolute', left: 9, color: 'var(--text-muted)', display: 'flex', pointerEvents: 'none' }}><Icon name="search" size={14}/></span>
             <input className="input" placeholder="Search SO, customer, PO…" value={q} onChange={e => { setQ(e.target.value); setPage(0); }} style={{ width: '100%', minWidth: 0, height: 30, fontSize: 12.5, paddingLeft: 28 }}/>
           </div>
+          <button type="button" className="btn dash-phone-only" onClick={() => setSheet('sort')}><Icon name="arrowLeftRight" size={13}/>Sort</button>
+          <button type="button" className="btn dash-phone-only" onClick={() => setSheet('filter')}>
+            <Icon name="filter" size={13}/>Filter{activeFilters.length > 0 && <span className="badge accent" style={{ marginLeft: 4 }}>{activeFilters.length}</span>}
+          </button>
           {[
             { v: status, set: setStatus, opts: [['', 'All statuses'], ...statuses.map(s => [s, s])] },
             { v: priority, set: setPriority, opts: [['', 'All priorities'], ['Standard', 'Standard'], ['Urgent', 'Urgent'], ['Critical', 'Critical']] },
             { v: pmF, set: setPmF, opts: [['', 'All PMs'], ...pms.map(id => [id, getUser(id)?.name || id])] },
             { v: sort, set: setSort, reset: false, opts: [['date', 'Sort: Created'], ['expected', 'Sort: Delivery'], ['value', 'Sort: Value'], ['margin', 'Sort: Margin %'], ['so', 'Sort: SO No']] },
           ].map((f, i) => (
-            <select key={i} className="select" value={f.v} onChange={e => { f.set(e.target.value); if (f.reset !== false) setPage(0); }}
+            <select key={i} className="select dash-filter-sel" value={f.v} onChange={e => { f.set(e.target.value); if (f.reset !== false) setPage(0); }}
               style={{ flex: '1 1 60px', minWidth: 0, height: 30, fontSize: 12, padding: '0 22px 0 8px' }}>
               {f.opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           ))}
-          <button className="btn btn-sm" title={dir === 'asc' ? 'Ascending' : 'Descending'} onClick={() => setDir(d => d === 'asc' ? 'desc' : 'asc')} style={{ flex: '0 0 auto', height: 30, padding: '0 11px', fontSize: 13, lineHeight: 1 }}>{dir === 'asc' ? '↑' : '↓'}</button>
+          <button className="btn btn-sm dash-filter-dir" title={dir === 'asc' ? 'Ascending' : 'Descending'} onClick={() => setDir(d => d === 'asc' ? 'desc' : 'asc')} style={{ flex: '0 0 auto', height: 30, padding: '0 11px', fontSize: 13, lineHeight: 1 }}>{dir === 'asc' ? '↑' : '↓'}</button>
         </div>
-        <div className="tiny muted" style={{ marginTop: 7 }}>{rows.length} SO(s) · drag a card's bottom-right corner to expand for more detail</div>
+        {activeFilters.length > 0 && (
+          <div className="dash-chips dash-phone-only">
+            {activeFilters.map(f => (
+              <span key={f.k} className="dash-chip">{f.label}<button type="button" aria-label={`Remove ${f.label}`} onClick={f.clear}><Icon name="x" size={11}/></button></span>
+            ))}
+            <button type="button" className="dash-chip-clear" onClick={clearAll}>Clear all</button>
+          </div>
+        )}
+        <div className="tiny muted" style={{ marginTop: 7 }}>{rows.length} SO(s)<span className="dash-hint"> · drag a card's bottom-right corner to expand for more detail</span></div>
       </div></div>
 
+      {sheet === 'filter' && (
+        <Modal title="Filters" onClose={() => setSheet(null)} footer={<>
+          <button className="btn" onClick={clearAll} disabled={activeFilters.length === 0}>Clear all</button>
+          <button className="btn btn-primary" onClick={() => setSheet(null)}>Show {rows.length} SO(s)</button>
+        </>}>
+          <div className="fgroups">
+            {[
+              { label: 'Status', v: status, set: setStatus, opts: statuses.map(x => [x, x]) },
+              { label: 'Priority', v: priority, set: setPriority, opts: ['Standard', 'Urgent', 'Critical'].map(x => [x, x]) },
+              { label: 'Project manager', v: pmF, set: setPmF, opts: pms.map(id => [id, pmName(id)]) },
+            ].map(g => {
+              const open = openGroup === g.label;
+              const cur = (g.opts.find(o => o[0] === g.v) || [])[1];
+              return (
+                <div key={g.label} className={`fgroup${open ? ' open' : ''}`}>
+                  <button type="button" className="fgroup-head" aria-expanded={open} onClick={() => setOpenGroup(open ? '' : g.label)}>
+                    <span className="fgroup-label">{g.label}</span>
+                    <span className="fgroup-val">{cur || 'All'}</span>
+                    <Icon name={open ? 'chevronUp' : 'chevronDown'} size={15}/>
+                  </button>
+                  {open && (
+                    <div className="opt-chips fgroup-body">
+                      {g.opts.map(([val, l]) => (
+                        <button type="button" key={val} className={`opt-chip${g.v === val ? ' active' : ''}`} aria-pressed={g.v === val}
+                                onClick={() => { g.set(g.v === val ? '' : val); setPage(0); }}>{l}</button>
+                      ))}
+                      {g.opts.length === 0 && <span className="muted small">Nothing to filter by yet.</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Modal>
+      )}
+      {sheet === 'sort' && (
+        <Modal title="Sort by" onClose={() => setSheet(null)}>
+          <div className="sort-list" role="radiogroup">
+            {SORTS.map(([val, l]) => (
+              <button type="button" key={val} role="radio" aria-checked={sort === val} className={`sort-row${sort === val ? ' active' : ''}`}
+                      onClick={() => { setSort(val); setSheet(null); }}>
+                <span>{l}</span>{sort === val && <Icon name="check" size={16}/>}
+              </button>
+            ))}
+          </div>
+          <div className="opt-chips" style={{ marginTop: 14 }}>
+            <button type="button" className={`opt-chip${dir === 'desc' ? ' active' : ''}`} onClick={() => setDir('desc')}>High to low / newest first</button>
+            <button type="button" className={`opt-chip${dir === 'asc' ? ' active' : ''}`} onClick={() => setDir('asc')}>Low to high / oldest first</button>
+          </div>
+        </Modal>
+      )}
+
       <style>{`
-        .so-card { container-type: size; container-name: socard; flex: 0 0 auto; width: calc(25% - 9px); min-width: 200px; height: 152px; min-height: 120px; max-width: 100%; resize: both; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 11px; cursor: default; transition: border-color .15s, box-shadow .15s; scrollbar-width: thin; scrollbar-color: #e8e8e8 transparent; }
+        .so-card { container-type: size; container-name: socard; flex: 0 0 auto; width: calc(25% - 9px); min-width: 200px; height: 174px; min-height: 140px; max-width: 100%; resize: both; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 11px; cursor: default; transition: border-color .15s, box-shadow .15s; scrollbar-width: thin; scrollbar-color: #e8e8e8 transparent; }
         .so-card::-webkit-scrollbar { width: 3px; height: 3px; }
         .so-card::-webkit-scrollbar-track { background: transparent; }
         .so-card::-webkit-scrollbar-thumb { background: #ececec; border-radius: 10px; }
@@ -353,7 +475,7 @@ function SOBoardDashboard() {
         @container socard (min-height: 320px) { .so-card .so-extra-2 { display: block; } }
         @container socard (min-height: 450px) { .so-card .so-extra-3 { display: block; } }
       `}</style>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+      <div className="so-board" style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
         {slice.map(({ so, m, cust }) => (
           <SOCard key={so.id} so={so} m={m} cust={cust} navigate={navigate} getUser={getUser} getVendor={getVendor} getCategory={getCategory} getProduct={getProduct}/>
         ))}

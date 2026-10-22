@@ -23,9 +23,9 @@
 const FLOW_STAGES = [
   { id: 'sales-order', label: 'Sales Order', icon: 'receipt', modules: ['client-requests', 'sourcing', 'sales-orders', 'customers'] },
   { id: 'vendors', label: 'Vendors', icon: 'factory', modules: ['rfq', 'vendor-pos', 'vendors', 'mapping'] },
-  { id: 'procurement', label: 'Procurement', icon: 'cart', modules: ['vendor-pos', 'three-way', 'pool'] },
-  { id: 'inventory', label: 'Inventory', icon: 'box', modules: ['grn', 'godown', 'pool'] },
-  { id: 'dispatch', label: 'Dispatch', icon: 'truck', modules: ['godown', 'scm', 'transfers'] },
+  { id: 'procurement', label: 'Procurement', icon: 'cart', modules: ['godown', 'three-way'] },
+  { id: 'inventory', label: 'Inventory', icon: 'box', modules: ['pool', 'grn', 'transfers'] },
+  { id: 'dispatch', label: 'Dispatch', icon: 'truck', modules: ['scm'] },
   { id: 'billing', label: 'Billing', icon: 'cash', modules: ['invoices', 'collections'] },
 ];
 window.FLOW_STAGES = FLOW_STAGES;

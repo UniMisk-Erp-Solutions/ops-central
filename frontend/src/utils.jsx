@@ -305,6 +305,78 @@ function soEffectiveStatus(state, so) {
 }
 
 /* ===== Icons (lucide-style — inline SVG) ===== */
+// Where "Back" goes: always UP the app's own hierarchy, never "whatever page was
+// open before". The old version called history.back(), and that ping-ponged: an
+// invoice's own "< Invoices" link *navigates* (adds a history entry) to the list,
+// so Back on the list went to the invoice, whose link went to the list, and so on.
+//   a detail / sub-screen   -> its list           invoices/so-1        -> invoices
+//   (three levels)          -> its parent record   invoices/so-1/inv-2  -> invoices/so-1
+//   a top-level screen      -> its Flow stage hub  invoices             -> flow/billing
+//   anything else           -> the Flow hub
+function opcParentRoute(route) {
+  const parts = String(route || '').split('/').filter(Boolean);
+  if (parts.length === 0 || parts[0] === 'flow' && parts.length === 1) return 'flow';
+  if (parts[0] === 'flow') return 'flow';                                   // a stage hub -> the Flow hub
+  if (parts[0] === 'invoices' && parts.length >= 3) return 'invoices/' + parts[1];
+  if (parts.length >= 2) return parts[0];
+  const stages = window.FLOW_STAGES || [];
+  const st = stages.find(x => x.modules.indexOf(parts[0]) !== -1);
+  return st ? 'flow/' + st.id : 'flow';
+}
+window.opcParentRoute = opcParentRoute;
+
+// "< Back" link. `to` overrides the computed parent (used where a screen has no route of its own).
+function OpcBackButton({ to, label = 'Back' }) {
+  const { navigate, route } = useStore();
+  return (
+    <button type="button" className="back-link" onClick={() => navigate(to || opcParentRoute(route))}>
+      <Icon name="chevronLeft" size={14}/>{label}
+    </button>
+  );
+}
+window.OpcBackButton = OpcBackButton;
+
+// A group of rows under a heading (a project's vendor POs, a project's GRNs).
+// Desktop: always open, exactly as before. Phone/tablet: the heading is a
+// dropdown — tap to open or close the group's table — so a long list of
+// projects is a short list of headings you open as needed. `startOpen` is the
+// one open by default on a small screen (the first group). The chevron and the
+// hiding are CSS (.grp-*), so a wide window ignores `open` entirely.
+function OpcGroup({ title, right, startOpen, children }) {
+  const [open, setOpen] = React.useState(!!startOpen);
+  return (
+    <div className={`grp${open ? ' open' : ''}`}>
+      <div className="grp-head" role="button" tabIndex={0} aria-expanded={open}
+           onClick={() => setOpen(o => !o)}
+           onKeyDown={e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); setOpen(o => !o); } }}>
+        <div className="grp-title">{title}</div>
+        <div className="grp-right">{right}</div>
+        <span className="grp-chev"><Icon name={open ? 'chevronUp' : 'chevronDown'} size={16}/></span>
+      </div>
+      <div className="grp-body">{children}</div>
+    </div>
+  );
+}
+window.OpcGroup = OpcGroup;
+
+// Print (or "Save as PDF") exactly what is on screen for one element — the
+// invoice paper — in its own window, so the browser does not print the whole app.
+// It prints the element AS RENDERED, so the printout cannot differ from the preview.
+// Returns false when the browser blocked the pop-up.
+function opcPrintElement(el, title) {
+  if (!el) return false;
+  const w = window.open('', '_blank');
+  if (!w) return false;
+  const css = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map(l => '<link rel="stylesheet" href="' + l.href + '">').join('');
+  const vars = document.documentElement.getAttribute('style') || '';
+  w.document.write('<!doctype html><html style="' + vars.replace(/"/g, '&quot;') + '"><head><meta charset="utf-8"><title>' + String(title || 'Document').replace(/</g, '&lt;') + '</title>' + css +
+    '<style>body{background:#fff;margin:0;padding:12px}.doc-paper{box-shadow:none!important;border:none!important;max-width:none!important;margin:0 auto}@media print{body{padding:0}}</style></head><body>' +
+    el.outerHTML + '<script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script></body></html>');
+  w.document.close();
+  return true;
+}
+window.opcPrintElement = opcPrintElement;
+
 function Icon({ name, size = 14, color = "currentColor", strokeWidth = 1.75 }) {
   const paths = {
     home: <><path d="M3 12L12 4l9 8"/><path d="M5 10v10h14V10"/></>,
@@ -324,15 +396,18 @@ function Icon({ name, size = 14, color = "currentColor", strokeWidth = 1.75 }) {
     check: <><path d="M5 12l5 5L20 7"/></>,
     x: <><path d="M6 6l12 12M18 6L6 18"/></>,
     chevronDown: <><path d="M6 9l6 6 6-6"/></>,
+    chevronUp: <><path d="M6 15l6-6 6 6"/></>,
     chevronRight: <><path d="M9 6l6 6-6 6"/></>,
     chevronLeft: <><path d="M15 6l-6 6 6 6"/></>,
     arrowRight: <><path d="M5 12h14M13 6l6 6-6 6"/></>,
+    menu: <><path d="M4 6h16M4 12h16M4 18h16"/></>,
     arrowLeftRight: <><path d="M7 4l-4 4 4 4M3 8h14M17 14l4 4-4 4M21 18H7"/></>,
     pin: <><path d="M12 2v8m-4 0h8l-2 4v8h-4v-8z"/></>,
     download: <><path d="M12 4v12m-4-4l4 4 4-4M4 20h16"/></>,
     upload: <><path d="M12 20V8m-4 4l4-4 4 4M4 4h16"/></>,
     edit: <><path d="M14 4l6 6L8 22H2v-6z"/></>,
     trash: <><path d="M4 7h16M9 7V4h6v3M6 7v13a2 2 0 002 2h8a2 2 0 002-2V7"/></>,
+    eyeOff: <><path d="M3 3l18 18"/><path d="M10.6 6.2A10.5 10.5 0 0 1 12 6c6 0 10 6 10 6a17 17 0 0 1-3.3 3.9M6.6 7.6C3.7 9.4 2 12 2 12s4 7 10 7a9.7 9.7 0 0 0 4-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></>,
     eye: <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></>,
     mail: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></>,
     phone: <><path d="M5 4h4l2 5-3 2c1 3 4 6 7 7l2-3 5 2v4a2 2 0 01-2 2C9 22 2 15 2 6a2 2 0 012-2"/></>,
@@ -380,7 +455,7 @@ function Avatar({ user, size = 22 }) {
   return (
     <span style={{
       width: size, height: size, borderRadius: '50%',
-      background: 'oklch(0.92 0.02 250)', color: 'oklch(0.42 0.06 250)',
+      background: 'color-mix(in srgb, var(--accent) 16%, var(--surface))', color: 'var(--accent)',
       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       fontSize: Math.round(size * 0.42), fontWeight: 600, fontFamily: 'var(--mono)',
       flexShrink: 0,
@@ -941,3 +1016,201 @@ Object.assign(window, {
   ToastProvider, useToast,
   useAliasMap, invalidateAliasMap, partyItemName,
 });
+
+// ===== Phone/tablet: a page with several table sections gets dropdown cards ====
+// When a page shows two or more cards that each hold a heading and a table
+// (RFQ comparison per project, a godown's sections, an order's linked POs…),
+// on a small screen each heading becomes a dropdown: tap to open/close that
+// card; the first starts open. Done with data-* attributes + one delegated click
+// handler, never by changing React's elements, so no screen is edited and a
+// re-render cannot undo or crash it (React does not manage attributes it did not
+// set). A page with a single table card is left alone, and so is anything inside
+// a dialog or drawer. styles.css (.card[data-collapsible]) does the drawing.
+(function opcCollapsibleCards() {
+  if (typeof MutationObserver === 'undefined' || typeof document === 'undefined' || !document.body || !window.matchMedia) return;
+  if (window.__opcCollapsibleCards) return;
+  window.__opcCollapsibleCards = true;
+  const mq = window.matchMedia('(max-width: 900px)');
+  const eligible = (card) => {
+    const head = card.firstElementChild;
+    if (!head || !head.classList.contains('card-header')) return false;
+    if (card.closest('.modal, .drawer, .grp-body, .kbd-palette')) return false;
+    return !!card.querySelector('table');
+  };
+  const run = () => {
+    const main = document.querySelector('.main');
+    if (!main) return;
+    const cards = Array.from(main.querySelectorAll('.card')).filter(eligible);
+    const on = mq.matches && cards.length >= 2;
+    main.querySelectorAll('.card[data-collapsible]').forEach(c => {
+      if (!on || cards.indexOf(c) < 0) { c.removeAttribute('data-collapsible'); c.removeAttribute('data-collapsed'); const h = c.firstElementChild; if (h) { h.removeAttribute('tabindex'); h.removeAttribute('role'); h.removeAttribute('aria-expanded'); } }
+    });
+    if (!on) return;
+    let first = !main.querySelector('.card[data-collapsible]');
+    cards.forEach(c => {
+      const h = c.firstElementChild;
+      if (!c.hasAttribute('data-collapsible')) {
+        c.setAttribute('data-collapsible', '1');
+        if (first) first = false; else c.setAttribute('data-collapsed', '1');
+        h.setAttribute('role', 'button'); h.setAttribute('tabindex', '0');
+      }
+      h.setAttribute('aria-expanded', c.hasAttribute('data-collapsed') ? 'false' : 'true');
+    });
+  };
+  const toggle = (card) => {
+    if (card.hasAttribute('data-collapsed')) card.removeAttribute('data-collapsed'); else card.setAttribute('data-collapsed', '1');
+    const h = card.firstElementChild; if (h) h.setAttribute('aria-expanded', card.hasAttribute('data-collapsed') ? 'false' : 'true');
+  };
+  document.addEventListener('click', (e) => {
+    const head = e.target.closest && e.target.closest('.card[data-collapsible] > .card-header');
+    if (!head || e.target.closest('button, a, input, select, textarea, label')) return;
+    toggle(head.parentElement);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const head = e.target.closest && e.target.closest('.card[data-collapsible] > .card-header');
+    if (!head || e.target !== head) return;
+    e.preventDefault(); toggle(head.parentElement);
+  });
+  let q = 0;
+  const sched = () => { if (!q) q = setTimeout(() => { q = 0; run(); }, 40); };
+  new MutationObserver(sched).observe(document.body, { childList: true, subtree: true });   // attributes are not observed, so this cannot loop
+  if (mq.addEventListener) mq.addEventListener('change', sched);
+  sched();
+})();
+
+// ===== Phone tables: keep the 2-3 columns that matter, the rest one tap away ====
+// A list with ten columns cannot be read on a phone, and a card per row makes lists
+// very long. So on a phone (<= 600px) each table shows only its key columns, and every
+// row has a chevron at its right edge: tap it and the other columns open beneath that row
+// as "Label | value" lines; tap again to close.
+//   * Which columns stay: table.dataset.keep ("Item,Qty,Chosen vendor", matched on the
+//     header text) when a screen names them; otherwise the first column plus the best
+//     two by header (name/customer/vendor/item, then status, then amount, then qty).
+//   * Done with data-* attributes and CSS only — no element is added, moved or re-classed,
+//     so React is never disturbed and a re-render cannot undo it (the observer re-stamps).
+//   * The chevron is tr::after, so a tap on it has target === the <tr>; a tap on any cell
+//     still reaches the row's own click (open the record). One capture listener tells them
+//     apart and stops the row click when it is the chevron.
+//   * A table with <= 3 labelled columns, a colspan banner row, or className "t-keep" is
+//     left exactly as it was.
+(function opcMobileTables() {
+  if (typeof MutationObserver === 'undefined' || typeof document === 'undefined' || !document.body || !window.matchMedia) return;
+  if (window.__opcMobileTables) return;
+  window.__opcMobileTables = true;
+  const mq = window.matchMedia('(max-width: 600px)');
+  const score = (h, i, first) => {
+    if (i === first) return 100;
+    if (/customer|vendor|party|name|item|description|product|component|bundle|category/i.test(h)) return 60;
+    if (/action|event|activity|entity|reference|type/i.test(h)) return 55;
+    if (/status/i.test(h)) return 50;
+    if (/total|amount|value|price|cost|rate|balance|margin/i.test(h)) return 40;
+    if (/qty|quantity|units/i.test(h)) return 35;
+    if (/date/i.test(h)) return 20;
+    return 0;
+  };
+  const run = () => {
+    document.querySelectorAll('table.t').forEach(t => {
+      const head = t.tHead && t.tHead.rows.length === 1 ? t.tHead.rows[0] : null;
+      const off = () => { if (t.hasAttribute('data-mt')) { t.removeAttribute('data-mt'); t.querySelectorAll('[data-m],[data-label],[data-mx],[data-open]').forEach(e => { e.removeAttribute('data-m'); e.removeAttribute('data-label'); e.removeAttribute('data-mx'); e.removeAttribute('data-open'); }); } };
+      if (!mq.matches || !head || t.classList.contains('t-keep')) { off(); return; }
+      const heads = Array.from(head.cells).map(c => c.textContent.trim());
+      const labelled = heads.map((h, i) => i).filter(i => heads[i]);
+      if (labelled.length <= 3) { off(); return; }
+      // data-full: columns that stay visible but take the row's full width on their own line
+      // (a cell of tappable vendor options, a long note) instead of being squeezed into a column.
+      // data-wide: a folded column that, when its row is opened, takes the whole row width (and not the
+      // narrow "label | value" column) — for a cell too big to fit beside its label.
+      const wideNames = (t.getAttribute('data-wide') || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      const fullNames = (t.getAttribute('data-full') || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      let keep;
+      const named = (t.getAttribute('data-keep') || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      if (named.length) keep = labelled.filter(i => named.indexOf(heads[i].toLowerCase()) !== -1);
+      const fullIdx = labelled.filter(i => fullNames.indexOf(heads[i].toLowerCase()) !== -1);
+      if (!keep || !keep.length) {
+        const first = labelled[0];
+        keep = labelled.map(i => ({ i, s: score(heads[i], i, first) })).sort((a, b) => b.s - a.s || a.i - b.i).slice(0, 3).map(x => x.i).sort((a, b) => a - b);
+      }
+      t.setAttribute('data-mt', '1');
+      const mark = (cells, isHead) => {
+        let col = 0;
+        Array.from(cells).forEach(td => {
+          const i = col; col += td.colSpan || 1;
+          if ((td.colSpan || 1) > 1) return;
+          const label = heads[i];
+          if (label) td.setAttribute('data-label', label);
+          // kept column: shown. A column with a heading that is not kept: folded away.
+          // A column with no heading and nothing to press (the row's ">"): never shown.
+          let m = '';
+          if (label) m = fullIdx.indexOf(i) !== -1 ? 'f' : (keep.indexOf(i) === -1 ? 'x' : '');
+          else m = (td.querySelector('button, input, select, textarea') && (td.textContent.trim() || td.querySelector('input, select, textarea'))) ? 'x' : 'h';   // icon-only cells (the row's ">", a trash can) are decoration here
+          if (isHead && !label) m = 'h';
+          // A folded cell with nothing in it (no text, nothing to press) has nothing to show, so it is
+          // never shown; a row whose folded cells are ALL like that gets no chevron (data-mx below).
+          if (m === 'x' && !isHead && !td.textContent.trim() && !td.querySelector('button, input, select, textarea, img')) m = 'h';
+          if (m) td.setAttribute('data-m', m); else td.removeAttribute('data-m');
+          if (label && wideNames.indexOf(label.toLowerCase()) !== -1) td.setAttribute('data-w', '1'); else td.removeAttribute('data-w');
+        });
+      };
+      mark(head.cells, true);
+      Array.from(t.tBodies).forEach(b => Array.from(b.rows).forEach(tr => {
+        if (Array.from(tr.cells).some(td => (td.colSpan || 1) > 1)) { tr.setAttribute('data-span', '1'); return; }
+        mark(tr.cells, false);
+        if (tr.querySelector('[data-m="x"]')) tr.setAttribute('data-mx', '1'); else tr.removeAttribute('data-mx');
+      }));
+    });
+  };
+  // Tapping anywhere on a row opens/closes its details — not only the chevron. The exceptions are
+  // real controls: a link (the SO / PO number), a button, a field. Those do what they always did, so
+  // the record still opens from its number, and the folded lines (once open) stay selectable.
+  document.addEventListener('click', (e) => {
+    if (!mq.matches || !e.target.closest) return;
+    const tr = e.target.closest('table.t[data-mt] > tbody > tr[data-mx]');
+    if (!tr) return;
+    if (e.target.closest('a, button, input, select, textarea, label, [role="button"]') && e.target.closest('a, button, input, select, textarea, label, [role="button"]') !== tr) return;
+    e.stopPropagation(); e.preventDefault();
+    if (tr.hasAttribute('data-open')) tr.removeAttribute('data-open'); else tr.setAttribute('data-open', '1');
+  }, true);
+  let q = 0;
+  const sched = () => { if (!q) q = setTimeout(() => { q = 0; run(); }, 40); };
+  new MutationObserver(sched).observe(document.body, { childList: true, subtree: true });   // attributes are not observed, so this cannot loop
+  if (mq.addEventListener) mq.addEventListener('change', sched);
+  sched();
+})();
+
+// ===== Phone: a strip of 4+ tabs becomes ONE dropdown ===========================
+// Overview | Line items | Procurement | Vendor POs | GRN | Invoicing | … scrolled sideways on a
+// phone and hid most of itself. At <= 600px a .tabs strip with four or more tabs shows only the
+// ACTIVE tab, with a chevron; tapping it lists the rest, and picking one closes the list. Done with
+// data-tdd / data-open on the strip and one capture-phase click handler — the tab buttons stay React's
+// own, so choosing a tab runs exactly the code it always did.
+(function opcTabDropdowns() {
+  if (typeof MutationObserver === 'undefined' || typeof document === 'undefined' || !document.body || !window.matchMedia) return;
+  if (window.__opcTabDropdowns) return;
+  window.__opcTabDropdowns = true;
+  const mq = window.matchMedia('(max-width: 600px)');
+  const run = () => {
+    document.querySelectorAll('.tabs').forEach(t => {
+      const n = t.querySelectorAll(':scope > .tab').length;
+      if (mq.matches && n >= 4) t.setAttribute('data-tdd', '1');
+      else { t.removeAttribute('data-tdd'); t.removeAttribute('data-open'); }
+    });
+  };
+  document.addEventListener('click', (e) => {
+    if (!mq.matches || !e.target.closest) return;
+    const tab = e.target.closest('.tabs[data-tdd] > .tab');
+    if (!tab) return;
+    const strip = tab.parentElement;
+    if (tab.classList.contains('active')) {                 // the shown one: open / close the list
+      e.preventDefault(); e.stopPropagation();
+      if (strip.hasAttribute('data-open')) strip.removeAttribute('data-open'); else strip.setAttribute('data-open', '1');
+    } else {                                                // another tab: React switches to it, then fold the list
+      setTimeout(() => strip.removeAttribute('data-open'), 0);
+    }
+  }, true);
+  let q = 0;
+  const sched = () => { if (!q) q = setTimeout(() => { q = 0; run(); }, 30); };
+  new MutationObserver(sched).observe(document.body, { childList: true, subtree: true });
+  if (mq.addEventListener) mq.addEventListener('change', sched);
+  sched();
+})();

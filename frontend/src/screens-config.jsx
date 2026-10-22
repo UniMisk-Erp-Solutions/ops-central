@@ -62,6 +62,7 @@ function OnboardingWizard() {
       <div className="onboard-main">
         <div className="mb-3" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
+            <OpcBackButton to="settings" label="Customisation"/>
             <div className="muted tiny">Step {step} of 6</div>
             <h1 className="page-title">{steps[step-1].title}</h1>
           </div>
@@ -368,6 +369,7 @@ function Settings() {
   const { state, resetData, saveConfig, navigate } = useStore();
   const toast = useToast();
   const [tab, setTab] = React.useState('branding');
+  const [navOpen, setNavOpen] = React.useState(false);
   const fileRef = React.useRef(null);
 
   const exportConfig = () => {
@@ -424,15 +426,20 @@ function Settings() {
       </div>
 
       <div className="card">
-        <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', minHeight: 500 }}>
-          <div style={{ borderRight: '1px solid var(--border)', padding: '8px 6px', background: 'var(--surface-2)' }}>
+        <div className="cfg-layout">
+          <button className="cfg-menu-btn" aria-expanded={navOpen} onClick={() => setNavOpen(o => !o)}>
+            <Icon name="menu" size={16}/>
+            <span>{(tabs.find(t => t.id === tab) || {}).label}</span>
+            <Icon name={navOpen ? 'x' : 'chevronDown'} size={14}/>
+          </button>
+          <div className={`cfg-nav ${navOpen ? 'open' : ''}`}>
             {tabs.map(t => (
-              <div key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
+              <div key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => { setTab(t.id); setNavOpen(false); }}>
                 <Icon name={t.icon} size={13}/>{t.label}
               </div>
             ))}
           </div>
-          <div style={{ padding: 18 }}>
+          <div className="cfg-pane">
             {tab === 'branding' && <BrandingPane/>}
             {tab === 'features' && <OrgFeaturesPane/>}
             {tab === 'users' && <UsersPane/>}
@@ -467,11 +474,36 @@ function BrandingPane() {
   const toast = useToast();
   const [name, setName] = React.useState(state.org.name || '');
   const [color, setColor] = React.useState(state.org.brand_color || '#3563a4');
+  const [logo, setLogo] = React.useState(state.org.logo || '');
   const [saving, setSaving] = React.useState(false);
+  const logoInput = React.useRef(null);
+
+  // Shrunk in the browser to fit 256px and stored as a data URL inside the
+  // org's config blob (no storage bucket or schema change), so it stays small.
+  const pickLogo = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast('Please choose an image file', ''); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 256 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        setLogo(c.toDataURL('image/png'));
+      };
+      img.onerror = () => toast('Could not read that image', '');
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
 
   const save = async () => {
     setSaving(true);
-    const res = await saveConfig({}, { name, brand_color: color });
+    const res = await saveConfig({}, { name, brand_color: color, logo });
     setSaving(false);
     if (res && res.ok === false) { toast('Save failed — change kept locally', ''); return; }
     // Apply colour live
@@ -513,7 +545,19 @@ function BrandingPane() {
       </div>
       <div className="field">
         <label className="field-label">Logo</label>
-        <div className="ph-block" style={{ width: 160 }}>Drop logo here</div>
+        <input ref={logoInput} type="file" accept="image/*" style={{ display: 'none' }} onChange={pickLogo}/>
+        <div className="logo-drop" role="button" tabIndex={0}
+             onClick={() => logoInput.current && logoInput.current.click()}
+             onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); logoInput.current && logoInput.current.click(); } }}
+             onDragOver={e => e.preventDefault()}
+             onDrop={e => { e.preventDefault(); pickLogo({ target: { files: e.dataTransfer.files, value: '' } }); }}>
+          {logo ? <img src={logo} alt="Logo preview"/> : <><Icon name="upload" size={18}/><span>Drop a logo here or click to choose</span></>}
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+          <button className="btn btn-sm" onClick={() => logoInput.current && logoInput.current.click()}><Icon name="upload" size={11}/>{logo ? 'Change logo' : 'Upload logo'}</button>
+          {logo && <button className="btn btn-sm btn-ghost" onClick={() => setLogo('')}><Icon name="trash" size={11} color="var(--danger)"/>Remove</button>}
+        </div>
+        <div className="field-hint">PNG, JPG or SVG. Shown in the top-left. Save branding to keep it.</div>
       </div>
       <div><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save branding'}</button></div>
     </div>
@@ -739,7 +783,7 @@ function ApprovalGatesPane() {
       </div>
       <div className="card">
         <div className="card-body flush">
-          <table className="t">
+          <table className="t cfg-table">
             <thead><tr><th>Entity</th><th>Threshold</th><th>Approvers (comma-separated)</th><th></th></tr></thead>
             <tbody>
               {gates.map(g => (
@@ -878,7 +922,7 @@ function NotificationsPane() {
       <div className="muted small">Toggle channels per event. Saved to the DB.</div>
       <div className="card">
         <div className="card-body flush">
-          <table className="t" style={{ fontSize: 12 }}>
+          <table className="t cfg-table" style={{ fontSize: 12 }}>
             <thead><tr>
               <th>Event</th><th>Recipients</th>{channels.map(([k, l]) => <th key={k} className="num">{l}</th>)}
             </tr></thead>
@@ -1035,7 +1079,7 @@ function CustomFieldsPane() {
       <div className="muted small">Define custom fields per master. Saved to the DB.</div>
       <div className="card">
         <div className="card-body flush">
-          <table className="t">
+          <table className="t cfg-table cfg-table-compact">
             <thead><tr><th>Master</th><th>Field</th><th>Type</th><th>Required</th><th></th></tr></thead>
             <tbody>
               {fields.map((f, i) => (

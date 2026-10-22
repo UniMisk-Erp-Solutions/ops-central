@@ -160,5 +160,20 @@ console.log('\n[7] a fresh page load with no hash, and clearing the hash mid-ses
     /setRoute\(window\.location\.hash\.slice\(1\) \|\| 'flow'\)/.test(storeSrc), true);
 }
 
+console.log('\n[8] Back always goes UP the hierarchy, so a detail page and its list can never send you back and forth');
+{
+  const up = sandbox.opcParentRoute;
+  check('a detail page goes to its list', up('invoices/so-1'), 'invoices');
+  check('a list goes to its Flow stage hub (Invoices -> Billing)', up('invoices'), 'flow/billing');
+  check('a stage hub goes to the Flow hub', up('flow/billing'), 'flow');
+  check('a screen in no stage goes to the Flow hub', up('settings'), 'flow');
+  check('a third level goes to its parent record', up('invoices/so-1/inv-2'), 'invoices/so-1');
+  // The loop that was reported: invoice -> list -> (Back) -> must not be the invoice again.
+  let r = 'invoices/so-1';
+  const seen = [r];
+  for (let i = 0; i < 6; i++) { r = up(r); seen.push(r); }
+  check('walking Back from an invoice never revisits a page (no ping-pong)', new Set(seen.slice(0, 4)).size, 4);
+}
+
 console.log(bad ? `\nFAILED - ${bad} check(s)` : '\nPASS - the flow hub shows every stage, each stage hub lists exactly what the role can reach, and login/reload both land there now');
 process.exit(bad ? 1 : 0);

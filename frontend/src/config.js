@@ -57,3 +57,18 @@ window.OPC_ENV = window.OPC_ENV || {
     console.error('[OPC] Supabase init failed — running offline.', e);
   }
 })();
+
+// Password-recovery link. Supabase's reset e-mail returns to this page as
+//   <page>#access_token=...&refresh_token=...&type=recovery
+// but the app uses the URL hash for ROUTING (and detectSessionInUrl is off), so left alone the
+// tokens would be read as a route and lost. Catch them here, before any other script runs, keep them
+// for the "set a new password" screen (screens-auth.jsx RecoveryScreen), and clean the URL.
+(function captureRecovery() {
+  try {
+    const h = String(window.location.hash || '');
+    if (!/type=recovery/.test(h) || !/access_token=/.test(h)) return;
+    const p = new URLSearchParams(h.replace(/^#\/?/, ''));
+    window.__opcRecovery = { access_token: p.get('access_token'), refresh_token: p.get('refresh_token') };
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  } catch (e) { /* no recovery link — normal start */ }
+})();

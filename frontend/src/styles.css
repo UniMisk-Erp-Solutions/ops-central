@@ -988,3 +988,789 @@ body.kbd-alt [data-kbd-shadowed]::after {
   .flow-diagram { flex-direction: column; }
   .flow-arrow { transform: rotate(90deg); }
 }
+
+/* ===== Responsive ==========================================================
+   The app was drawn for a desktop and had no small-screen rules at all: the
+   topbar alone was wider than a phone, which stretched the whole page (the
+   shell grid sizes its column to its widest child) and pushed every screen off
+   to the right.
+
+   Rules of thumb used below:
+   - the shell grid column is minmax(0,1fr), and every flex/grid ancestor of
+     scrolling content gets min-width:0, so a wide table scrolls INSIDE its
+     card instead of widening the page;
+   - screens write many of their layouts as inline `gridTemplateColumns`, which
+     a stylesheet can only beat with [style*=...] + !important — that is why
+     those selectors exist; they are scoped to small screens only;
+   - breakpoints: 900 (tablet / narrow laptop), 600 (phone).                  */
+
+html, body { max-width: 100%; overflow-x: hidden; }
+.app { grid-template-columns: auto minmax(0, 1fr); height: 100vh; height: 100dvh; }
+.topbar { min-width: 0; }
+.main { min-width: 0; -webkit-overflow-scrolling: touch; }
+.card, .page { min-width: 0; }
+.card-body.flush { overflow-x: auto; }
+.modal { max-width: 100vw; }
+.tabs { overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { white-space: nowrap; flex-shrink: 0; }
+.topbar-right { min-width: 0; }
+
+@media (max-width: 900px) {
+  .split-2, .split-3, .split-2to1, .split-3to1, .detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .field-row-3, .field-row-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .page { padding: 14px 14px 60px; }
+  .drawer { width: min(380px, 100vw); }
+  .onboard-shell { grid-template-columns: minmax(0, 1fr); }
+  .onboard-side { border-right: none; border-bottom: 1px solid var(--border); padding: 14px; }
+  .brand-name { display: none; }
+  .brand { padding: 0 10px; }
+  .topbar { padding: 0 10px; gap: 8px; }
+  .topbar-right { gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  .topbar-right::-webkit-scrollbar { display: none; }
+  .topbar-right > * { flex-shrink: 0; }
+}
+
+@media (max-width: 600px) {
+  .page { padding: 12px 12px 72px; }
+  .page-header { align-items: flex-start; }
+  .page-title { font-size: 16px; }
+  .page-actions { flex-wrap: wrap; width: 100%; }
+  .field-row, .field-row-3, .field-row-4, .radio-card-grid { grid-template-columns: minmax(0, 1fr); }
+  .row { flex-wrap: wrap; }
+
+  /* Inline grids written in the screens */
+  [style*="grid-template-columns: repeat(3"], [style*="grid-template-columns: repeat(4"],
+  [style*="grid-template-columns: repeat(5"], [style*="grid-template-columns: 1fr 1fr"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  [style*="grid-template-columns: 150px 1fr 110px"] { grid-template-columns: 96px minmax(0, 1fr) 80px !important; }
+  [style*="grid-template-columns: 130px 1fr 30px"] { grid-template-columns: 96px minmax(0, 1fr) 30px !important; }
+  [style*="grid-template-columns: 90px 1fr 100px"] { grid-template-columns: 70px minmax(0, 1fr) 80px !important; }
+
+  /* Filter bars: controls fill the row instead of sitting at desktop widths */
+  .filter-bar > .input, .filter-bar > .select, .filter-bar .search { flex: 1 1 140px; min-width: 0; width: auto; }
+  .filter-bar .search { flex-basis: 100%; }
+
+  /* Dialogs become full-width sheets */
+  .modal-backdrop { place-items: end center; }
+  .modal, .modal.lg, .modal.xl { width: 100vw; max-height: 94vh; border-radius: 12px 12px 0 0; }
+  .modal-footer { flex-wrap: wrap; border-radius: 0; }
+  .modal-footer .btn { flex: 1 1 auto; justify-content: center; }
+  .modal-body { padding: 14px; }
+  .modal-header { padding: 12px 14px; }
+
+  /* 3-way match: keep the four columns legible and scroll sideways */
+  .compare { grid-template-columns: 110px repeat(3, minmax(120px, 1fr)); overflow-x: auto; }
+
+  .toast-host { left: 12px; right: 12px; bottom: 12px; }
+  .toast { max-width: none; }
+  .twk-panel { right: 8px !important; left: 8px; bottom: 8px !important; width: auto !important; }
+  .dl { grid-template-columns: 100px minmax(0, 1fr); }
+  .trunc { max-width: 160px; }
+  .kpi-value { font-size: 18px; }
+  .kbd-goto-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Touch screens: bigger targets, and 16px inputs so iOS does not zoom on focus */
+@media (pointer: coarse) {
+  .btn { min-height: 34px; }
+  .btn-sm { min-height: 30px; }
+  .input, .select, .textarea { font-size: 16px; min-height: 36px; }
+  .filter-bar .input, .filter-bar .select { height: 34px; font-size: 16px; }
+  .tab { padding: 11px 12px; }
+}
+
+@media (max-width: 600px) {
+  .card-header { flex-wrap: wrap; }
+  .card-header > * { min-width: 0; }
+  .card-header .select, .card-header .input { max-width: 100%; }
+  /* Fixed inline widths on toolbar controls would overflow a phone */
+  .card-header [style*="width: 170px"], .card-header [style*="width: 200px"],
+  .card-header [style*="width: 220px"], .card-header [style*="width: 240px"] { width: 100% !important; }
+}
+
+@media (max-width: 600px) {
+  /* A task row's action buttons drop under its text rather than hanging off the edge */
+  .queue-item { flex-wrap: wrap; }
+  .queue-item > :last-child { margin-left: auto; }
+}
+
+/* ===== Customisation: section list =========================================
+   Desktop: a 220px list beside the pane. Phone: the list collapses behind a
+   hamburger button that names the current section. .nav-item had no styles of
+   its own since the sidebar was removed, so they are defined here. */
+.cfg-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 500px; }
+.cfg-nav { border-right: 1px solid var(--border); padding: 8px 6px; background: var(--surface-2); }
+.cfg-menu-btn { display: none; }
+.cfg-nav .nav-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: var(--radius);
+  font-size: 12.5px; color: var(--text-2); cursor: pointer;
+}
+.cfg-nav .nav-item:hover { background: var(--bg-subtle); color: var(--text); }
+.cfg-nav .nav-item.active { background: var(--accent-bg); color: var(--accent); font-weight: 500; }
+@media (max-width: 900px) {
+  .cfg-layout { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .cfg-menu-btn {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 12px 14px; border: none; border-bottom: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); font-weight: 600; font-size: 13px; text-align: left;
+  }
+  .cfg-menu-btn span { flex: 1; }
+  .cfg-nav { display: none; border-right: none; border-bottom: 1px solid var(--border); }
+  .cfg-nav.open { display: block; }
+  .cfg-nav .nav-item { padding: 11px 12px; font-size: 13.5px; }
+}
+
+/* ===== Headings take the theme colour ======================================
+   Page, card and dialog titles use --accent, so they follow the brand colour an
+   org picks in Customisation. Small uppercase section labels stay grey. */
+.page-title, .card-title, .modal-title { color: var(--accent); }
+
+/* "< Back" link above a page title */
+.back-link {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: none; border: none; padding: 2px 6px 2px 0; margin-bottom: 6px;
+  color: var(--text-3); font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.back-link:hover { color: var(--accent); }
+.back-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* The settings pane is a grid item: without min-width:0 a wide table inside it
+   stretches the item (grid items default to min-width:auto) instead of
+   scrolling inside its card — so the table's own scrollbar never appeared. */
+.cfg-pane { padding: 18px; min-width: 0; }
+.cfg-layout > * { min-width: 0; }
+.cfg-table th, .cfg-table td { padding: 6px 8px; }
+.cfg-table .input, .cfg-table .select { min-width: 120px; }
+.cfg-table-compact { font-size: 11.5px; }
+.cfg-table-compact th { font-size: 10.5px; }
+/* beats the 16px touch rule below: these tables need to show whole values */
+.cfg-table .input, .cfg-table .select, .cfg-table-compact .input, .cfg-table-compact .select {
+  font-size: 12px !important; height: 28px; min-height: 0 !important;
+}
+.cfg-table-compact .input, .cfg-table-compact .select { font-size: 11.5px !important; }
+@media (max-width: 600px) { .cfg-pane { padding: 12px; } }
+
+/* Logo uploader + where the logo shows */
+.logo-drop {
+  width: 160px; height: 110px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 8px; text-align: center; cursor: pointer;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface-2);
+  color: var(--text-3); font-size: 11.5px;
+}
+.logo-drop:hover, .logo-drop:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+.logo-drop img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.brand-mark.has-logo { background: transparent; }
+.brand-mark img { width: 100%; height: 100%; object-fit: contain; border-radius: 4px; }
+
+/* ===== Dashboard =========================================================== */
+@media (max-width: 900px) {
+  /* The filter row was forced onto one line, which squeezed every dropdown to
+     ~50px with no readable label. Let it wrap and give each control a real width. */
+  .dash-filters { flex-wrap: wrap !important; }
+  .dash-filter-search { flex: 1 1 100% !important; }
+  .dash-filter-sel { flex: 1 1 130px !important; }
+  /* Two SO cards per row on a tablet. The width is also set inline when a card
+     has been stretched, so this needs !important. */
+  .so-card { width: calc(50% - 6px) !important; min-width: 0 !important; }
+}
+@media (max-width: 600px) {
+  .so-card { width: 100% !important; resize: vertical !important; }
+  .dash-actions { width: 100%; }
+  .dash-actions .tabs { flex: 1 1 100%; overflow-x: auto; }
+  .dash-actions .tab { flex: 1 1 auto; justify-content: center; }
+  .dash-actions > .btn { flex: 1 1 100%; justify-content: center; }
+  .dash-filter-sel { flex: 1 1 calc(50% - 6px) !important; }
+}
+
+/* SO card on a phone. On desktop a card has a fixed height the user drags, and
+   what it shows depends on that height (container queries) — drag it taller than
+   its content and the rest is blank. Dragging is not a thing on a phone, so there
+   the card is as tall as its content, and a button reveals the details. */
+.so-toggle { display: none; }
+@media (max-width: 600px) {
+  .so-card { container-type: normal !important; height: auto !important; min-height: 0 !important; resize: none !important; overflow: visible !important; }
+  .so-card.so-open .so-extra { display: grid !important; }
+  .so-card.so-open .so-extra-2, .so-card.so-open .so-extra-3 { display: block !important; }
+  .so-toggle {
+    display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%;
+    margin-top: 10px; padding: 7px; background: var(--surface-2); color: var(--accent);
+    border: 1px solid var(--border); border-radius: var(--radius); font-size: 12px; font-weight: 500;
+  }
+}
+
+/* ===== Status strip: pills side by side, never overlapping =================
+   Each pill used to pull the next one under itself (margin-left:-8px) for a
+   chevron look; with a long label the green "reached" pills and the blue
+   "current" one piled on top of each other. They now sit in a row with a gap and
+   wrap when there is no room. */
+.h-timeline { flex-wrap: wrap; gap: 6px; row-gap: 8px; overflow-x: visible; }
+.h-step + .h-step { margin-left: 0; padding-left: 10px; }
+.h-step { flex-shrink: 0; }
+.h-step.current { box-shadow: 0 0 0 2px var(--accent-bg); }
+
+/* Key/value lists: two pairs per row on a wide screen, so a long details card
+   takes half the height and the cards below it are on screen without scrolling. */
+.dl-cols { column-gap: 28px; }
+@media (min-width: 1000px) {
+  .dl-cols { grid-template-columns: 120px minmax(0, 1fr) 120px minmax(0, 1fr); }
+  .dl-cols > dd { min-width: 0; overflow-wrap: break-word; }
+}
+
+/* Dashboard filters on a phone: search + ONE "Filters" button; the dropdowns
+   open beneath it. */
+@media (max-width: 600px) {
+  .dash-filter-search { flex: 1 1 0 !important; }
+  .dash-filter-sel, .dash-filter-dir { display: none !important; }
+  .dash-filters.open .dash-filter-sel { display: block !important; }
+  .dash-filters.open .dash-filter-dir { display: inline-block !important; }
+}
+
+/* ===== Topbar: role dropdown + larger icons ================================= */
+.role-select { height: 30px; width: auto; max-width: 190px; font-size: 12.5px; font-weight: 500; padding: 0 26px 0 10px; }
+.topbar-right .btn-ghost { width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+@media (max-width: 600px) { .role-select { max-width: 120px; font-size: 12px; } }
+
+/* ===== Tables on a phone: shrink and wrap instead of scrolling sideways ======
+   Cells were all white-space:nowrap, so any table with more than ~3 columns
+   needed a sideways scroll. At phone width text wraps and the type is smaller;
+   numbers stay on one line. A table that is still too wide for the screen (many
+   short columns) keeps its scroll container as a last resort. */
+@media (max-width: 600px) {
+  table.t { font-size: 11px; }
+  table.t th, table.t td { padding: 5px 5px; white-space: normal; overflow-wrap: break-word; }
+  table.t th { font-size: 9.5px; letter-spacing: 0.02em; }
+  table.t .num, table.t td.mono, table.t th.num, table.t .badge { white-space: nowrap; overflow-wrap: normal; }
+  table.t .btn { padding: 2px 6px; }
+  table.t .trunc { max-width: none; white-space: normal; }
+}
+
+/* ===== Topbar ================================================================
+   One row at every width:  [logo] page ........ [role v] [bell] [tweaks] [profile v]
+   The profile button opens .tb-menu (Sign out, Exit). Below 900px the org name,
+   the "Acting as" badge and the user's name text drop out of the bar — the role
+   dropdown, bell, tweaks and profile never do. */
+.topbar-right .tb-more { width: auto; height: 38px; padding: 0 6px; gap: 6px; display: inline-flex; align-items: center; }
+.tb-menu {
+  position: fixed; top: 52px; right: 8px; z-index: 120;
+  width: min(300px, calc(100vw - 16px));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow-pop); padding: 6px;
+}
+.tb-menu-user { display: flex; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.tb-menu-item {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 10px;
+  background: none; border: none; border-radius: 6px; font-size: 14px; color: var(--text); text-align: left;
+}
+.tb-menu-item:hover { background: var(--bg-subtle); }
+.org-pill-text { padding: 4px 10px; }
+@media (max-width: 900px) {
+  .org-pill, .topbar-acting, .topbar-user-text { display: none !important; }
+  .topbar-left { flex: 1 1 auto; min-width: 0; }
+  .topbar-right { flex: 0 0 auto; overflow: visible; gap: 2px; }
+  .topbar-right .btn-ghost { width: 36px; height: 36px; }
+  .topbar-right .tb-more { width: auto; height: 36px; padding: 0 4px; gap: 2px; }
+  .crumbs { min-width: 0; font-size: 14px; font-weight: 600; }
+  .crumbs > span:not(:last-child) { display: none !important; }   /* only the current page */
+  .crumbs > span { min-width: 0; }
+  .crumbs > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crumbs .sep { display: none !important; }
+  .role-select { max-width: 140px; }
+}
+@media (max-width: 480px) {
+  .crumbs { display: none; }
+  .brand { padding: 0 8px; }
+  .topbar { padding: 0 4px; gap: 2px; justify-content: space-between; }
+  .topbar-right .btn-ghost { width: 34px; height: 34px; }
+  .topbar-right .tb-more { width: auto; height: 34px; }
+  .role-select { max-width: 112px; font-size: 12px; padding: 0 22px 0 8px; }
+}
+
+/* RFQ comparison: one card per project. Two across on a wide screen, so four
+   projects fit one screen instead of four. */
+.rfq-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(640px, 1fr)); gap: 12px; align-items: start; }
+@media (max-width: 700px) { .rfq-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Tablet (601-900px): too wide for every column on one line, too wide to stack
+   as cards — so tighten the type and padding and let text cells wrap. */
+@media (max-width: 1100px) {
+  table.t { font-size: 12px; }
+  table.t th, table.t td { padding: 5px 6px; white-space: normal; overflow-wrap: break-word; }
+  table.t th { font-size: 10px; }
+  table.t .num, table.t td.mono, table.t th.num, table.t .badge, table.t .btn { white-space: nowrap; overflow-wrap: normal; }
+}
+
+/* A table in a narrow card (a side panel, a half-width column) wraps its text
+   whatever the screen, decided by the card's own width, not the viewport's. */
+.card-body.flush, .table-wrap { container-type: inline-size; }
+@container (max-width: 560px) {
+  table.t td { white-space: normal; overflow-wrap: break-word; }
+  table.t td.num, table.t td.mono, table.t td .badge, table.t td .btn { white-space: nowrap; overflow-wrap: normal; }
+}
+/* Card headers hold titles plus controls; let them wrap instead of overflowing. */
+.card-header { flex-wrap: wrap; row-gap: 6px; }
+
+/* ===== Dashboard filters on a phone: the shopping-app pattern ================
+   [ search ......... ] [Sort] [Filter 2]
+   chips for what is applied (x removes one, Clear all removes every one)
+   Sort and Filter open as bottom sheets (the shared Modal is a sheet on phones).
+   Desktop keeps the inline dropdowns. */
+.dash-phone-only { display: none; }
+@media (max-width: 600px) {
+  .dash-filter-sel, .dash-filter-dir { display: none !important; }
+  .dash-filters { gap: 6px !important; flex-wrap: nowrap !important; }
+  .dash-filter-search { flex: 1 1 0 !important; min-width: 0; }
+  .dash-filters > .btn.dash-phone-only { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; height: 34px; padding: 0 10px; }
+  .dash-chips.dash-phone-only { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .dash-hint { display: none; }
+}
+.dash-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; font-size: 12px;
+  background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent-border); border-radius: 999px;
+}
+.dash-chip button { display: grid; place-items: center; width: 18px; height: 18px; border: none; border-radius: 50%; background: transparent; color: inherit; padding: 0; }
+.dash-chip-clear { background: none; border: none; color: var(--text-3); font-size: 12px; padding: 3px 6px; text-decoration: underline; }
+.opt-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.opt-chip {
+  padding: 8px 14px; font-size: 13px; border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--surface); color: var(--text-2);
+}
+.opt-chip.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.sort-list { display: flex; flex-direction: column; }
+.sort-row {
+  display: flex; align-items: center; justify-content: space-between; padding: 13px 4px;
+  background: none; border: none; border-bottom: 1px solid var(--border); font-size: 14px; color: var(--text); text-align: left;
+}
+.sort-row.active { color: var(--accent); font-weight: 600; }
+
+/* Filter sheet: each filter is its own collapsible dropdown showing its current value */
+.fgroups { display: flex; flex-direction: column; }
+.fgroup { border-bottom: 1px solid var(--border); }
+.fgroup-head {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 14px 2px;
+  background: none; border: none; text-align: left; color: var(--text); font-size: 14px;
+}
+.fgroup-label { font-weight: 600; flex: 1; }
+.fgroup-val { color: var(--text-3); font-size: 13px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fgroup.open .fgroup-val { color: var(--accent); }
+.fgroup-body { padding: 0 2px 14px; }
+
+/* ===== Phone: search + filter controls were oversized =======================
+   (the 16px / 36px touch sizing made a 2-dropdown filter bar a third of a screen) */
+@media (max-width: 600px) {
+  .filter-bar { padding: 8px; gap: 6px; }
+  .filter-bar .search { flex: 1 1 100%; width: 100%; }
+  .filter-bar .input, .filter-bar .select, .filter-bar > .search {
+    height: 30px !important; min-height: 30px !important; font-size: 13px !important; padding-top: 0; padding-bottom: 0;
+  }
+  .filter-bar .select { flex: 1 1 calc(50% - 4px); min-width: 0; padding-right: 22px; }
+  .dash-filters .input, .dash-filters .select { height: 30px !important; min-height: 30px !important; font-size: 13px !important; }
+  .dash-filters > .btn.dash-phone-only { height: 30px; padding: 0 9px; font-size: 12.5px; }
+  .page-actions .btn { height: 32px; font-size: 12.5px; }
+}
+@media (max-width: 600px) {
+  /* screens give these controls inline widths; the phone layout wins */
+  .filter-bar .search { flex: 1 1 100% !important; width: 100% !important; }
+  .filter-bar .select { flex: 1 1 calc(50% - 4px) !important; width: auto !important; }
+}
+/* 3-way match comparison (a div grid, not a table): one block per field with
+   the three sources side by side under the field name. */
+@media (max-width: 900px) {
+  .compare { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; }
+  .compare > div:nth-child(4n+1) { grid-column: 1 / -1; background: var(--surface-2); font-weight: 600; border-left: none; }
+  .compare > div:not(:nth-child(4n+1)) { border-left: 1px solid var(--border); overflow-wrap: anywhere; }
+  .compare > .compare-h:nth-child(1) { display: none; }
+}
+
+/* ===== Tables on a phone / tablet: compact, readable, scroll if they must ====
+   (A card-per-row layout was tried and made every list far too long — it is gone.)
+   Text is 12px and wraps instead of running on in one line; numbers, badges and
+   buttons stay whole. A table that still cannot fit scrolls sideways INSIDE its
+   card, and its first column (the PO/SO number, the name) stays pinned so you
+   always know which row you are reading. */
+@media (max-width: 900px) {
+  table.t th, table.t td { padding: 7px 8px; line-height: 1.35; }
+  table.t th { font-size: 10.5px; }
+  table.t thead th { background: var(--surface-2); }
+  table.t td:first-child, table.t th:first-child {
+    position: sticky; left: 0; z-index: 1; background: var(--surface);
+    box-shadow: 1px 0 0 var(--border);
+  }
+  table.t thead th:first-child { background: var(--surface-2); z-index: 2; }
+  table.t tr.subrow td:first-child { background: var(--surface-2); }
+  .table-wrap, .card-body.flush { -webkit-overflow-scrolling: touch; }
+}
+
+/* ===== Collapsible groups (OpcGroup, utils.jsx) ==============================
+   A project's vendor POs / GRNs under a heading. On a wide screen the heading is a
+   plain band and the table is always shown. On a phone/tablet the heading is a
+   dropdown: tap to open or close that group's table. */
+.grp { border-top: 1px solid var(--border); }
+.grp-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 8px 14px; background: var(--bg-subtle, var(--surface));
+}
+.grp-title { min-width: 0; }
+.grp-right { flex: 0 0 auto; margin-left: auto; }
+.grp-chev { display: none; color: var(--text-3); }
+@media (max-width: 900px) {
+  .grp { margin: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .grp-head { padding: 12px 12px; cursor: pointer; min-height: 48px; }
+  .grp-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .grp.open > .grp-head { border-bottom: 1px solid var(--border); background: var(--accent-bg); }
+  .grp-chev { display: inline-flex; flex: 0 0 auto; }
+  .grp:not(.open) > .grp-body { display: none; }
+  .grp-title .small { font-size: 13px; line-height: 1.4; }
+}
+
+/* ===== Back link above the page title ======================================
+   app.jsx renders <div class="page-back"> above every page except the Flow hub. */
+.page-back { padding: 10px 22px 0; max-width: 1500px; }
+.page-back .back-link { margin-bottom: 0; font-size: 13px; }
+.page-back + .page { padding-top: 6px; }
+@media (max-width: 900px) { .page-back { padding: 8px 14px 0; } }
+@media (max-width: 600px) { .page-back { padding: 8px 12px 0; } }
+/* a page that already shows its own "< Parent" link above the title does not need a second one */
+.page-back:has(~ .page .muted.tiny.mb-1 > svg:first-child),
+.page-back:has(~ .page .flow-back) { display: none; }
+
+/* ===== Dropdown cards for table sections (utils.jsx opcCollapsibleCards) ====== */
+@media (max-width: 900px) {
+  .card[data-collapsible] > .card-header { cursor: pointer; position: relative; padding-right: 40px; min-height: 46px; }
+  .card[data-collapsible] > .card-header::after {
+    content: ""; position: absolute; right: 16px; top: 50%; width: 8px; height: 8px; margin-top: -6px;
+    border-right: 2px solid var(--text-3); border-bottom: 2px solid var(--text-3); transform: rotate(45deg); transition: transform .15s;
+  }
+  .card[data-collapsible]:not([data-collapsed]) > .card-header { background: var(--accent-bg); }
+  .card[data-collapsible]:not([data-collapsed]) > .card-header::after { transform: rotate(-135deg); margin-top: -2px; }
+  .card[data-collapsible] > .card-header:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .card[data-collapsible][data-collapsed] > :not(.card-header) { display: none; }
+  .card[data-collapsible][data-collapsed] > .card-header { border-bottom: none; }
+}
+
+/* ===== Forms on a phone: smaller controls ====================================
+   The 16px / 36px touch sizing (to stop iOS zooming into a field) made forms
+   huge — a three-field form filled the screen. */
+@media (max-width: 600px) {
+  .field { gap: 3px; }
+  .field-label { font-size: 10px; }
+  .input, .select, .textarea { font-size: 13px !important; padding: 5px 8px; }
+  .input, .select { height: 32px !important; min-height: 32px !important; }
+  .select { padding-right: 24px; }
+  .btn { min-height: 32px; font-size: 12.5px; }
+  .btn-sm { min-height: 28px; }
+  .card-body { padding: 10px; }
+  .form-section { padding: 10px; }
+  .card-header { padding: 8px 10px; }
+}
+
+/* A little air: between a group's heading and its table, and between columns. */
+@media (max-width: 900px) {
+  .grp-body { padding: 10px 10px 12px; }
+  .grp-body .table-wrap { border: 1px solid var(--border); border-radius: 6px; }
+  table.t th, table.t td { padding-left: 10px; padding-right: 10px; }
+  .card[data-collapsible]:not([data-collapsed]) > .card-header + * { margin-top: 8px; }
+}
+
+/* ===== Phone-only / not-on-phone helpers ====================================
+   For a screen whose table is better replaced, on a phone, by a purpose-made list
+   (Invoices & e-Way Bills). Render both and let CSS pick. */
+.show-phone { display: none; }
+@media (max-width: 600px) {
+  .show-phone { display: block; }
+  .hide-phone { display: none !important; }
+}
+
+/* Invoice rows on a phone */
+.inv-row { padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.inv-row:last-child { border-bottom: none; }
+.inv-row:active, .inv-row:focus-visible { background: var(--accent-bg); outline: none; }
+.inv-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.inv-no { color: var(--accent); font-weight: 600; font-size: 14px; }
+.inv-total { font-family: var(--mono); font-size: 15px; }
+.inv-cust { font-size: 13.5px; margin-top: 3px; }
+.inv-meta { font-size: 11.5px; color: var(--text-3); margin-top: 3px; line-height: 1.5; }
+.inv-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* the card "View e-Way Bill" scrolls to */
+.card.flash { box-shadow: 0 0 0 3px var(--accent-border); transition: box-shadow .3s; }
+@media print { .card.flash { box-shadow: none; } }
+
+/* Profile: the user row in the account menu is a button; the modal shows who you are */
+button.tb-menu-profile { width: 100%; background: none; border: none; border-bottom: 1px solid var(--border); border-radius: 6px 6px 0 0; color: var(--text); cursor: pointer; }
+button.tb-menu-profile:hover { background: var(--bg-subtle); }
+.tb-menu-chev { margin-left: auto; color: var(--text-3); display: inline-flex; }
+.profile-head { display: flex; align-items: center; gap: 14px; }
+.profile-name { font-size: 17px; font-weight: 600; }
+
+/* Profile -> Change password: a row that unfolds, not a form that is always there */
+.pw-block { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 4px; }
+.pw-row {
+  display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 12px 2px;
+  background: none; border: none; font-size: 14px; color: var(--text); text-align: left;
+}
+.pw-row:hover { color: var(--accent); }
+.pw-form { display: flex; flex-direction: column; gap: 10px; padding: 12px 0 2px; }
+.pw-title { font-weight: 600; font-size: 14px; }
+.pw-field { position: relative; display: block; }
+.pw-field .input { width: 100%; padding-right: 38px; }
+.pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; display: grid; place-items: center; background: none; border: none; color: var(--text-3); border-radius: 6px; }
+.pw-eye:hover { color: var(--text); background: var(--bg-subtle); }
+.pw-hint { font-size: 12px; color: var(--text-3); }
+.pw-hint.ok { color: var(--success); }
+.pw-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+
+/* ===== Phone tables: key columns + a per-row dropdown (utils.jsx opcMobileTables) ===== */
+@media (max-width: 600px) {
+  table.t[data-mt], table.t[data-mt] thead, table.t[data-mt] tbody { display: block; width: 100%; min-width: 0 !important; }
+  table.t[data-mt] tr {
+    display: flex; flex-wrap: wrap; align-items: stretch; position: relative;
+    padding-right: 38px; border-bottom: 1px solid var(--border); background: transparent;
+  }
+  table.t[data-mt] tbody tr:last-child { border-bottom: none; }
+  table.t[data-mt] th, table.t[data-mt] td {
+    display: block; flex: 1 1 60px; min-width: 0; width: auto !important; padding: 9px 6px; border: none !important;   /* basis 60px, not 0: a zero basis lets a folded 100%-wide cell squeeze onto the same line */
+    white-space: normal; overflow-wrap: break-word; font-size: 12.5px; line-height: 1.35;
+  }
+  table.t[data-mt] th { font-size: 10.5px; padding-top: 7px; padding-bottom: 7px; }
+  table.t[data-mt] th:first-child, table.t[data-mt] td:first-child { position: static; box-shadow: none; flex: 1.5 1 104px; padding-left: 12px; background: transparent; }
+  table.t[data-mt] .num, table.t[data-mt] td.mono { text-align: left; }
+  /* folded-away and never-shown columns */
+  table.t[data-mt] [data-m="h"], table.t[data-mt] thead [data-m="x"] { display: none; }
+  table.t[data-mt] tbody [data-m="x"] { display: none; }
+  /* the chevron: the right-hand strip of any row that has something folded away */
+  table.t[data-mt] tbody tr[data-mx]::after {
+    content: ""; position: absolute; right: 0; top: 0; height: 48px; width: 38px; cursor: pointer;
+    background: no-repeat center / 14px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2378716c' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    border-left: 1px solid var(--border);
+  }
+  table.t[data-mt] tbody tr[data-open]::after {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233563a4' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 15l-6-6-6 6'/%3E%3C/svg%3E");
+    background-color: var(--accent-bg);
+  }
+  /* an opened row shows its other columns as  label | value  lines beneath */
+  table.t[data-mt] tbody tr[data-open] { background: var(--surface-2); }
+  table.t[data-mt] tbody tr[data-open] > [data-m="x"] {
+    display: block; position: relative; flex: 1 1 100%; order: 5; box-sizing: border-box; margin-right: -38px;
+    padding: 7px 12px 7px calc(38% + 25px); min-height: 34px; border-top: 1px solid var(--border) !important; text-align: left;
+  }
+  table.t[data-mt] tbody tr[data-open] > [data-m="x"][data-label]::before {
+    content: attr(data-label); position: absolute; left: 0; top: 0; bottom: 0; width: 38%; box-sizing: border-box;
+    display: flex; align-items: center; padding: 4px 12px; background: var(--bg-subtle); border-right: 1px solid var(--border-strong);
+    font-size: 11.5px; font-weight: 500; color: var(--text-3);
+  }
+  table.t[data-mt] tbody tr[data-open] > [data-m="x"]:not([data-label]) { padding-left: 12px; }
+  table.t[data-mt] tr[data-span] { display: block; padding-right: 0; }
+  table.t[data-mt] tr[data-span] td { display: block; width: 100% !important; }
+  /* a clickable row keeps its pointer except over the chevron */
+  table.t[data-mt] tbody tr[data-mx] { cursor: pointer; }
+}
+
+/* RFQ summary: three boxes on ONE line on a phone */
+@media (max-width: 600px) {
+  .kpi3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 6px !important; }
+  .kpi3 .card-body { padding: 8px 4px !important; }
+  .kpi3 .card-body > div:first-child { font-size: 10px; line-height: 1.2; }
+  .kpi3 .card-body > div:nth-child(2) { font-size: 14px !important; }
+}
+
+/* ===== Flow hub on a phone: an S, three rows of two (no scrolling) ===========
+      1 -> 2
+           |
+      4 <- 3
+      |
+      5 -> 6                                                                   */
+@media (max-width: 600px) {
+  .flow-diagram {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(3, auto);
+    gap: 30px 36px; padding: 18px 14px 10px; justify-items: stretch;
+  }
+  .flow-diagram .flow-arrow { display: none; }
+  .flow-diagram .flow-node { width: 100%; height: 108px; position: relative; flex-direction: column; gap: 8px; border-radius: 16px; }
+  .flow-diagram .flow-node-icon { width: 42px; height: 42px; border-radius: 12px; }
+  .flow-diagram .flow-node-label { font-size: 13px; }
+  .flow-diagram > .flow-node:nth-child(1)  { grid-column: 1; grid-row: 1; }
+  .flow-diagram > .flow-node:nth-child(3)  { grid-column: 2; grid-row: 1; }
+  .flow-diagram > .flow-node:nth-child(5)  { grid-column: 2; grid-row: 2; }
+  .flow-diagram > .flow-node:nth-child(7)  { grid-column: 1; grid-row: 2; }
+  .flow-diagram > .flow-node:nth-child(9)  { grid-column: 1; grid-row: 3; }
+  .flow-diagram > .flow-node:nth-child(11) { grid-column: 2; grid-row: 3; }
+  .flow-diagram > .flow-node::after { position: absolute; color: var(--text-muted); font-size: 20px; line-height: 1; font-weight: 600; }
+  .flow-diagram > .flow-node:nth-child(1)::after,
+  .flow-diagram > .flow-node:nth-child(9)::after { content: "\2192"; right: -29px; top: 50%; margin-top: -10px; }
+  .flow-diagram > .flow-node:nth-child(5)::after { content: "\2190"; left: -29px; top: 50%; margin-top: -10px; }
+  .flow-diagram > .flow-node:nth-child(3)::after,
+  .flow-diagram > .flow-node:nth-child(7)::after { content: "\2193"; bottom: -26px; left: 50%; margin-left: -6px; }
+  .flow-header { margin-bottom: 4px; }
+}
+
+/* ===== Flow hub on an iPad (601-1024px): the same S, three across, two rows =====
+      1 -> 2 -> 3
+                |
+      6 <- 5 <- 4                                                               */
+@media (min-width: 601px) and (max-width: 1024px) {
+  .flow-diagram {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, auto);
+    gap: 44px 56px; padding: 28px 24px 12px; max-width: 760px; margin: 0 auto; justify-items: stretch;
+  }
+  .flow-diagram .flow-arrow { display: none; }
+  .flow-diagram .flow-node { width: 100%; height: 150px; position: relative; border-radius: 20px; }
+  .flow-diagram .flow-node-icon { width: 56px; height: 56px; }
+  .flow-diagram .flow-node-label { font-size: 15px; }
+  .flow-diagram > .flow-node:nth-child(1)  { grid-column: 1; grid-row: 1; }
+  .flow-diagram > .flow-node:nth-child(3)  { grid-column: 2; grid-row: 1; }
+  .flow-diagram > .flow-node:nth-child(5)  { grid-column: 3; grid-row: 1; }
+  .flow-diagram > .flow-node:nth-child(7)  { grid-column: 3; grid-row: 2; }
+  .flow-diagram > .flow-node:nth-child(9)  { grid-column: 2; grid-row: 2; }
+  .flow-diagram > .flow-node:nth-child(11) { grid-column: 1; grid-row: 2; }
+  .flow-diagram > .flow-node::after { position: absolute; color: var(--text-muted); font-size: 26px; line-height: 1; font-weight: 600; }
+  .flow-diagram > .flow-node:nth-child(1)::after,
+  .flow-diagram > .flow-node:nth-child(3)::after { content: "\2192"; right: -42px; top: 50%; margin-top: -13px; }
+  .flow-diagram > .flow-node:nth-child(5)::after { content: "\2193"; bottom: -38px; left: 50%; margin-left: -8px; }
+  .flow-diagram > .flow-node:nth-child(7)::after,
+  .flow-diagram > .flow-node:nth-child(9)::after { content: "\2190"; left: -42px; top: 50%; margin-top: -13px; }
+}
+
+/* ===== A row of three summary boxes stays ONE row on a phone ====================
+   (inquiry detail: Quote budget / Vendor / Margin; billing: billed / invoiced / remaining;
+   RFQ). Any inline 3-column grid whose children are cards. Numbers shrink to fit. */
+@media (max-width: 600px) {
+  [style*="grid-template-columns: repeat(3"]:has(> .card) { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 6px !important; }
+  [style*="grid-template-columns: repeat(3"]:has(> .card) .card-body { padding: 8px 4px !important; }
+  [style*="grid-template-columns: repeat(3"]:has(> .card) .tiny { font-size: 9.5px !important; letter-spacing: 0 !important; line-height: 1.25; }
+  [style*="grid-template-columns: repeat(3"]:has(> .card) .small { font-size: 10.5px !important; }
+  [style*="grid-template-columns: repeat(3"]:has(> .card) [style*="font-size: 18"],
+  [style*="grid-template-columns: repeat(3"]:has(> .card) [style*="font-size: 20"],
+  [style*="grid-template-columns: repeat(3"]:has(> .card) [style*="font-size: 22"] { font-size: 14px !important; margin-top: 2px !important; }
+}
+
+/* ===== Phone tables: no sideways scroller, no overlap, no scroll trap =========
+   - A table in dropdown-row mode never needs to scroll sideways, so its card's
+     overflow is released. (A leftover overflow:auto scroller around a tall table is a
+     nested scroll area: a vertical swipe that starts on it can be eaten instead of
+     scrolling the page.)
+   - Cells clip their own content, and badges wrap, so a long status such as
+     "Approved · awaiting receipt" stays inside its column instead of running under the
+     chevron strip. */
+@media (max-width: 600px) {
+  .card-body.flush:has(> table.t[data-mt]), .table-wrap:has(> table.t[data-mt]) { overflow: visible !important; }
+  table.t[data-mt] th, table.t[data-mt] td { overflow: hidden; }
+  table.t[data-mt] tbody tr[data-open] > [data-m="x"] { overflow: visible; }
+  table.t[data-mt] .badge { white-space: normal; max-width: 100%; height: auto; line-height: 1.3; padding-top: 2px; padding-bottom: 2px; text-align: left; }
+}
+
+/* ===== Sourcing pages on a phone ============================================== */
+@media (max-width: 600px) {
+  /* a column that stays visible but gets the row's full width on its own line (data-full) */
+  table.t[data-mt] tbody [data-m="f"] {
+    display: block; order: 4; flex: 1 1 100%; box-sizing: border-box; margin-right: -38px; overflow: visible;
+    padding: 0 12px 12px; border: none !important; text-align: left;
+  }
+  table.t[data-mt] tbody [data-m="f"][data-label]::before {
+    content: attr(data-label); display: block; margin-bottom: 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--text-3);
+  }
+  table.t[data-mt] thead [data-m="f"] { display: none; }
+  /* vendor option chips fill the width, two to a row */
+  table.t[data-mt] [data-m="f"] > div[style*="flex-wrap"] > .btn { flex: 1 1 calc(50% - 6px); min-width: 0; }
+
+  /* the total row under a table: one tidy line, numbers whole */
+  table.t[data-mt] tfoot { display: block; width: 100%; }
+  table.t[data-mt] tfoot tr { display: flex; flex-wrap: wrap; gap: 2px 14px; padding: 10px 14px; background: var(--surface-2); border-top: 1px solid var(--border-strong); }
+  table.t[data-mt] tfoot td { flex: 0 1 auto; padding: 0; border: none !important; white-space: nowrap; overflow: visible; font-size: 12.5px; }
+  table.t[data-mt] tfoot td:empty { display: none; }
+
+  /* a page's action buttons: equal tiles, two to a row, instead of ragged wrapped rows */
+  .page-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; width: 100%; }
+  .page-actions > .btn, .page-actions > button { justify-content: center; width: 100%; }
+}
+
+/* form controls in a card fill the card (some screens give a select an inline width) */
+@media (max-width: 600px) { .field > .select, .field > .input, .field > .textarea { width: 100%; } }
+
+/* data-wide: opened, the folded cell spans the row with its heading above, not beside */
+@media (max-width: 600px) {
+  table.t[data-mt] tbody tr[data-open] > [data-m="x"][data-w] { padding: 8px 12px 12px; overflow: visible; }
+  table.t[data-mt] tbody tr[data-open] > [data-m="x"][data-w][data-label]::before {
+    position: static; display: block; width: auto; margin-bottom: 6px; padding: 0; background: none; border: none;
+    font-size: 10.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--text-3);
+  }
+  table.t[data-mt] [data-m="x"][data-w] > div[style*="flex-wrap"] > .btn { flex: 1 1 calc(50% - 6px); min-width: 0; }
+}
+
+
+
+
+
+/* ===== Phone fixes: dashboard header, tabs as a dropdown, header notes, invoicing footer ===== */
+@media (max-width: 600px) {
+  /* Dashboard header: view tabs full width, then a normal-sized New SO button (it used to stretch edge to edge) */
+  .dash-actions { display: flex !important; flex-direction: column; align-items: stretch; gap: 8px; width: 100%; }
+  .dash-actions .tabs { flex: 0 0 auto; width: 100%; }
+  .dash-actions > .btn { align-self: flex-start; flex: 0 0 auto !important; width: auto !important; padding-left: 14px; padding-right: 14px; }
+
+  /* A page header's small note ("Auto-created on receipt…") gets its own line; the buttons sit in a row beneath */
+  .page-actions > :not(.btn):not(button) { grid-column: 1 / -1; white-space: nowrap; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Invoicing footer: the note takes the full width, then the two buttons share the next row */
+  .inv-foot { flex-wrap: wrap; }
+  .inv-foot > .grow { flex: 1 1 100%; }
+  .inv-foot > .btn { flex: 1 1 calc(50% - 4px); justify-content: center; }
+
+  /* Assign vendors & prices (modal): one scroller, a tidy footer */
+  .modal .card-body.flush[style*="max-height"] { max-height: none !important; overflow: visible !important; }
+  .modal-footer > .tiny { flex: 1 1 100%; margin: 0 0 4px !important; line-height: 1.4; }
+  .alloc-bulk > * { flex: 1 1 calc(50% - 6px); min-width: 0; width: auto !important; }
+  .alloc-bulk > span[style*="width: 1px"] { display: none; }
+  .alloc-bulk > .tiny { flex-basis: 100%; }
+
+  /* Tab strips of 4+ tabs: one dropdown (utils.jsx opcTabDropdowns) */
+  .tabs[data-tdd] {
+    display: block !important; overflow: visible !important; padding: 0 !important; margin: 8px 0 !important;
+    background: var(--surface) !important; border: 1px solid var(--border-strong) !important; border-radius: 8px !important; position: relative;
+  }
+  .tabs[data-tdd] > .tab {
+    display: none; width: 100%; box-sizing: border-box; text-align: left; margin: 0; padding: 13px 14px;
+    background: transparent; border: none; border-bottom: 1px solid var(--border); border-radius: 0; font-size: 14px;
+  }
+  .tabs[data-tdd] > .tab:last-child { border-bottom: none; }
+  .tabs[data-tdd] > .tab.active { display: flex; align-items: center; justify-content: space-between; color: var(--accent); font-weight: 600; background: var(--accent-bg); }
+  .tabs[data-tdd] > .tab.active::after {
+    content: ""; width: 8px; height: 8px; margin: -3px 2px 0 8px; flex: 0 0 auto;
+    border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); transition: transform .15s;
+  }
+  .tabs[data-tdd][data-open] > .tab { display: flex; align-items: center; justify-content: space-between; }
+  .tabs[data-tdd][data-open] > .tab.active { border-bottom: 1px solid var(--border); }
+  .tabs[data-tdd][data-open] > .tab.active::after { transform: rotate(-135deg); margin-top: 3px; }
+}
+@media (max-width: 600px) {
+  .tabs[data-tdd] > .tab, .tabs[data-tdd][data-open] > .tab, .tabs[data-tdd] > .tab.active { justify-content: flex-start; }
+  .tabs[data-tdd] > .tab.active::after { margin-left: auto; }
+}
+@media (max-width: 600px) {
+  /* a short table inside a dialog (3 columns or fewer is never folded): let every cell wrap so it fits */
+  .modal table.t td, .modal table.t th { white-space: normal !important; overflow-wrap: break-word; }
+  .modal .table-wrap, .modal .card-body.flush { overflow-x: visible; }
+}
+
+.pw-link { background: none; border: none; padding: 0; color: var(--accent); font-size: 12px; text-align: left; text-decoration: underline; cursor: pointer; }
+.pw-link:disabled { opacity: .5; cursor: default; }
+
+/* SO card details (PM / Order type / Supervisor / Created / Delivery / Vendors): every value sits against the
+   right edge, aligned with the numbers below. Before, the .trunc class capped some values at 240px so they
+   stopped short and hugged the left, and the long ones ("Supply + Implementation + I…") were cut off. */
+.so-card .so-extra > span:nth-child(odd) { white-space: nowrap; }
+.so-card .so-extra > span:nth-child(even) { text-align: right; min-width: 0; max-width: none; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+
+/* ===== SO card progress: container truck (DashTruckProgress) ===== */
+.truck-wrap { position: relative; }
+.truck-svg { display: block; width: 100%; height: auto; overflow: visible; }
+/* the percentage lives INSIDE the container, centred in the coloured part, in white */
+.truck-pct-in {
+  position: absolute; top: 20.9%; height: 48.8%; display: flex; align-items: center; transform: translateX(-50%);
+  font: 600 10.5px/1 var(--mono); color: #fff; white-space: nowrap; pointer-events: none;
+  text-shadow: 0 0 2px rgb(0 0 0 / 0.35);
+}
+.truck-pct-in.narrow { transform: none; color: var(--text-2); text-shadow: none; }
